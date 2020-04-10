@@ -7,8 +7,8 @@ import gym
 
 class Args(): pass
 args = Args()
-args.batch_size = 64
-args.num_updates = 250
+args.batch_size = 32
+args.num_updates = 100
 args.learning_rate = 7e-3
 args.render_test = True
 args.plot_results = True
@@ -23,28 +23,27 @@ class ProbabilityDistribution(tf.keras.Model):
 class Model(tf.keras.Model):
     def __init__(self, num_actions):
         super().__init__('mlp_policy')
-        # Note: no tf.get_variable(), just simple Keras API!
-        self.hidden1 = tf.keras.layers.Dense(128, activation='relu')
-        self.hidden2 = tf.keras.layers.Dense(128, activation='relu')
-        self.value = tf.keras.layers.Dense(1, name='value')
-        
-        # Logits are unnormalized log probabilities.
-        self.logits = tf.keras.layers.Dense(num_actions, name='policy_logits')
-        self.dist = ProbabilityDistribution()
+
+        self.value_layer_dense_in = tf.keras.layers.Dense(128, activation='relu')
+        self.value_layer_dense_out = tf.keras.layers.Dense(1, name='value')
+
+        self.action_layer_dense_in = tf.keras.layers.Dense(128, activation='relu')
+        self.action_layer_logits = tf.keras.layers.Dense(num_actions, name='policy_logits') # Logits are unnormalized log probabilities.
+        self.action_layer_dist_out = ProbabilityDistribution()
 
     def call(self, inputs, **kwargs):
         # Inputs is a numpy array, convert to a tensor.
         x = tf.convert_to_tensor(inputs)
 
         # Separate hidden layers from the same input tensor.
-        hidden_logs = self.hidden1(x)
-        hidden_vals = self.hidden2(x)
-        return self.logits(hidden_logs), self.value(hidden_vals)
+        hidden_value = self.value_layer_dense_in(x) # seperate value model
+        hidden_action = self.action_layer_dense_in(x) # seperate action model
+        return self.action_layer_logits(hidden_action), self.value_layer_dense_out(hidden_value)
 
     def action_value(self, obs):
         # Executes `call()` under the hood.
         logits, value = self.predict_on_batch(obs)
-        action = self.dist.predict_on_batch(logits)
+        action = self.action_layer_dist_out.predict_on_batch(logits)
         # Another way to sample actions:
         #     action = tf.random.categorical(logits, 1)
         # Will become clearer later why we don't use it.
@@ -95,7 +94,7 @@ class A2CAgent:
             # Performs a full training step on the collected batch.
             # Note: no need to mess around with gradients, Keras API handles it.
             losses = self.model.train_on_batch(observations, [acts_and_advs, returns])
-            print("update [{:03d}/{:03d}] losses {}".format(update + 1, updates, losses))
+            # print("update [{:03d}/{:03d}] losses {}".format(update + 1, updates, losses))
 
         return ep_rewards
 
@@ -148,8 +147,11 @@ class A2CAgent:
 
 
 if __name__ == '__main__':
+    env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
+    # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
 
-    env = gym.make('CartPole-v0')
     model = Model(num_actions=env.action_space.n)
     agent = A2CAgent(model, args.learning_rate)
 
@@ -159,7 +161,7 @@ if __name__ == '__main__':
 
     if args.plot_results:
         plt.style.use('seaborn')
-        plt.plot(np.arange(0, len(rewards_history), 10), rewards_history[::10])
+        plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
         plt.xlabel('Episode')
         plt.ylabel('Total Reward')
         plt.show()
