@@ -147,7 +147,8 @@ class A2CAgent:
 
 
 if __name__ == '__main__':
-    env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    env1 = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    env2 = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
     # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
@@ -157,7 +158,8 @@ if __name__ == '__main__':
 
     rewards_history = agent.train(env, args.batch_size, args.num_updates)
     print("Finished training. Testing...")
-    print("Total Episode Reward: {} out of 200".format(agent.test(env, args.render_test)))
+    reward_test = agent.test(env, args.render_test)
+    print("Total Episode Reward: {} out of 200".format(reward_test))
 
     if args.plot_results:
         plt.style.use('seaborn')
