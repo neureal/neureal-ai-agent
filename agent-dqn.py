@@ -3,7 +3,7 @@ import tensorflow as tf
 
 
 
-class DQN:
+class DQNAgent:
     def __init__(self, actions, state_shape):
         self.actions = actions
         self.state_shape = state_shape
@@ -46,7 +46,7 @@ class DQN:
 
 
 if __name__ == '__main__':
-    model = DQN(4, (80, 80, 4))
+    model = DQNAgent(4, (80, 80, 4))
     states = np.random.rand(100, 80, 80, 4)
     actions = np.random.randint(0, 4, (100, 4))
     label = np.random.randint(0, 4, (100, 4))
