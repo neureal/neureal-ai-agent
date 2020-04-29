@@ -8,13 +8,25 @@ import gym_trader
 # maybe use MS-COCO to train both images and text captions, https://www.tensorflow.org/tutorials/text/image_captioning
 
 
+# class DreamerAgent(object):
+#     def __init__(self, action_space):
+#         self.action_space = action_space
+#     def get_action(self, observation):
+#         # print("test observation {} shape {} dtype {}\n{}".format(type(observation), observation.shape, observation.dtype, observation))
+#         return self.action_space.sample()
+
 # TODO use A2C agent as base
 class DreamerAgent(object):
-    def __init__(self, action_space):
-        self.action_space = action_space
+    def __init__(self, env):
+        self.env = env
     def get_action(self, observation):
-        # print("test observation {} shape {} dtype {}\n{}".format(type(observation), observation.shape, observation.dtype, observation))
-        return self.action_space.sample()
+        observation = gym.spaces.flatten(self.env.observation_space, observation)
+        print("agent: observation {} shape {} dtype {}\n{}".format(type(observation), observation.shape, observation.dtype, observation))
+        return env.action_space.sample()
+    def save(self, path):
+        pass
+
+
 
 
 
@@ -25,20 +37,24 @@ if __name__ == '__main__':
     # env = gym.make('MontezumaRevengeNoFrameskip-v4')
     env = gym.make('Trader-v0', agent_id=me)
     env.seed(0)
-
-    agent = DreamerAgent(env.action_space)
+    
+    agent = DreamerAgent(env)
     for i_episode in range(2):
+        reward_total = 0.0
         observation = env.reset()
-        env.render()
+        print("{}\n".format(observation))
+        # env.render()
         for t_timesteps in range(3):
             action = agent.get_action(observation)
             observation, reward, done, info = env.step(action)
+            reward_total += reward
 
-            env.render()
-            # print("{} {}\nreward {:.18f} done? {}\n".format(action, observation, reward, done))
+            # print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), observation))
+            # env.render()
             time.sleep(1.01)
             
             if done: break
-        print("agent: episode {} finished after {} timesteps\n".format(i_episode+1 , t_timesteps+1))
+        print("agent: episode {}{} | timesteps {} | reward mean {} total {}\n".format(i_episode+1, (' DONE' if done else ''), t_timesteps+1, reward_total/(t_timesteps+1), reward_total))
 
     env.close()
+    agent.save("")
