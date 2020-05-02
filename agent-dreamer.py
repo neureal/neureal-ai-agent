@@ -13,18 +13,18 @@ curdir = os.path.expanduser("~")
 # class RandomAgent(object):
 #     def __init__(self, env):
 #         self.env = env
-#     def get_action(self, observation):
-#         observation = gym.spaces.flatten(self.env.observation_space, observation)
-#         print("agent: observation {} shape {} dtype {}\n{}".format(type(observation), observation.shape, observation.dtype, observation))
+#     def get_action(self, obs):
+#         obs = gym.spaces.flatten(self.env.observation_space, obs)
+#         print("agent: observation {} shape {} dtype {}\n{}".format(type(obs), obs.shape, obs.dtype, obs))
 #         return env.action_space.sample()
 
 
 class DreamerModel(tf.keras.Model):
-    def __init__(self, action_logits_num):
+    def __init__(self, env):
         super(DreamerModel, self).__init__()
 
         self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(action_logits_num, activation='linear', name='action_dense_logits_out')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, activation='linear', name='action_dense_logits_out')
         self.layer_action_dist_out = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input), name='action_dist_out')
 
         # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
@@ -67,13 +67,13 @@ class DreamerModel(tf.keras.Model):
 class ModelAgent(object):
     def __init__(self, model, env):
         self.model, self.env = model, env
-    def get_action(self, observation):
-        observation = gym.spaces.flatten(self.env.observation_space, observation)
-        # print("agent: observation {} shape {} dtype {}\n{}".format(type(observation), observation.shape, observation.dtype, observation))
+    def get_action(self, obs):
+        obs = gym.spaces.flatten(self.env.observation_space, obs)
+        # print("agent: observation {} shape {} dtype {}\n{}".format(type(obs), obs.shape, obs.dtype, obs))
 
         # TODO loop through and send in seperate items in observation
         # data = {'six': gym.spaces.Discrete(6), 'bin': gym.spaces.MultiBinary(6)} obs
-        input_buffer = {'input': tf.convert_to_tensor(observation[np.newaxis,...])}
+        input_buffer = {'input': tf.convert_to_tensor(obs[np.newaxis,...])}
 
         outputs, loss = self.model.train(input_buffer)
 
@@ -91,7 +91,7 @@ if __name__ == '__main__':
     env = gym.make('Trader-v0', agent_id=me)
     env.seed(0)
 
-    model = DreamerModel(env.action_space['001_pair'].n)
+    model = DreamerModel(env)
     obs = gym.spaces.flatten(env.observation_space, env.observation_space.sample())
     model({'input': tf.convert_to_tensor(obs[np.newaxis,...])})
     
@@ -104,15 +104,15 @@ if __name__ == '__main__':
     agent = ModelAgent(model, env)
     for i_episode in range(2):
         reward_total = 0.0
-        observation = env.reset()
-        print("{}\n".format(observation))
+        obs = env.reset()
+        print("{}\n".format(obs))
         # env.render()
         for t_timesteps in range(3):
-            action = agent.get_action(observation)
-            observation, reward, done, info = env.step(action)
+            action = agent.get_action(obs)
+            obs, reward, done, info = env.step(action)
             reward_total += reward
 
-            print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), observation))
+            print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
             # env.render()
             time.sleep(1.01)
 
