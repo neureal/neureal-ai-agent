@@ -3,6 +3,7 @@ import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
 import gym
+tf.config.experimental_run_functions_eagerly(True)
 
 
 class Args(): pass
@@ -24,26 +25,26 @@ class Model(tf.keras.Model):
     def __init__(self, num_actions):
         super().__init__('mlp_policy')
 
-        self.value_layer_dense_in = tf.keras.layers.Dense(128, activation='relu')
-        self.value_layer_dense_out = tf.keras.layers.Dense(1, name='value')
+        self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu')
+        self.layer_action_logits_out = tf.keras.layers.Dense(num_actions, activation='linear', name='policy_logits') # Logits are unnormalized log probabilities.
+        self.layer_action_sample = ProbabilityDistribution()
 
-        self.action_layer_dense_in = tf.keras.layers.Dense(128, activation='relu')
-        self.action_layer_logits = tf.keras.layers.Dense(num_actions, name='policy_logits') # Logits are unnormalized log probabilities.
-        self.action_layer_dist_out = ProbabilityDistribution()
+        self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu')
+        self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value')
 
     def call(self, inputs, **kwargs):
         # Inputs is a numpy array, convert to a tensor.
         x = tf.convert_to_tensor(inputs)
 
         # Separate hidden layers from the same input tensor.
-        hidden_value = self.value_layer_dense_in(x) # seperate value model
-        hidden_action = self.action_layer_dense_in(x) # seperate action model
-        return self.action_layer_logits(hidden_action), self.value_layer_dense_out(hidden_value)
+        hidden_action = self.layer_action_dense_in(x) # seperate action model
+        hidden_value = self.layer_value_dense_in(x) # seperate value model
+        return self.layer_action_logits_out(hidden_action), self.layer_value_dense_out(hidden_value)
 
     def action_value(self, obs):
         # Executes `call()` under the hood.
         logits, value = self.predict_on_batch(obs)
-        action = self.action_layer_dist_out.predict_on_batch(logits)
+        action = self.layer_action_sample.predict_on_batch(logits)
         # Another way to sample actions:
         #     action = tf.random.categorical(logits, 1)
         # Will become clearer later why we don't use it.
@@ -147,8 +148,7 @@ class A2CAgent:
 
 
 if __name__ == '__main__':
-    env1 = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    env2 = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
     # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
