@@ -8,8 +8,8 @@ tf.config.experimental_run_functions_eagerly(True)
 
 class Args(): pass
 args = Args()
-args.batch_size = 32
-args.num_updates = 100
+args.batch_size = 64
+args.num_updates = 150
 args.learning_rate = 7e-3
 args.render_test = True
 args.plot_results = True
@@ -62,7 +62,7 @@ class A2CAgent:
         self.model.compile(
             optimizer=tf.keras.optimizers.RMSprop(lr=lr),
             # Define separate losses for policy logits and value estimate.
-            loss=[self._logits_loss, self._value_loss]
+            loss=[self._action_logits_loss, self._value_loss]
         )
 
     def train(self, env, batch_sz=64, updates=250):
@@ -84,18 +84,19 @@ class A2CAgent:
                 if dones[step]:
                     ep_rewards.append(0.0)
                     next_obs = env.reset()
-                    print("episode [{:03d}] reward [{}]".format(len(ep_rewards) - 1, ep_rewards[-2]))
+                    print("DONE episode [{:03d}] total rewards [{}]".format(len(ep_rewards) - 1, ep_rewards[-2]))
 
             _, next_value = self.model.action_value(next_obs[None, :])
+            # returns ~ [7,6,5,4,3,2,1,0] for reward = 1 per step, advs = returns - values output
             returns, advs = self._returns_advantages(rewards, dones, values, next_value)
 
             # A trick to input actions and advantages through same API.
             acts_and_advs = np.concatenate([actions[:, None], advs[:, None]], axis=-1)
-            
+
             # Performs a full training step on the collected batch.
             # Note: no need to mess around with gradients, Keras API handles it.
-            losses = self.model.train_on_batch(observations, [acts_and_advs, returns])
-            # print("update [{:03d}/{:03d}] losses {}".format(update + 1, updates, losses))
+            losses = self.model.train_on_batch(observations, [acts_and_advs, returns]) # input, targets
+            print("update [{:03d}/{:03d}] {} losses {}".format(update + 1, updates, self.model.metrics_names,losses))
 
         return ep_rewards
 
@@ -121,11 +122,7 @@ class A2CAgent:
         advantages = returns - values
         return returns, advantages
 
-    def _value_loss(self, returns, value):
-        # Value loss is typically MSE between value estimates and returns.
-        return self.value_c * tf.keras.losses.mean_squared_error(returns, value)
-
-    def _logits_loss(self, actions_and_advantages, logits):
+    def _action_logits_loss(self, actions_and_advantages, logits): # targets, output (acts_and_advs, layer_action_logits_out)
         # A trick to input actions and advantages through the same API.
         actions, advantages = tf.split(actions_and_advantages, 2, axis=-1)
 
@@ -136,20 +133,30 @@ class A2CAgent:
         # Policy loss is defined by policy gradients, weighted by advantages.
         # Note: we only calculate the loss on the actions we've actually taken.
         actions = tf.cast(actions, tf.int32)
-        policy_loss = weighted_sparse_ce(actions, logits, sample_weight=advantages)
+        # policy_loss = weighted_sparse_ce(actions, logits)
+        policy_loss = weighted_sparse_ce(actions, logits, sample_weight=advantages) # actions = samples, logits = distribution # try to  # return scaler
 
         # Entropy loss can be calculated as cross-entropy over itself.
         probs = tf.nn.softmax(logits)
-        entropy_loss = tf.keras.losses.categorical_crossentropy(probs, probs)
+        entropy_loss = tf.keras.losses.categorical_crossentropy(probs, probs) # return batch size array # wtf is this
 
         # We want to minimize policy and maximize entropy losses.
         # Here signs are flipped because the optimizer minimizes.
-        return policy_loss - self.entropy_c * entropy_loss
+        total_loss = policy_loss - self.entropy_c * entropy_loss
+        if total_loss[0] < 0.0:
+            print('test')
+        return total_loss # batch size
+
+    def _value_loss(self, returns, value): # targets, output (returns, layer_value_dense_out)
+        # Value loss is typically MSE between value estimates and returns.
+        value_loss = self.value_c * tf.keras.losses.mean_squared_error(returns, value) # regress [layer_value_dense_out] to [7,6,5,4,3,2,1,0]
+        return value_loss # batch size
+
 
 
 if __name__ == '__main__':
-    env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    # env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
 
