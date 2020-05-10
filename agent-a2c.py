@@ -143,8 +143,6 @@ class A2CAgent:
         # We want to minimize policy and maximize entropy losses.
         # Here signs are flipped because the optimizer minimizes.
         total_loss = policy_loss - self.entropy_c * entropy_loss
-        if total_loss[0] < 0.0:
-            print('test')
         return total_loss # batch size
 
     def _value_loss(self, returns, value): # targets, output (returns, layer_value_dense_out)
@@ -155,8 +153,8 @@ class A2CAgent:
 
 
 if __name__ == '__main__':
-    # env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
 
