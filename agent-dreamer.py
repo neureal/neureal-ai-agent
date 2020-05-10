@@ -1,125 +1,336 @@
 import threading, time, os
 import numpy as np
-# np.set_printoptions(precision=8, suppress=True)
+np.set_printoptions(precision=8, suppress=True)
 import tensorflow as tf
 import tensorflow_probability as tfp
 import gym
 import gym_trader
-tf.config.experimental_run_functions_eagerly(True)
+# tf.config.experimental_run_functions_eagerly(True)
 curdir = os.path.expanduser("~")
 
-# maybe use MS-COCO to train both images and text captions, https://www.tensorflow.org/tutorials/text/image_captioning
 
+# maybe use MS-COCO to train both images and text captions, https://www.tensorflow.org/tutorials/text/image_captioning
+# Spectral Normalization https://arxiv.org/abs/1802.05957
+
+
+## Test models
 # class RandomAgent(object):
 #     def __init__(self, env):
 #         self.env = env
-#     def get_action(self, obs):
+#     def step(self, obs):
 #         obs = gym.spaces.flatten(self.env.observation_space, obs)
 #         print("agent: observation {} shape {} dtype {}\n{}".format(type(obs), obs.shape, obs.dtype, obs))
 #         return env.action_space.sample()
 
 
-class DreamerModel(tf.keras.Model):
+
+
+## Dreamer
+class WorldModel(tf.keras.layers.Layer):
     def __init__(self, env):
-        super(DreamerModel, self).__init__()
+        super(WorldModel, self).__init__()
+
+    def call(self, inputs, training=False): # inference/predict
+        outputs = {}
+        return outputs
+
+class ActionModel(tf.keras.layers.Layer):
+    def __init__(self, env):
+        super(ActionModel, self).__init__()
+        # for space in env.action_space:
+        #     pass
+
+        # discrete_classes_count = env.action_space['001_pair'].n
+
+        # event_shape = (1) # sampled output
+        # num_components = 64
+        # params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
+        # tfp.layers.MixtureLogistic(num_components, event_shape),
+
+        # params_size = tfp.layers.MixtureLogistic.params_size(1, (1))
+        # test = tfp.layers.MixtureLogistic(1, (1))
 
         self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, activation='linear', name='action_dense_logits_out')
         self.layer_action_dist_out = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input), name='action_dist_out')
 
-        # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
-        # self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
+    def call(self, inputs, training=False): # inference/predict
+        outputs = {}
+        out = self.layer_action_dense_in(inputs['obs'])
+        if training: outputs['action_logits'] = out
+        outputs['action_dist'] = self.layer_action_dist_out(out)
+        return outputs
+
+    # _loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+    optimizer = tf.keras.optimizers.Adagrad(learning_rate=0.001, initial_accumulator_value=0.1, epsilon=1e-07)
+    def loss(self, predicted_value): # maximize value output
+        # return self._loss_fn(tf.constant([[2]]), predicted_value)
+        return -tf.reduce_sum(predicted_value)
+
+class ValueModel(tf.keras.layers.Layer):
+    def __init__(self, env):
+        super(ValueModel, self).__init__()
+        self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
+        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_logits_out')
+
+    def call(self, inputs, training=False): # inference/predict
+        outputs = {}
+        out = self.layer_value_dense_in(inputs['obs'])
+        outputs['value_logits'] = self.layer_value_dense_logits_out(out)
+        return outputs
+
+    optimizer = tf.keras.optimizers.Adagrad(learning_rate=0.001, initial_accumulator_value=0.1, epsilon=1e-07)
+    def loss(self, rewards, dones): # top level purpose, for instance "maximize total rewards in the shortest time possible"
+        return -tf.reduce_sum(rewards)
+
+class DreamerModel(tf.keras.Model):
+    def __init__(self, env):
+        super(DreamerModel, self).__init__()
+        self.action = ActionModel(env)
+        self.value = ValueModel(env)
+
+        self(env_obs_sample(env)) # force the model to build
 
     @tf.function
-    def call(self, inputs, training=False):
+    def call(self, inputs, training=False): # inference/predict
+        outputs = {}
+        outputs = self.action(inputs, training)
+        outputs.update(self.value(inputs, training))
+        return outputs
+
+    @tf.function
+    def step(self, inputs):
+        # TODO can imagination run completely in Autograph/GPU? (autograph looping)
+        # https://www.tensorflow.org/tutorials/customization/performance#autograph_transformations
+        # how do I run imagination constantly and interrupt when new data comes in from the environment?
+        with tf.GradientTape() as tape_action, tf.GradientTape() as tape_value:
+            outputs = self(inputs, training=True)
+            loss_action = self.action.loss(outputs['value_logits'])
+            loss_value = self.value.loss(inputs['reward'], inputs['done'])
+
+        gradients_action = tape_action.gradient(loss_action, self.action.trainable_variables)
+        gradients_value = tape_value.gradient(loss_value, self.value.trainable_variables)
+        self.action.optimizer.apply_gradients(zip(gradients_action, self.action.trainable_variables))
+        self.value.optimizer.apply_gradients(zip(gradients_value, self.value.trainable_variables))
+
+        return outputs, loss_action
+
+
+
+
+
+
+
+def env_obs_sample(env):
+    rtn = {}
+    sample = gym.spaces.flatten(env.observation_space, env.observation_space.sample())
+    rtn['obs'] = tf.expand_dims(tf.convert_to_tensor(sample, dtype=tf.float32), 0)
+    # rtn['obs_shape'] = tf.TensorShape([None] + list(sample.shape))
+    rtn['obs_shape'] = [None] + list(sample.shape)
+    return rtn
+# # TODO convert any gym space to tensorflow tensors
+# # data = {'six': gym.spaces.Discrete(6), 'bin': gym.spaces.MultiBinary(6)} obs
+# def env_space_to_tensor(env, space):
+#     pass
+
+class ActorCriticModel(tf.keras.Model):
+    def __init__(self, env):
+        super(ActorCriticModel, self).__init__()
+
+        self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, activation='linear', name='action_dense_logits_out')
+        self.layer_action_dist_out = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input), name='action_dist_out')
+
+        self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
+        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_logits_out')
+
+        self._obs_sample = env_obs_sample(env)
+        self(self._obs_sample) # force the model to build
+
+        self._UPDATE_FREQ = tf.constant(8)
+        self._steps = tf.Variable(0)
+        self._memory = {}
+        self._memory_reset()
+    
+    def _memory_reset(self):
+        self._memory['states'] = tf.TensorArray(tf.float32, size=0, dynamic_size=True, element_shape=self._obs_sample['obs_shape'])
+        self._memory['actions'] = tf.TensorArray(tf.int32, size=0, dynamic_size=True, element_shape=(None,1))
+        self._memory['rewards'] = tf.TensorArray(tf.float32, size=0, dynamic_size=True, element_shape=(None,1))
+
+    @tf.function
+    def call(self, inputs, training=False): # inference/predict
         outputs = {}
 
-        action = self.layer_action_dense_in(inputs['input'])
+        action = self.layer_action_dense_in(inputs['obs'])
         action = self.layer_action_dense_logits_out(action)
         if training: outputs['action_logits'] = action
         outputs['action_dist'] = self.layer_action_dist_out(action)
 
-        # value = self.layer_value_dense_in(inputs['input'])
-        # outputs['value'] = self.layer_value_dense_out(value)
+        value = self.layer_value_dense_in(inputs['obs'])
+        outputs['value_logits'] = self.layer_value_dense_logits_out(value)
 
         return outputs
 
-    _scce = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-    def _loss_discrete(self, targets, predicted):
-        return self._scce(targets, predicted)
-    # def _loss_continuous(self, targets, predicted):
-    # 	return _scce(targets, predicted)
+    def compute_loss(self, inputs, outputs, gamma=0.99):
+        return 0.0
 
-    _optimizer = tf.keras.optimizers.Adagrad(learning_rate=0.001, initial_accumulator_value=0.1, epsilon=1e-07)
+        # if done: reward_sum = 0.0  # terminal
+        # else: reward_sum = self(inputs)
+
+
+
+
+        # if done: reward_sum = 0.0  # terminal
+        # else: reward_sum = self.local_model(
+        #     tf.convert_to_tensor(new_state[None, :], dtype=tf.float32))[-1].numpy()[0]
+
+        # # Get discounted rewards
+        # discounted_rewards = []
+        # for reward in memory.rewards[::-1]:  # reverse buffer r
+        # reward_sum = reward + gamma * reward_sum
+        # discounted_rewards.append(reward_sum)
+        # discounted_rewards.reverse()
+
+        # logits, values = self.local_model(
+        #     tf.convert_to_tensor(np.vstack(memory.states),
+        #                         dtype=tf.float32))
+        # # Get our advantages
+        # advantage = tf.convert_to_tensor(np.array(discounted_rewards)[:, None],
+        #                         dtype=tf.float32) - values
+        # # Value loss
+        # value_loss = advantage ** 2
+
+        # # Calculate our policy loss
+        # actions_one_hot = tf.one_hot(memory.actions, self.action_size, dtype=tf.float32)
+
+        # policy = tf.nn.softmax(logits)
+        # entropy = tf.reduce_sum(policy * tf.log(policy + 1e-20), axis=1)
+
+        # policy_loss = tf.nn.softmax_cross_entropy_with_logits_v2(labels=actions_one_hot,
+        #                                                         logits=logits)
+        # policy_loss *= tf.stop_gradient(advantage)
+        # policy_loss -= 0.01 * entropy
+        # total_loss = tf.reduce_mean((0.5 * value_loss + policy_loss))
+        # return total_loss
 
     @tf.function
-    def train(self, inputs):
-        with tf.GradientTape() as tape:
+    def step(self, inputs):
+        # TODO fix these bools in here to work with graph
+        if inputs['action_old'] is not None:
+            self._memory['states'].write(self._memory['states'].size(), inputs['obs_old'])
+            self._memory['actions'].write(self._memory['actions'].size(), inputs['action_old'])
+            self._memory['rewards'].write(self._memory['rewards'].size(), inputs['reward'])
+
+        test = (inputs['done'][0][0] is True) or (self._steps % self._UPDATE_FREQ == 0)
+        if inputs['action_old'] is None or not test:
+            print('inference scan path')
+            tf.print('inference')
+            outputs = self(inputs) # no train, just get action, value
+        else:
+            print('train scan path')
+            tf.print('train')
+            # with tf.GradientTape() as tape:
+            #     outputs = self(inputs, training=True)
+            #     loss = self.compute_loss(inputs, outputs)
+            # gradients = tape.gradient(loss, self.trainable_variables)
+            # self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+            
             outputs = self(inputs, training=True)
-            loss = self._loss_discrete(tf.constant([2]), outputs['action_logits'])
-            # loss += self._loss_continuous(targets['target_percent'], outputs['percent'])
-        gradients = tape.gradient(loss, self.trainable_variables)
-        self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-        return outputs, loss
+            outputs['states'] = self._memory['states'].concat()
+            outputs['actions'] = self._memory['actions'].concat()
+            outputs['rewards'] = self._memory['rewards'].concat()
+
+            self._memory_reset()
+            # outputs['loss'] = loss
+
+        self._steps.assign_add(1)
+        return outputs
 
 
-# TODO use A2C agent as base
+
+
+
+
+## Generic agent that uses models
 class ModelAgent(object):
     def __init__(self, model, env):
         self.model, self.env = model, env
-    def get_action(self, obs):
+        self.obs_old = env_obs_sample(env)['obs']
+        self.action_old = tf.expand_dims(tf.convert_to_tensor(0), 0)
+    def step(self, obs, reward, done, info): # all new info
+        # TODO this is where native data goes into GPU
+        # TODO loop through and send in seperate items in observation
         obs = gym.spaces.flatten(self.env.observation_space, obs)
         # print("agent: observation {} shape {} dtype {}\n{}".format(type(obs), obs.shape, obs.dtype, obs))
 
-        # TODO loop through and send in seperate items in observation
-        # data = {'six': gym.spaces.Discrete(6), 'bin': gym.spaces.MultiBinary(6)} obs
-        input_buffer = {'input': tf.convert_to_tensor(obs[np.newaxis,...])}
+        obs = tf.expand_dims(tf.convert_to_tensor(obs, dtype=tf.float32), 0)
+        input_buffer = {}
+        input_buffer['obs_old'] = self.obs_old
+        input_buffer['action_old'] = self.action_old
+        input_buffer['done'] = tf.expand_dims(tf.convert_to_tensor([done]), 0)
+        input_buffer['reward'] = tf.expand_dims(tf.convert_to_tensor([reward], dtype=tf.float32), 0)
+        input_buffer['obs'] = obs
 
-        outputs, loss = self.model.train(input_buffer)
+        outputs = self.model.step(input_buffer)
+        if 'rewards' in outputs: # print(outputs['rewards'].shape)
+            test = outputs['rewards']
+            print("test type {} shape {} dtype {} device {}\n{}\n\n".format(type(test), test.shape, test.dtype, test.device, test))
+
+        self.obs_old = obs
+        self.action_old = tf.expand_dims(tf.convert_to_tensor(outputs['action_dist']), 0)
 
         action = env.action_space.sample()
         action['001_pair'] = int(outputs['action_dist'][0])
-
         return action
 
 
+
+
+
+## Main loop
 if __name__ == '__main__':
     me = 0
-    # env = gym.make('FrozenLake-v0')
-    # env = gym.make('CartPole-v0')
-    # env = gym.make('MontezumaRevengeNoFrameskip-v4')
+    # env = gym.make('FrozenLake-v0') # Discrete(16)	Discrete(4)	(0, 1)	100	100	0.78
+    # env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
+    # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
+    # env = gym.make('MontezumaRevengeNoFrameskip-v4') # Box(210, 160, 3)	Discrete(18)	(-inf, inf)	400000	100	None
     env = gym.make('Trader-v0', agent_id=me)
     env.seed(0)
 
-    model = DreamerModel(env)
-    obs = gym.spaces.flatten(env.observation_space, env.observation_space.sample())
-    model({'input': tf.convert_to_tensor(obs[np.newaxis,...])})
+    # model = DreamerModel(env)
+    model = ActorCriticModel(env)
     
-    model_name = "gym-trader-test"
-    model_file = "{}/tf_models/{}.h5".format(curdir, model_name)
+    # model_name = "gym-trader-Dreamer"
+    model_name = "gym-trader-A3C"
+    model_file = "{}/tf_models/{}-{}.h5".format(curdir, model_name, me)
     if tf.io.gfile.exists(model_file):
         model.load_weights(model_file, by_name=True)
         print("LOADED model weights from {}".format(model_file))
 
     agent = ModelAgent(model, env)
-    for i_episode in range(2):
-        reward_total = 0.0
+    reward, done, info = 0.0, True, {}
+    for i_episode in range(3):
+        # TODO env.reset and env.step could take lots of time, and model needs to run independently, need to figure out threading/multiprocessing
         obs = env.reset()
-        print("{}\n".format(obs))
+        reward_episode = 0.0
+        # print("{}\n".format(obs))
         # env.render()
-        for t_timesteps in range(3):
-            action = agent.get_action(obs)
+
+        for t_timesteps in range(100):
+            action = agent.step(obs, reward, done, info)
+
             obs, reward, done, info = env.step(action)
-            reward_total += reward
+            reward_episode += reward
+            # print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
+            env.render()
 
-            print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
-            # env.render()
-            time.sleep(1.01)
-
+            # time.sleep(1.01)
             if done: break
-        # model.save(model_file)
-        print("agent: episode {}{} | timesteps {} | reward mean {} total {}\n".format(i_episode+1, (' DONE' if done else ''), t_timesteps+1, reward_total/(t_timesteps+1), reward_total))
+        print("agent: {}episode {} | timesteps {} | reward mean {} total {}\n".format(('DONE ' if done else ''), i_episode+1, t_timesteps+1, reward_episode/(t_timesteps+1), reward_episode))
 
+    agent.step(obs, reward, done, info) # learn from the last episode
     env.close()
 
     model.summary()
