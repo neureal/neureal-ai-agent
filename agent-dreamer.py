@@ -1,11 +1,11 @@
 import threading, time, os
 import numpy as np
-np.set_printoptions(precision=8, suppress=True)
+np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 import tensorflow as tf
 import tensorflow_probability as tfp
 import gym
 import gym_trader
-# tf.config.experimental_run_functions_eagerly(True)
+tf.config.experimental_run_functions_eagerly(True)
 curdir = os.path.expanduser("~")
 
 
@@ -50,8 +50,9 @@ class ActionModel(tf.keras.layers.Layer):
         # params_size = tfp.layers.MixtureLogistic.params_size(1, (1))
         # test = tfp.layers.MixtureLogistic(1, (1))
 
-        self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, activation='linear', name='action_dense_logits_out')
+        self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in')
+        self.layer_action_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='action_dense_01')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out')
         self.layer_action_dist_out = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input), name='action_dist_out')
 
     def call(self, inputs, training=False): # inference/predict
@@ -70,8 +71,9 @@ class ActionModel(tf.keras.layers.Layer):
 class ValueModel(tf.keras.layers.Layer):
     def __init__(self, env):
         super(ValueModel, self).__init__()
-        self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
-        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_logits_out')
+        self.layer_value_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='value_dense_in')
+        self.layer_value_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='value_dense_01')
+        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
 
     def call(self, inputs, training=False): # inference/predict
         outputs = {}
@@ -124,7 +126,7 @@ class DreamerModel(tf.keras.Model):
 def env_obs_sample(env):
     rtn = {}
     sample = gym.spaces.flatten(env.observation_space, env.observation_space.sample())
-    rtn['obs'] = tf.expand_dims(tf.convert_to_tensor(sample, dtype=tf.float32), 0)
+    rtn['obs'] = gpu_tensor_float32(sample)
     # rtn['obs_shape'] = tf.TensorShape([None] + list(sample.shape))
     rtn['obs_shape'] = [None] + list(sample.shape)
     return rtn
@@ -137,12 +139,15 @@ class ActorCriticModel(tf.keras.Model):
     def __init__(self, env):
         super(ActorCriticModel, self).__init__()
 
-        self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, activation='linear', name='action_dense_logits_out')
+        self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in')
+        self.layer_action_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='action_dense_01')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space['001_pair'].n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out')
+        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out')
         self.layer_action_dist_out = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input), name='action_dist_out')
 
-        self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
-        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_logits_out')
+        self.layer_value_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='value_dense_in')
+        self.layer_value_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='value_dense_01')
+        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
 
         self._obs_sample = env_obs_sample(env)
         self(self._obs_sample) # force the model to build
@@ -247,8 +252,17 @@ class ActorCriticModel(tf.keras.Model):
         return outputs
 
 
-
-
+# convert numpy array to tf.float32 tensor and put on GPU
+# TODO make these into one function?
+@tf.function
+def gpu_tensor_float32(a):
+    return tf.expand_dims(tf.convert_to_tensor(a, dtype=tf.float32), 0)
+@tf.function
+def gpu_tensor_int32(a):
+    return tf.expand_dims(tf.convert_to_tensor(a, dtype=tf.int32), 0)
+@tf.function
+def gpu_tensor_bool(a):
+    return tf.expand_dims(tf.convert_to_tensor(a, dtype=tf.bool), 0)
 
 
 ## Generic agent that uses models
@@ -256,19 +270,20 @@ class ModelAgent(object):
     def __init__(self, model, env):
         self.model, self.env = model, env
         self.obs_old = env_obs_sample(env)['obs']
-        self.action_old = tf.expand_dims(tf.convert_to_tensor(0), 0)
+        self.action_old = gpu_tensor_int32([env.action_space.sample()])
     def step(self, obs, reward, done, info): # all new info
         # TODO this is where native data goes into GPU
         # TODO loop through and send in seperate items in observation
         obs = gym.spaces.flatten(self.env.observation_space, obs)
         # print("agent: observation {} shape {} dtype {}\n{}".format(type(obs), obs.shape, obs.dtype, obs))
 
-        obs = tf.expand_dims(tf.convert_to_tensor(obs, dtype=tf.float32), 0)
+        obs = gpu_tensor_float32(obs)
+
         input_buffer = {}
         input_buffer['obs_old'] = self.obs_old
         input_buffer['action_old'] = self.action_old
-        input_buffer['done'] = tf.expand_dims(tf.convert_to_tensor([done]), 0)
-        input_buffer['reward'] = tf.expand_dims(tf.convert_to_tensor([reward], dtype=tf.float32), 0)
+        input_buffer['done'] = gpu_tensor_bool([done])
+        input_buffer['reward'] = gpu_tensor_float32([reward])
         input_buffer['obs'] = obs
 
         outputs = self.model.step(input_buffer)
@@ -277,7 +292,7 @@ class ModelAgent(object):
             print("test type {} shape {} dtype {} device {}\n{}\n\n".format(type(test), test.shape, test.dtype, test.device, test))
 
         self.obs_old = obs
-        self.action_old = tf.expand_dims(tf.convert_to_tensor(outputs['action_dist']), 0)
+        self.action_old = gpu_tensor_int32(outputs['action_dist'])
 
         action = env.action_space.sample()
         action['001_pair'] = int(outputs['action_dist'][0])
@@ -291,22 +306,21 @@ class ModelAgent(object):
 if __name__ == '__main__':
     me = 0
     # env = gym.make('FrozenLake-v0') # Discrete(16)	Discrete(4)	(0, 1)	100	100	0.78
-    # env = gym.make('CartPole-v0') # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    # env = gym.make('LunarLander-v2') # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    # env, model_name = gym.make('CartPole-v0'), "gym-ActorCritic-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    # env, model_name = gym.make('LunarLander-v2'), "gym-ActorCritic-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
     # env = gym.make('MontezumaRevengeNoFrameskip-v4') # Box(210, 160, 3)	Discrete(18)	(-inf, inf)	400000	100	None
+    env, model_name = gym.make('Trader-v0'), "gym-ActorCritic-Trader"
     env = gym.make('Trader-v0', agent_id=me)
     env.seed(0)
 
     # model = DreamerModel(env)
     model = ActorCriticModel(env)
     
-    # model_name = "gym-trader-Dreamer"
-    model_name = "gym-trader-A3C"
     model_file = "{}/tf_models/{}-{}.h5".format(curdir, model_name, me)
     if tf.io.gfile.exists(model_file):
-        model.load_weights(model_file, by_name=True)
+        model.load_weights(model_file, by_name=True, skip_mismatch=True)
         print("LOADED model weights from {}".format(model_file))
 
     agent = ModelAgent(model, env)
