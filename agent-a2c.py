@@ -22,9 +22,9 @@ class Model(tf.keras.Model):
         # input_shape = [1] + list(num_obs)
 
         # self.layer_action_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_action_dense_in = tf.keras.layers.Dense(1024, kernel_initializer='identity', activation='relu', name='action_dense_in')
-        self.layer_action_dense_01 = tf.keras.layers.Dense(512, activation='relu', name='action_dense_01')
-        self.layer_action_dense_02 = tf.keras.layers.Dense(256, activation='relu', name='action_dense_02')
+        self.layer_action_dense_in = tf.keras.layers.Dense(512, kernel_initializer='identity', activation='relu', name='action_dense_in')
+        self.layer_action_dense_01 = tf.keras.layers.Dense(256, activation='relu', name='action_dense_01')
+        self.layer_action_dense_02 = tf.keras.layers.Dense(128, activation='relu', name='action_dense_02')
         self.layer_action_dense_03 = tf.keras.layers.Dense(128, activation='relu', name='action_dense_03')
         self.layer_action_lstm_01 = tf.keras.layers.LSTM(128, name='action_lstm_01')
         self.layer_action_lstm_02 = tf.keras.layers.LSTM(64, name='action_lstm_02')
@@ -32,9 +32,9 @@ class Model(tf.keras.Model):
         self.layer_action_sample = ProbabilityDistribution()
 
         # self.layer_value_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_value_dense_in = tf.keras.layers.Dense(1024, kernel_initializer='identity', activation='relu', name='value_dense_in')
-        self.layer_value_dense_01 = tf.keras.layers.Dense(512, activation='relu', name='value_dense_01')
-        self.layer_value_dense_02 = tf.keras.layers.Dense(256, activation='relu', name='value_dense_02')
+        self.layer_value_dense_in = tf.keras.layers.Dense(512, kernel_initializer='identity', activation='relu', name='value_dense_in')
+        self.layer_value_dense_01 = tf.keras.layers.Dense(256, activation='relu', name='value_dense_01')
+        self.layer_value_dense_02 = tf.keras.layers.Dense(128, activation='relu', name='value_dense_02')
         self.layer_value_dense_03 = tf.keras.layers.Dense(128, activation='relu', name='value_dense_03')
         self.layer_value_lstm_01 = tf.keras.layers.LSTM(128, name='value_lstm_01')
         self.layer_value_lstm_02 = tf.keras.layers.LSTM(64, name='value_lstm_02')
@@ -103,6 +103,7 @@ class A2CAgent:
         # Training loop: collect samples, send to optimizer, repeat updates times.
         ep_rewards = [0.0]
         next_obs = env.reset()
+        env.render()
         finished = False
         update = 0
         while update < updates or not finished:
@@ -111,6 +112,7 @@ class A2CAgent:
                 actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
                 # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
+                env.render()
 
                 ep_rewards[-1] += rewards[step]
                 if dones[step]:
@@ -142,8 +144,8 @@ class A2CAgent:
             action, _ = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(obs, dtype=tf.float32),0))
             # action, _ = self.model.action_value(tf.convert_to_tensor(obs[None, :]))
             obs, reward, done, _ = env.step(action)
-            ep_reward += reward
             if render: env.render()
+            ep_reward += reward
         return ep_reward
 
     def _returns_advantages(self, rewards, dones, values, next_value):
@@ -191,8 +193,8 @@ class A2CAgent:
 
 class Args(): pass
 args = Args()
-args.batch_size = 256
-args.num_updates = 100
+args.batch_size = 128
+args.num_updates = 5000
 args.learning_rate = 7e-3 # start with -4 for rough train, -5 for fine tune and -6 for when trained
 args.render_test = True
 args.plot_results = True
@@ -204,26 +206,27 @@ if __name__ == '__main__':
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
     env, model_name = gym.make('Trader-v0'), "gym-A2C-Trader"
 
-    # model = Model(num_actions=env.action_space.n)
-    model = Model(env)
+    with tf.device('/device:GPU:1'):
+        # model = Model(num_actions=env.action_space.n)
+        model = Model(env)
 
-    model_file = "{}/tf_models/{}.h5".format(curdir, model_name)
-    if tf.io.gfile.exists(model_file):
-        model.load_weights(model_file, by_name=True, skip_mismatch=True)
-        print("LOADED model weights from {}".format(model_file))
+        model_file = "{}/tf_models/{}.h5".format(curdir, model_name)
+        if tf.io.gfile.exists(model_file):
+            model.load_weights(model_file, by_name=True, skip_mismatch=True)
+            print("LOADED model weights from {}".format(model_file))
 
-    agent = A2CAgent(model, args.learning_rate)
-    rewards_history = agent.train(env, args.batch_size, args.num_updates)
-    print("Finished training. Testing...")
-    reward_test = agent.test(env, args.render_test)
-    print("Test Total Episode Reward: {}".format(reward_test))
-    
-    model.save_weights(model_file)
+        agent = A2CAgent(model, args.learning_rate)
+        rewards_history = agent.train(env, args.batch_size, args.num_updates)
+        print("Finished training. Testing...")
+        reward_test = agent.test(env, args.render_test)
+        print("Test Total Episode Reward: {}".format(reward_test))
+        
+        model.save_weights(model_file)
 
-    if args.plot_results:
-        plt.style.use('seaborn')
-        plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
-        plt.xlabel('Episode')
-        plt.ylabel('Total Reward')
-        plt.show()
-    model.summary()
+        if args.plot_results:
+            plt.style.use('seaborn')
+            plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
+            plt.xlabel('Episode')
+            plt.ylabel('Total Reward')
+            plt.show()
+        model.summary()
