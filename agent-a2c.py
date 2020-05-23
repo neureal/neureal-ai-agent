@@ -103,7 +103,7 @@ class A2CAgent:
         # Training loop: collect samples, send to optimizer, repeat updates times.
         ep_rewards = [0.0]
         next_obs = env.reset()
-        env.render()
+        # env.render()
         finished = False
         update = 0
         while update < updates or not finished:
@@ -112,7 +112,7 @@ class A2CAgent:
                 actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
                 # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
-                env.render()
+                # env.render()
 
                 ep_rewards[-1] += rewards[step]
                 if dones[step]:
@@ -204,9 +204,11 @@ if __name__ == '__main__':
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0'), "gym-A2C-Trader"
+    env, model_name = gym.make('Trader-v0'), "gym-A2C-Trader-2"
 
-    with tf.device('/device:GPU:1'):
+    gpus = tf.config.list_physical_devices('GPU')
+    for gpu in gpus: tf.config.experimental.set_memory_growth(gpu, True)
+    with tf.device('/device:GPU:2'):
         # model = Model(num_actions=env.action_space.n)
         model = Model(env)
 
