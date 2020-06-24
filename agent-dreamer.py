@@ -265,7 +265,7 @@ def gpu_tensor_bool(a):
     return tf.expand_dims(tf.convert_to_tensor(a, dtype=tf.bool), 0)
 
 # TODO convert to tf
-def _timestamp_convert_for_input(self, t): # unix (epoc) timestamp float with microseconds (time.time())
+def _timestamp_convert_for_input(self, t): # unix (epoc) UTC timestamp float with microseconds (time.time())
     f, i = np.modf(np.float64(t) / 188) # 100 year range from 1970 376
     f = f * 2 - 1 # -1.0:1.0 range
     i = i / 2**23 - 1 # fit high value into 23 mantissa + 1 sign bits (float32) at -1.0:1.0 range

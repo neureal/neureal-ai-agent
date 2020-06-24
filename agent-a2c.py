@@ -103,7 +103,7 @@ class A2CAgent:
         # Training loop: collect samples, send to optimizer, repeat updates times.
         ep_rewards = [0.0]
         next_obs = env.reset()
-        # env.render()
+        env.render()
         finished = False
         update = 0
         while update < updates or not finished:
@@ -112,7 +112,7 @@ class A2CAgent:
                 actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
                 # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
-                # env.render()
+                if env.render(): quit(0)
 
                 ep_rewards[-1] += rewards[step]
                 if dones[step]:
