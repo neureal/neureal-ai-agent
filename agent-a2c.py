@@ -102,6 +102,8 @@ class A2CAgent:
 
         # Training loop: collect samples, send to optimizer, repeat updates times.
         ep_rewards = [0.0]
+        ep_steps = 0
+        ep_end_balances = []
         next_obs = env.reset()
         env.render()
         finished = False
@@ -115,10 +117,14 @@ class A2CAgent:
                 if env.render(): quit(0)
 
                 ep_rewards[-1] += rewards[step]
+                ep_steps += 1
+                ep_avg_reward = np.expm1(ep_rewards[-1] / ep_steps)
                 if dones[step]:
-                    print("DONE episode [{:03d}] total rewards [{}]".format(len(ep_rewards)-1, ep_rewards[-1]))
+                    ep_end_balances.append(np.expm1(rewards[step]))
+                    print("DONE episode [{:03d}]  avg reward {:.2f}  end balance {:.2f}".format(len(ep_rewards)-1, ep_avg_reward, ep_end_balances[-1]))
                     if update >= updates-1: finished = True; break
                     ep_rewards.append(0.0)
+                    ep_steps = 0
                     next_obs = env.reset()
 
             _, next_value = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
@@ -133,9 +139,9 @@ class A2CAgent:
             # Note: no need to mess around with gradients, Keras API handles it.
             losses = self.model.train_on_batch(observations, [acts_and_advs, returns]) # input, targets
             # print("update [{:03d}/{:03d}]  {} = {}".format(update + 1, updates, self.model.metrics_names, losses))
-            print("update [{:03d}/{:03d}]  rewards {:.18f}  losses {}".format(update, updates, ep_rewards[-1], losses))
+            # print("update [{:03d}/{:03d}]  avg reward {:.2f}  last balance {:.2f}  losses {}".format(update, updates, ep_avg_reward, np.expm1(rewards[step]), losses))
             update += 1
-        return ep_rewards
+        return ep_end_balances
 
     def test(self, env, render=False):
         obs, done, ep_reward = env.reset(), False, 0
@@ -194,9 +200,9 @@ class A2CAgent:
 class Args(): pass
 args = Args()
 args.batch_size = 128
-args.num_updates = 5000
+args.num_updates = 500
 args.learning_rate = 7e-3 # start with -4 for rough train, -5 for fine tune and -6 for when trained
-args.render_test = True
+args.render_test = False
 args.plot_results = True
 
 if __name__ == '__main__':
@@ -204,7 +210,7 @@ if __name__ == '__main__':
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0'), "gym-A2C-Trader-2"
+    env, model_name = gym.make('Trader-v0', env=2, speed=10000.0), "gym-A2C-Trader-2"
 
     gpus = tf.config.list_physical_devices('GPU')
     for gpu in gpus: tf.config.experimental.set_memory_growth(gpu, True)
@@ -219,9 +225,9 @@ if __name__ == '__main__':
 
         agent = A2CAgent(model, args.learning_rate)
         rewards_history = agent.train(env, args.batch_size, args.num_updates)
-        print("Finished training. Testing...")
-        reward_test = agent.test(env, args.render_test)
-        print("Test Total Episode Reward: {}".format(reward_test))
+        print("Finished training")
+        # reward_test = agent.test(env, args.render_test)
+        # print("Test Total Episode Reward: {}".format(reward_test))
         
         model.save_weights(model_file)
 
@@ -229,6 +235,6 @@ if __name__ == '__main__':
             plt.style.use('seaborn')
             plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
             plt.xlabel('Episode')
-            plt.ylabel('Total Reward')
+            plt.ylabel('Final Balance')
             plt.show()
         model.summary()
