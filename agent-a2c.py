@@ -22,22 +22,22 @@ class Model(tf.keras.Model):
         # input_shape = [1] + list(num_obs)
 
         # self.layer_action_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_action_dense_in = tf.keras.layers.Dense(1024, kernel_initializer='identity', activation='relu', name='action_dense_in')
-        self.layer_action_dense_01 = tf.keras.layers.Dense(512, activation='relu', name='action_dense_01')
-        self.layer_action_dense_02 = tf.keras.layers.Dense(256, activation='relu', name='action_dense_02')
-        self.layer_action_dense_03 = tf.keras.layers.Dense(128, activation='relu', name='action_dense_03')
-        self.layer_action_lstm_01 = tf.keras.layers.LSTM(128, name='action_lstm_01')
-        self.layer_action_lstm_02 = tf.keras.layers.LSTM(64, name='action_lstm_02')
+        self.layer_action_dense_in = tf.keras.layers.Dense(2048, kernel_initializer='identity', activation='relu', name='action_dense_in')
+        self.layer_action_dense_01 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_01')
+        self.layer_action_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_02')
+        self.layer_action_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_03')
+        self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
+        self.layer_action_lstm_02 = tf.keras.layers.LSTM(1024, name='action_lstm_02')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
         self.layer_action_sample = ProbabilityDistribution()
 
         # self.layer_value_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_value_dense_in = tf.keras.layers.Dense(1024, kernel_initializer='identity', activation='relu', name='value_dense_in')
-        self.layer_value_dense_01 = tf.keras.layers.Dense(512, activation='relu', name='value_dense_01')
-        self.layer_value_dense_02 = tf.keras.layers.Dense(256, activation='relu', name='value_dense_02')
-        self.layer_value_dense_03 = tf.keras.layers.Dense(128, activation='relu', name='value_dense_03')
-        self.layer_value_lstm_01 = tf.keras.layers.LSTM(128, name='value_lstm_01')
-        self.layer_value_lstm_02 = tf.keras.layers.LSTM(64, name='value_lstm_02')
+        self.layer_value_dense_in = tf.keras.layers.Dense(2048, kernel_initializer='identity', activation='relu', name='value_dense_in')
+        self.layer_value_dense_01 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_01')
+        self.layer_value_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_02')
+        self.layer_value_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_03')
+        self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
+        self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
         self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
         
         self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample(), dtype=tf.float32), 0))
@@ -108,13 +108,18 @@ class A2CAgent:
         env.render()
         finished = False
         update = 0
+        start_ts = next_obs[0]
+        start_rt = time.time()
         while update < updates or not finished:
             for step in range(batch_sz):
                 observations[step] = next_obs.copy()
                 actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
                 # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
-                if env.render(): quit(0)
+                if env.render():
+                    days = (next_obs[0] - start_ts) / 86400
+                    print("total runtime (days) {:.2f} days/hour {:.4f}".format(days, days / ((time.time()-start_rt) / 3600)))
+                    quit(0)
 
                 ep_rewards[-1] += rewards[step]
                 ep_steps += 1
@@ -141,6 +146,8 @@ class A2CAgent:
             # print("update [{:03d}/{:03d}]  {} = {}".format(update + 1, updates, self.model.metrics_names, losses))
             # print("update [{:03d}/{:03d}]  avg reward {:.2f}  last balance {:.2f}  losses {}".format(update, updates, ep_avg_reward, np.expm1(rewards[step]), losses))
             update += 1
+        days = (next_obs[0] - start_ts) / 86400
+        print("total runtime (days) {:.2f} days/hour {:.4f}".format(days, days / ((time.time()-start_rt) / 3600)))
         return ep_end_balances
 
     def test(self, env, render=False):
@@ -199,9 +206,9 @@ class A2CAgent:
 
 class Args(): pass
 args = Args()
-args.batch_size = 128
+args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
 args.num_updates = 500
-args.learning_rate = 7e-3 # start with -4 for rough train, -5 for fine tune and -6 for when trained
+args.learning_rate = 7e-4 # start with -4 for rough train, -5 for fine tune and -6 for when trained
 args.render_test = False
 args.plot_results = True
 
@@ -210,11 +217,11 @@ if __name__ == '__main__':
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', env=2, speed=10000.0), "gym-A2C-Trader-2"
+    env, model_name = gym.make('Trader-v0', env=2, speed=10000.0), "gym-A2C-Trader2-0"
 
     gpus = tf.config.list_physical_devices('GPU')
     for gpu in gpus: tf.config.experimental.set_memory_growth(gpu, True)
-    with tf.device('/device:GPU:2'):
+    with tf.device('/device:GPU:0'):
         # model = Model(num_actions=env.action_space.n)
         model = Model(env)
 
