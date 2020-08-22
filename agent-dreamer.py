@@ -1,12 +1,16 @@
 import threading, time, os
+curdir = os.path.expanduser("~")
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 import tensorflow as tf
+# tf.config.experimental_run_functions_eagerly(True)
 import tensorflow_probability as tfp
 import gym
 import gym_trader
-tf.config.experimental_run_functions_eagerly(True)
-curdir = os.path.expanduser("~")
+
+# tf.keras.backend.set_floatx('float64')
+physical_devices_gpu = tf.config.list_physical_devices('GPU')
+for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
 # maybe use MS-COCO to train both images and text captions, https://www.tensorflow.org/tutorials/text/image_captioning

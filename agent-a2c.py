@@ -1,12 +1,12 @@
 import time, os
+curdir = os.path.expanduser("~")
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 import tensorflow as tf
+# tf.config.experimental_run_functions_eagerly(True)
 import matplotlib.pyplot as plt
 import gym
 import gym_trader
-# tf.config.experimental_run_functions_eagerly(True)
-curdir = os.path.expanduser("~")
 
 
 class ProbabilityDistribution(tf.keras.Model):
