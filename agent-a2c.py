@@ -3,7 +3,8 @@ curdir = os.path.expanduser("~")
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 import tensorflow as tf
-# tf.config.experimental_run_functions_eagerly(True)
+tf.keras.backend.set_floatx('float64')
+# tf.config.run_functions_eagerly(True)
 import matplotlib.pyplot as plt
 import gym
 import gym_trader
@@ -40,7 +41,7 @@ class Model(tf.keras.Model):
         self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
         self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
         
-        self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample(), dtype=tf.float32), 0))
+        self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0))
         # self(tf.convert_to_tensor(env.observation_space.sample()[None, :]))
 
     @tf.function
@@ -93,6 +94,11 @@ class A2CAgent:
             # Define separate losses for policy logits and value estimate.
             loss=[self._action_logits_loss, self._value_loss]
         )
+    
+    def _print_time(self, t, t_real, avg_step):
+        t_real = time.time() - t_real
+        days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
+        print("total runtime (days) {:4d}:{:02d}:{:02d}:{:02d}   days/hour {:.8f} days/day {:.8f} avg step {:.8f}".format(days,hours,mins,secs, (t/86400) / (t_real/3600), (t/86400) / (t_real/86400), avg_step))
 
     def train(self, env, batch_sz=64, updates=250):
         # Storage helpers for a single batch of data.
@@ -101,24 +107,26 @@ class A2CAgent:
         observations = np.empty((batch_sz,) + env.observation_space.shape)
 
         # Training loop: collect samples, send to optimizer, repeat updates times.
-        ep_rewards = [0.0]
-        ep_steps = 0
-        ep_end_balances = []
+        ep_rewards, ep_steps, ep_end_balances = [0.0], 0, []
         next_obs = env.reset()
         env.render()
-        finished = False
-        update = 0
-        start_ts = next_obs[0]
-        start_rt = time.time()
+        update, finished = 0, False
+        t_sim_total, t_sim_start, t_real_start = 0.0, next_obs[0], time.time()
+        steps_total, t1_time = 0, 0.0
+
         while update < updates or not finished:
             for step in range(batch_sz):
                 observations[step] = next_obs.copy()
-                actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
+                actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
                 # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
+                
+                t1_start = time.perf_counter_ns()
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
+                t1_time += (time.perf_counter_ns() - t1_start) / 1e9 # seconds
+                steps_total += 1
                 if env.render():
-                    days = (next_obs[0] - start_ts) / 86400
-                    print("total runtime (days) {:.2f} days/hour {:.4f}".format(days, days / ((time.time()-start_rt) / 3600)))
+                    t_sim_total += next_obs[0] - t_sim_start
+                    self._print_time(t_sim_total, t_real_start, t1_time/steps_total)
                     quit(0)
 
                 ep_rewards[-1] += rewards[step]
@@ -126,13 +134,15 @@ class A2CAgent:
                 ep_avg_reward = np.expm1(ep_rewards[-1] / ep_steps)
                 if dones[step]:
                     ep_end_balances.append(np.expm1(rewards[step]))
-                    print("DONE episode [{:03d}]  avg reward {:.2f}  end balance {:.2f}".format(len(ep_rewards)-1, ep_avg_reward, ep_end_balances[-1]))
+                    print("DONE episode #{:03d}  avg reward {:.2f}  end balance {:.2f}\n".format(len(ep_rewards)-1, ep_avg_reward, ep_end_balances[-1]))
                     if update >= updates-1: finished = True; break
                     ep_rewards.append(0.0)
                     ep_steps = 0
+                    t_sim_total += next_obs[0] - t_sim_start
                     next_obs = env.reset()
+                    t_sim_start = next_obs[0]
 
-            _, next_value = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs, dtype=tf.float32),0))
+            _, next_value = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
             # _, next_value = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
             # returns ~ [7,6,5,4,3,2,1,0] for reward = 1 per step, advs = returns - values output
             returns, advs = self._returns_advantages(rewards, dones, values, next_value)
@@ -146,15 +156,16 @@ class A2CAgent:
             # print("update [{:03d}/{:03d}]  {} = {}".format(update + 1, updates, self.model.metrics_names, losses))
             # print("update [{:03d}/{:03d}]  avg reward {:.2f}  last balance {:.2f}  losses {}".format(update, updates, ep_avg_reward, np.expm1(rewards[step]), losses))
             update += 1
-        days = (next_obs[0] - start_ts) / 86400
-        print("total runtime (days) {:.2f} days/hour {:.4f}".format(days, days / ((time.time()-start_rt) / 3600)))
+
+        t_sim_total += next_obs[0] - t_sim_start
+        self._print_time(t_sim_total, t_real_start, t1_time/steps_total)
         return ep_end_balances
 
     def test(self, env, render=False):
         obs, done, ep_reward = env.reset(), False, 0
         if render: env.render()
         while not done:
-            action, _ = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(obs, dtype=tf.float32),0))
+            action, _ = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(obs),0))
             # action, _ = self.model.action_value(tf.convert_to_tensor(obs[None, :]))
             obs, reward, done, _ = env.step(action)
             if render: env.render()
@@ -207,25 +218,27 @@ class A2CAgent:
 class Args(): pass
 args = Args()
 args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 500
+args.num_updates = 2 # routhly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 7e-4 # start with -4 for rough train, -5 for fine tune and -6 for when trained
 args.render_test = False
 args.plot_results = True
+
+machine, device = 'dev', '0'
 
 if __name__ == '__main__':
     # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', env=2, speed=10000.0), "gym-A2C-Trader2-0"
+    env, model_name = gym.make('Trader-v0', env=3, speed=100.0), "gym-A2C-Trader2-"+machine+"-"+device
 
     gpus = tf.config.list_physical_devices('GPU')
     for gpu in gpus: tf.config.experimental.set_memory_growth(gpu, True)
-    with tf.device('/device:GPU:0'):
+    with tf.device('/device:GPU:'+device):
         # model = Model(num_actions=env.action_space.n)
         model = Model(env)
 
-        model_file = "{}/tf_models/{}.h5".format(curdir, model_name)
+        model_file = "{}/tf-data-models/{}.h5".format(curdir, model_name)
         if tf.io.gfile.exists(model_file):
             model.load_weights(model_file, by_name=True, skip_mismatch=True)
             print("LOADED model weights from {}".format(model_file))
@@ -237,11 +250,12 @@ if __name__ == '__main__':
         # print("Test Total Episode Reward: {}".format(reward_test))
         
         model.save_weights(model_file)
+        print("SAVED model weights to {}".format(model_file))
 
         if args.plot_results:
+            plt.figure(num=model_name+time.strftime("-%Y_%m_%d-%H-%M"), figsize=(24, 16), tight_layout=True)
             plt.style.use('seaborn')
             plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
-            plt.xlabel('Episode')
-            plt.ylabel('Final Balance')
+            plt.xlabel('Episode'); plt.ylabel('Final Balance')
             plt.show()
         model.summary()
