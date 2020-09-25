@@ -2,12 +2,17 @@ import time, os
 curdir = os.path.expanduser("~")
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
+# np.random.seed(0)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 import matplotlib.pyplot as plt
 import gym
 import gym_trader
+
+physical_devices_gpu = tf.config.list_physical_devices('GPU')
+for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
 class ProbabilityDistribution(tf.keras.Model):
@@ -110,7 +115,7 @@ class A2CAgent:
         ep_rewards, ep_steps, ep_end_balances = [0.0], 0, []
         next_obs = env.reset()
         env.render()
-        update, finished = 0, False
+        update, finished, early_quit = 0, False, False
         t_sim_total, t_sim_start, t_real_start = 0.0, next_obs[0], time.time()
         steps_total, t1_time = 0, 0.0
 
@@ -124,10 +129,7 @@ class A2CAgent:
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
                 t1_time += (time.perf_counter_ns() - t1_start) / 1e9 # seconds
                 steps_total += 1
-                if env.render():
-                    t_sim_total += next_obs[0] - t_sim_start
-                    self._print_time(t_sim_total, t_real_start, t1_time/steps_total)
-                    quit(0)
+                if env.render(): early_quit = True; break
 
                 ep_rewards[-1] += rewards[step]
                 ep_steps += 1
@@ -141,6 +143,7 @@ class A2CAgent:
                     t_sim_total += next_obs[0] - t_sim_start
                     next_obs = env.reset()
                     t_sim_start = next_obs[0]
+            if early_quit: break
 
             _, next_value = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
             # _, next_value = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
@@ -232,8 +235,6 @@ if __name__ == '__main__':
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
     env, model_name = gym.make('Trader-v0', env=3, speed=100.0), "gym-A2C-Trader2-"+machine+"-"+device
 
-    gpus = tf.config.list_physical_devices('GPU')
-    for gpu in gpus: tf.config.experimental.set_memory_growth(gpu, True)
     with tf.device('/device:GPU:'+device):
         # model = Model(num_actions=env.action_space.n)
         model = Model(env)
@@ -258,4 +259,4 @@ if __name__ == '__main__':
             plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
             plt.xlabel('Episode'); plt.ylabel('Final Balance')
             plt.show()
-        model.summary()
+        # model.summary()
