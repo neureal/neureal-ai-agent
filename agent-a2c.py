@@ -44,7 +44,7 @@ class Model(tf.keras.Model):
         self.layer_value_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_03')
         self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
         self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
-        self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
+        self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
         
         self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0))
         # self(tf.convert_to_tensor(env.observation_space.sample()[None, :]))
@@ -69,7 +69,7 @@ class Model(tf.keras.Model):
         value = self.layer_value_dense_03(value)
         value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1))
         value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1))
-        value = self.layer_value_dense_logits_out(value)
+        value = self.layer_value_dense_out(value)
 
         return action, value
 
@@ -83,6 +83,7 @@ class Model(tf.keras.Model):
         # Will become clearer later why we don't use it.
         action = tf.squeeze(action).numpy()
         value = tf.squeeze(value).numpy()
+        # print("action {} value {}".format(action, value))
         return action, value
 
 
@@ -177,7 +178,7 @@ class A2CAgent:
 
     def _returns_advantages(self, rewards, dones, values, next_value):
         # `next_value` is the bootstrap value estimate of the future state (critic).
-        test = np.asarray(next_value)
+        # test = np.asarray(next_value)
         returns = np.append(np.zeros_like(rewards), [next_value], axis=-1)
 
         # Returns are calculated as discounted sum of future rewards.
@@ -212,16 +213,16 @@ class A2CAgent:
         total_loss = policy_loss - self.entropy_c * entropy_loss
         return total_loss # batch size
 
-    def _value_loss(self, returns, value): # targets, output (returns, layer_value_dense_logits_out)
+    def _value_loss(self, returns, value): # targets, output (returns, layer_value_dense_out)
         # Value loss is typically MSE between value estimates and returns.
-        value_loss = self.value_c * tf.keras.losses.mean_squared_error(returns, value) # regress [layer_value_dense_logits_out] to [7,6,5,4,3,2,1,0]
+        value_loss = self.value_c * tf.keras.losses.mean_squared_error(returns, value) # regress [layer_value_dense_out] to [7,6,5,4,3,2,1,0]
         return value_loss # batch size
 
 
 class Args(): pass
 args = Args()
 args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 2 # routhly batch_size * num_updates = total steps, unless last episode is long
+args.num_updates = 50 # routhly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 7e-4 # start with -4 for rough train, -5 for fine tune and -6 for when trained
 args.render_test = False
 args.plot_results = True
@@ -249,9 +250,6 @@ if __name__ == '__main__':
         print("Finished training")
         # reward_test = agent.test(env, args.render_test)
         # print("Test Total Episode Reward: {}".format(reward_test))
-        
-        model.save_weights(model_file)
-        print("SAVED model weights to {}".format(model_file))
 
         if args.plot_results:
             plt.figure(num=model_name+time.strftime("-%Y_%m_%d-%H-%M"), figsize=(24, 16), tight_layout=True)
@@ -259,4 +257,7 @@ if __name__ == '__main__':
             plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
             plt.xlabel('Episode'); plt.ylabel('Final Balance')
             plt.show()
+
         # model.summary()
+        model.save_weights(model_file)
+        print("SAVED model weights to {}".format(model_file))
