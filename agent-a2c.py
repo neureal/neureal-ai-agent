@@ -234,7 +234,7 @@ if __name__ == '__main__':
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', env=3, speed=100.0), "gym-A2C-Trader2-"+machine+"-"+device
+    env, model_name = gym.make('Trader-v0', env=3, speed=100.0), "gym-A2C-Trader2-"+device+"-"+machine
 
     with tf.device('/device:GPU:'+device):
         # model = Model(num_actions=env.action_space.n)
@@ -252,10 +252,12 @@ if __name__ == '__main__':
         # print("Test Total Episode Reward: {}".format(reward_test))
 
         if args.plot_results:
-            plt.figure(num=model_name+time.strftime("-%Y_%m_%d-%H-%M"), figsize=(24, 16), tight_layout=True)
-            plt.style.use('seaborn')
-            plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1])
+            name = model_name+time.strftime("-%Y_%m_%d-%H-%M")
+            plt.figure(num=name, figsize=(24, 16), tight_layout=True)
+            # plt.style.use('seaborn')
+            plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1], label='agent')
             plt.xlabel('Episode'); plt.ylabel('Final Balance')
+            plt.title(name); plt.legend(loc='upper left')
             plt.show()
 
         # model.summary()
