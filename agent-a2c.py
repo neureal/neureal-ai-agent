@@ -28,22 +28,28 @@ class Model(tf.keras.Model):
         # input_shape = [1] + list(num_obs)
 
         # self.layer_action_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_action_dense_in = tf.keras.layers.Dense(2048, kernel_initializer='identity', activation='relu', name='action_dense_in')
-        self.layer_action_dense_01 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_01')
+        self.layer_action_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='action_dense_in')
+        self.layer_action_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='action_dense_01')
         self.layer_action_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_02')
         self.layer_action_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_03')
+        self.layer_action_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_04')
         self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
         self.layer_action_lstm_02 = tf.keras.layers.LSTM(1024, name='action_lstm_02')
+        self.layer_action_lstm_03 = tf.keras.layers.LSTM(1024, name='action_lstm_03')
+        self.layer_action_lstm_04 = tf.keras.layers.LSTM(1024, name='action_lstm_04')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
         self.layer_action_sample = ProbabilityDistribution()
 
         # self.layer_value_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_value_dense_in = tf.keras.layers.Dense(2048, kernel_initializer='identity', activation='relu', name='value_dense_in')
-        self.layer_value_dense_01 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_01')
+        self.layer_value_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='value_dense_in')
+        self.layer_value_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='value_dense_01')
         self.layer_value_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_02')
         self.layer_value_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_03')
+        self.layer_value_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_04')
         self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
         self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
+        self.layer_value_lstm_03 = tf.keras.layers.LSTM(1024, name='value_lstm_03')
+        self.layer_value_lstm_04 = tf.keras.layers.LSTM(1024, name='value_lstm_04')
         self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
         
         self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0))
@@ -59,16 +65,22 @@ class Model(tf.keras.Model):
         action = self.layer_action_dense_01(action)
         action = self.layer_action_dense_02(action)
         action = self.layer_action_dense_03(action)
+        action = self.layer_action_dense_04(action)
         action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1))
         action = self.layer_action_lstm_02(tf.expand_dims(action, axis=1))
+        action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1))
+        action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1))
         action = self.layer_action_dense_logits_out(action)
 
         value = self.layer_value_dense_in(inputs) # seperate value model
         value = self.layer_value_dense_01(value)
         value = self.layer_value_dense_02(value)
         value = self.layer_value_dense_03(value)
+        value = self.layer_value_dense_04(value)
         value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1))
         value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1))
+        value = self.layer_value_lstm_03(tf.expand_dims(value, axis=1))
+        value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1))
         value = self.layer_value_dense_out(value)
 
         return action, value
@@ -234,7 +246,7 @@ if __name__ == '__main__':
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', env=3, speed=100.0), "gym-A2C-Trader2-"+device+"-"+machine
+    env, model_name = gym.make('Trader-v0', env=2, speed=100.0), "gym-A2C-Trader2-"+device+"-"+machine
 
     with tf.device('/device:GPU:'+device):
         # model = Model(num_actions=env.action_space.n)
