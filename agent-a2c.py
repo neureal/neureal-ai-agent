@@ -108,7 +108,7 @@ class A2CAgent:
 
         self.model = model
         self.model.compile(
-            optimizer=tf.keras.optimizers.RMSprop(lr=lr),
+            optimizer=tf.keras.optimizers.Adam(lr=lr),
             # Define separate losses for policy logits and value estimate.
             loss=[self._action_logits_loss, self._value_loss]
         )
@@ -234,25 +234,25 @@ class A2CAgent:
 class Args(): pass
 args = Args()
 args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 50 # routhly batch_size * num_updates = total steps, unless last episode is long
-args.learning_rate = 7e-4 # start with -4 for rough train, -5 for fine tune and -6 for when trained
+args.num_updates = 10 # routhly batch_size * num_updates = total steps, unless last episode is long
+args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render_test = False
 args.plot_results = True
 
-machine, device = 'dev', '0'
+machine, device = 'dev', 0
 
 if __name__ == '__main__':
     # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', env=2, speed=100.0), "gym-A2C-Trader2-"+device+"-"+machine
+    env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=100.0), "gym-A2C-Trader2-"+str(device)+"-"+machine
 
-    with tf.device('/device:GPU:'+device):
+    with tf.device('/device:GPU:'+str(device)):
         # model = Model(num_actions=env.action_space.n)
         model = Model(env)
 
-        model_file = "{}/tf-data-models/{}.h5".format(curdir, model_name)
+        model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name)
         if tf.io.gfile.exists(model_file):
             model.load_weights(model_file, by_name=True, skip_mismatch=True)
             print("LOADED model weights from {}".format(model_file))
