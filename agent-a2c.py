@@ -108,15 +108,10 @@ class A2CAgent:
 
         self.model = model
         self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(lr=lr),
+            optimizer=tf.keras.optimizers.SGD(lr=lr),
             # Define separate losses for policy logits and value estimate.
             loss=[self._action_logits_loss, self._value_loss]
         )
-    
-    def _print_time(self, t, t_real, avg_step):
-        t_real = time.time() - t_real
-        days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
-        print("total runtime (days) {:4d}:{:02d}:{:02d}:{:02d}   days/hour {:.8f} days/day {:.8f} avg step {:.8f}".format(days,hours,mins,secs, (t/86400) / (t_real/3600), (t/86400) / (t_real/86400), avg_step))
 
     def train(self, env, batch_sz=64, updates=250):
         # Storage helpers for a single batch of data.
@@ -125,12 +120,12 @@ class A2CAgent:
         observations = np.empty((batch_sz,) + env.observation_space.shape)
 
         # Training loop: collect samples, send to optimizer, repeat updates times.
-        ep_rewards, ep_steps, ep_end_balances = [0.0], 0, []
-        next_obs = env.reset()
-        env.render()
+        next_obs = env.reset(); env.render()
+
+        epi_rewards, epi_steps, epi_end_bals, epi_avg_bals, epi_sim_times = [0.0], 0, [], [], []
         update, finished, early_quit = 0, False, False
-        t_sim_total, t_sim_start, t_real_start = 0.0, next_obs[0], time.time()
-        steps_total, t1_time = 0, 0.0
+        t_sim_total, t_sim_epi_start, t_real_start = 0.0, next_obs[0], time.time()
+        steps_total, t_steps_total = 0, 0.0
 
         while update < updates or not finished:
             for step in range(batch_sz):
@@ -138,24 +133,29 @@ class A2CAgent:
                 actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
                 # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
                 
-                t1_start = time.perf_counter_ns()
+                step_time_start = time.perf_counter_ns()
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
-                t1_time += (time.perf_counter_ns() - t1_start) / 1e9 # seconds
+                t_steps_total += (time.perf_counter_ns() - step_time_start) / 1e9 # seconds
                 steps_total += 1
                 if env.render(): early_quit = True; break
 
-                ep_rewards[-1] += rewards[step]
-                ep_steps += 1
-                ep_avg_reward = np.expm1(ep_rewards[-1] / ep_steps)
+                epi_rewards[-1] += rewards[step]
+                epi_steps += 1
                 if dones[step]:
-                    ep_end_balances.append(np.expm1(rewards[step]))
-                    print("DONE episode #{:03d}  avg reward {:.2f}  end balance {:.2f}\n".format(len(ep_rewards)-1, ep_avg_reward, ep_end_balances[-1]))
+                    epi_end_bal = np.expm1(rewards[step])
+                    epi_end_bals.append(epi_end_bal)
+                    epi_avg_bal = np.expm1(epi_rewards[-1] / epi_steps)
+                    epi_avg_bals.append(epi_avg_bal)
+                    t_sim_epi = next_obs[0] - t_sim_epi_start
+                    epi_sim_times.append(t_sim_epi)
+                    print("DONE episode #{:03d}  sim epi time {}    avg reward {:.2f}    end balance {:.2f}\n".format(len(epi_rewards)-1, _print_time(t_sim_epi), epi_avg_bal, epi_end_bal))
                     if update >= updates-1: finished = True; break
-                    ep_rewards.append(0.0)
-                    ep_steps = 0
-                    t_sim_total += next_obs[0] - t_sim_start
-                    next_obs = env.reset()
-                    t_sim_start = next_obs[0]
+                    epi_rewards.append(0.0)
+                    epi_steps = 0
+                    t_sim_total += t_sim_epi
+
+                    next_obs = env.reset(); env.render()
+                    t_sim_epi_start = next_obs[0]
             if early_quit: break
 
             _, next_value = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
@@ -170,12 +170,17 @@ class A2CAgent:
             # Note: no need to mess around with gradients, Keras API handles it.
             losses = self.model.train_on_batch(observations, [acts_and_advs, returns]) # input, targets
             # print("update [{:03d}/{:03d}]  {} = {}".format(update + 1, updates, self.model.metrics_names, losses))
-            # print("update [{:03d}/{:03d}]  avg reward {:.2f}  last balance {:.2f}  losses {}".format(update, updates, ep_avg_reward, np.expm1(rewards[step]), losses))
+            # print("update [{:03d}/{:03d}]  avg reward {:.2f}  last balance {:.2f}  losses {}".format(update, updates, epi_avg_bal, np.expm1(rewards[step]), losses))
             update += 1
 
-        t_sim_total += next_obs[0] - t_sim_start
-        self._print_time(t_sim_total, t_real_start, t1_time/steps_total)
-        return ep_end_balances
+        epi_num = len(epi_end_bals)
+        t_sim_total += next_obs[0] - t_sim_epi_start
+        t_avg_sim_epi = (t_sim_total / epi_num) if epi_num > 0 else 0
+
+        t_real_total = time.time() - t_real_start
+        t_avg_step = (t_steps_total / steps_total) if steps_total > 0 else 0
+
+        return epi_end_bals, epi_avg_bals, epi_sim_times, epi_num, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step
 
     def test(self, env, render=False):
         obs, done, ep_reward = env.reset(), False, 0
@@ -231,10 +236,14 @@ class A2CAgent:
         return value_loss # batch size
 
 
+def _print_time(t):
+    days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
+    return "{:4d}:{:02d}:{:02d}:{:02d}".format(days,hours,mins,secs)
+
 class Args(): pass
 args = Args()
 args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 10 # routhly batch_size * num_updates = total steps, unless last episode is long
+args.num_updates = 100 # routhly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render_test = False
 args.plot_results = True
@@ -246,7 +255,7 @@ if __name__ == '__main__':
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=100.0), "gym-A2C-Trader2-"+str(device)+"-"+machine
+    env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=100.0), "gym-A2C-Trader2-a"+str(device)+"-"+machine
 
     with tf.device('/device:GPU:'+str(device)):
         # model = Model(num_actions=env.action_space.n)
@@ -258,19 +267,30 @@ if __name__ == '__main__':
             print("LOADED model weights from {}".format(model_file))
 
         agent = A2CAgent(model, args.learning_rate)
-        rewards_history = agent.train(env, args.batch_size, args.num_updates)
-        print("Finished training")
+        epi_end_bals, epi_avg_bals, epi_sim_times, epi_num, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step = agent.train(env, args.batch_size, args.num_updates)
+        print("\nFinished training")
         # reward_test = agent.test(env, args.render_test)
         # print("Test Total Episode Reward: {}".format(reward_test))
 
+        fmt = (_print_time(t_real_total),_print_time(t_sim_total),_print_time(t_avg_sim_epi),t_avg_step,(t_sim_total/86400)/(t_real_total/3600),(t_sim_total/86400)/(t_real_total/86400))
+        info = "runtime: {} real {} sim    | avg-time: {} sim-episode {:12.8f} real-step    |   {:.3f} sim-days/hour  {:.3f} sim-days/day".format(*fmt)
+        print(info)
+
         if args.plot_results:
             name = model_name+time.strftime("-%Y_%m_%d-%H-%M")
+            xrng = np.arange(0, epi_num, 1)
             plt.figure(num=name, figsize=(24, 16), tight_layout=True)
-            # plt.style.use('seaborn')
-            plt.plot(np.arange(0, len(rewards_history), 1), rewards_history[::1], label='agent')
-            plt.xlabel('Episode'); plt.ylabel('Final Balance')
-            plt.title(name); plt.legend(loc='upper left')
-            plt.show()
+
+            ax2 = plt.subplot2grid((6, 1), (5, 0), rowspan=1)
+            plt.plot(xrng, epi_sim_times[::1], alpha=1.0, label='Sim Time')
+            plt.xlabel('Episode'); plt.ylabel('Seconds'); plt.legend(loc='upper left')
+
+            ax1 = plt.subplot2grid((6, 1), (0, 0), rowspan=5, sharex=ax2)
+            plt.plot(xrng, epi_avg_bals[::1], alpha=0.3, label='Avg Balance')
+            plt.plot(xrng, epi_end_bals[::1], alpha=0.7, label='Final Balance')
+            plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
+
+            plt.title(name+"\n"+info); plt.show()
 
         # model.summary()
         model.save_weights(model_file)
