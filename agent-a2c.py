@@ -108,7 +108,7 @@ class A2CAgent:
 
         self.model = model
         self.model.compile(
-            optimizer=tf.keras.optimizers.SGD(lr=lr),
+            optimizer=tf.keras.optimizers.Adam(lr=lr),
             # Define separate losses for policy logits and value estimate.
             loss=[self._action_logits_loss, self._value_loss]
         )
@@ -243,8 +243,8 @@ def _print_time(t):
 class Args(): pass
 args = Args()
 args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 100 # routhly batch_size * num_updates = total steps, unless last episode is long
-args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
+args.num_updates = 500 # routhly batch_size * num_updates = total steps, unless last episode is long
+args.learning_rate = 1e-5 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render_test = False
 args.plot_results = True
 
