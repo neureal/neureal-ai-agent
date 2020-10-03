@@ -147,7 +147,7 @@ class A2CAgent:
                     epi_avg_bal = np.expm1(epi_rewards[-1] / epi_steps)
                     epi_avg_bals.append(epi_avg_bal)
                     t_sim_epi = next_obs[0] - t_sim_epi_start
-                    epi_sim_times.append(t_sim_epi)
+                    epi_sim_times.append(t_sim_epi / 60)
                     print("DONE episode #{:03d}  sim epi time {}    avg reward {:.2f}    end balance {:.2f}\n".format(len(epi_rewards)-1, _print_time(t_sim_epi), epi_avg_bal, epi_end_bal))
                     if update >= updates-1: finished = True; break
                     epi_rewards.append(0.0)
@@ -283,11 +283,13 @@ if __name__ == '__main__':
 
             ax2 = plt.subplot2grid((6, 1), (5, 0), rowspan=1)
             plt.plot(xrng, epi_sim_times[::1], alpha=1.0, label='Sim Time')
-            plt.xlabel('Episode'); plt.ylabel('Seconds'); plt.legend(loc='upper left')
+            ax2.set_ylim(0,60)
+            plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
 
             ax1 = plt.subplot2grid((6, 1), (0, 0), rowspan=5, sharex=ax2)
-            plt.plot(xrng, epi_avg_bals[::1], alpha=0.3, label='Avg Balance')
+            plt.plot(xrng, epi_avg_bals[::1], alpha=0.4, label='Avg Balance')
             plt.plot(xrng, epi_end_bals[::1], alpha=0.7, label='Final Balance')
+            ax1.set_ylim(0,30000)
             plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
 
             plt.title(name+"\n"+info); plt.show()
