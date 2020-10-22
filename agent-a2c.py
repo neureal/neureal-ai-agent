@@ -7,12 +7,26 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
+# tf.random.set_seed(0)
 import matplotlib.pyplot as plt
-import gym
-import gym_trader
+import gym, gym_trader
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
+
+
+class DenseNormPReLU(tf.keras.layers.Layer):
+    def __init__(self, units, kernel_initializer='glorot_uniform', name=None):
+        super(DenseNormPReLU, self).__init__(name=name)
+        self.layer_dense = tf.keras.layers.Dense(units, kernel_initializer=kernel_initializer)
+        self.layer_norm = tf.keras.layers.BatchNormalization()
+        self.layer_activation = tf.keras.layers.PReLU()
+        # self.layer_norm = EvoNormS0(16, groups=8)
+    def call(self, inputs, training=None):
+        out = self.layer_dense(inputs)
+        out = self.layer_norm(out, training=training)
+        out = self.layer_activation(out)
+        return out
 
 
 class ProbabilityDistribution(tf.keras.Model):
@@ -21,66 +35,92 @@ class ProbabilityDistribution(tf.keras.Model):
         sample = tf.squeeze(tf.random.categorical(logits, 1), axis=-1)
         return sample
 
-
 class Model(tf.keras.Model):
     def __init__(self, env):
         super().__init__('mlp_policy')
         # input_shape = [1] + list(num_obs)
 
-        # self.layer_action_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_action_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='action_dense_in')
-        self.layer_action_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='action_dense_01')
-        self.layer_action_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_02')
-        self.layer_action_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_03')
-        self.layer_action_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_04')
-        self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
-        self.layer_action_lstm_02 = tf.keras.layers.LSTM(1024, name='action_lstm_02')
-        self.layer_action_lstm_03 = tf.keras.layers.LSTM(1024, name='action_lstm_03')
-        self.layer_action_lstm_04 = tf.keras.layers.LSTM(1024, name='action_lstm_04')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
-        self.layer_action_sample = ProbabilityDistribution()
+        # # self.layer_action_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
+        # self.layer_action_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='action_dense_in')
+        # self.layer_action_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='action_dense_01')
+        # self.layer_action_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_02')
+        # self.layer_action_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_03')
+        # self.layer_action_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_04')
+        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
+        # self.layer_action_lstm_02 = tf.keras.layers.LSTM(1024, name='action_lstm_02')
+        # self.layer_action_lstm_03 = tf.keras.layers.LSTM(1024, name='action_lstm_03')
+        # self.layer_action_lstm_04 = tf.keras.layers.LSTM(1024, name='action_lstm_04')
+        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
+        # self.model_action_sample = ProbabilityDistribution()
 
-        # self.layer_value_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
-        self.layer_value_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='value_dense_in')
-        self.layer_value_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='value_dense_01')
-        self.layer_value_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_02')
-        self.layer_value_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_03')
-        self.layer_value_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_04')
+        # # self.layer_value_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
+        # self.layer_value_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='value_dense_in')
+        # self.layer_value_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='value_dense_01')
+        # self.layer_value_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_02')
+        # self.layer_value_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_03')
+        # self.layer_value_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_04')
+        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
+        # self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
+        # self.layer_value_lstm_03 = tf.keras.layers.LSTM(1024, name='value_lstm_03')
+        # self.layer_value_lstm_04 = tf.keras.layers.LSTM(1024, name='value_lstm_04')
+        # self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
+
+
+
+        self.layer_action_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='action_dense_in')
+        self.layer_action_dense_01 = DenseNormPReLU(1024, name='action_dense_01')
+        self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
+
+        self.model_action_sample = ProbabilityDistribution()
+
+        self.layer_value_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='value_dense_in')
+        self.layer_value_dense_01 = DenseNormPReLU(1024, name='value_dense_01')
         self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
-        self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
-        self.layer_value_lstm_03 = tf.keras.layers.LSTM(1024, name='value_lstm_03')
-        self.layer_value_lstm_04 = tf.keras.layers.LSTM(1024, name='value_lstm_04')
         self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
-        
-        self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0))
+
+
+        logits, value = self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0))
         # self(tf.convert_to_tensor(env.observation_space.sample()[None, :]))
+        action = self.model_action_sample(logits)
 
     @tf.function
-    def call(self, inputs, **kwargs):
+    def call(self, inputs, training=None):
         # Inputs is a numpy array, convert to a tensor.
         # input = tf.convert_to_tensor(inputs)
 
-        # Separate hidden layers from the same input tensor.
-        action = self.layer_action_dense_in(inputs) # seperate action model
-        action = self.layer_action_dense_01(action)
-        action = self.layer_action_dense_02(action)
-        action = self.layer_action_dense_03(action)
-        action = self.layer_action_dense_04(action)
+        # # Separate hidden layers from the same input tensor.
+        # action = self.layer_action_dense_in(inputs) # seperate action model
+        # action = self.layer_action_dense_01(action)
+        # action = self.layer_action_dense_02(action)
+        # action = self.layer_action_dense_03(action)
+        # action = self.layer_action_dense_04(action)
+        # action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1))
+        # action = self.layer_action_lstm_02(tf.expand_dims(action, axis=1))
+        # action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1))
+        # action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1))
+        # action = self.layer_action_dense_logits_out(action)
+
+        # value = self.layer_value_dense_in(inputs) # seperate value model
+        # value = self.layer_value_dense_01(value)
+        # value = self.layer_value_dense_02(value)
+        # value = self.layer_value_dense_03(value)
+        # value = self.layer_value_dense_04(value)
+        # value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1))
+        # value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1))
+        # value = self.layer_value_lstm_03(tf.expand_dims(value, axis=1))
+        # value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1))
+        # value = self.layer_value_dense_out(value)
+
+
+        action = self.layer_action_dense_in(inputs, training=training) # seperate action model
+        action = self.layer_action_dense_01(action, training=training)
         action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1))
-        action = self.layer_action_lstm_02(tf.expand_dims(action, axis=1))
-        action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1))
-        action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1))
         action = self.layer_action_dense_logits_out(action)
 
-        value = self.layer_value_dense_in(inputs) # seperate value model
-        value = self.layer_value_dense_01(value)
-        value = self.layer_value_dense_02(value)
-        value = self.layer_value_dense_03(value)
-        value = self.layer_value_dense_04(value)
+        value = self.layer_value_dense_in(inputs, training=training) # seperate value model
+        value = self.layer_value_dense_01(value, training=training)
         value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1))
-        value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1))
-        value = self.layer_value_lstm_03(tf.expand_dims(value, axis=1))
-        value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1))
         value = self.layer_value_dense_out(value)
 
         return action, value
@@ -89,7 +129,7 @@ class Model(tf.keras.Model):
     def action_value(self, obs):
         # Executes `call()` under the hood.
         logits, value = self.predict_on_batch(obs)
-        action = self.layer_action_sample.predict_on_batch(logits)
+        action = self.model_action_sample.predict_on_batch(logits)
         # Another way to sample actions:
         #     action = tf.random.categorical(logits, 1)
         # Will become clearer later why we don't use it.
@@ -244,7 +284,7 @@ class Args(): pass
 args = Args()
 args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
 args.num_updates = 500 # routhly batch_size * num_updates = total steps, unless last episode is long
-args.learning_rate = 1e-5 # start with 4 for rough train, 5 for fine tune and 6 for when trained
+args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render_test = False
 args.plot_results = True
 
@@ -265,6 +305,7 @@ if __name__ == '__main__':
         if tf.io.gfile.exists(model_file):
             model.load_weights(model_file, by_name=True, skip_mismatch=True)
             print("LOADED model weights from {}".format(model_file))
+        # model.summary(); quit(0)
 
         agent = A2CAgent(model, args.learning_rate)
         epi_end_bals, epi_avg_bals, epi_sim_times, epi_num, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step = agent.train(env, args.batch_size, args.num_updates)
@@ -294,6 +335,5 @@ if __name__ == '__main__':
 
             plt.title(name+"\n"+info); plt.show()
 
-        # model.summary()
         model.save_weights(model_file)
         print("SAVED model weights to {}".format(model_file))

@@ -7,6 +7,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 # tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
+# tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import gym
 import gym_trader
