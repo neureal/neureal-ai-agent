@@ -8,14 +8,14 @@ import tensorflow as tf
 tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 tf.random.set_seed(0)
+import tensorflow_probability as tfp
+import matplotlib.pyplot as plt
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
-DEFAULT_EPSILON_VALUE = 1e-5
-
-
+# DEFAULT_EPSILON_VALUE = 1e-5
 # def instance_std(x, eps=DEFAULT_EPSILON_VALUE):
 #     _, var = tf.nn.moments(x, axes=[1, 2], keepdims=True)
 #     return tf.sqrt(var + eps)
@@ -63,10 +63,10 @@ DEFAULT_EPSILON_VALUE = 1e-5
 
 
 class EvoNormS0(tf.keras.layers.Layer):
-    def __init__(self, groups, axis=-1):
+    def __init__(self, groups, eps=1e-5, axis=-1, name=None):
         # TODO make diff axis work
-        super(EvoNormS0, self).__init__()
-        self.groups, self.axis = groups, axis
+        super(EvoNormS0, self).__init__(name=name)
+        self.groups, self.eps, self.axis = groups, eps, axis
 
     def build(self, input_shape):
         inlen = len(input_shape)
@@ -90,7 +90,7 @@ class EvoNormS0(tf.keras.layers.Layer):
     def call(self, inputs, training=True):
         grouped_inputs = tf.reshape(inputs, self.group_shape)
         _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
-        std = tf.sqrt(var + DEFAULT_EPSILON_VALUE)
+        std = tf.sqrt(var + self.eps)
         std = tf.broadcast_to(std, self.group_shape)
         group_std = tf.reshape(std, tf.shape(inputs))
 
@@ -105,6 +105,8 @@ class EvoNormS0(tf.keras.layers.Layer):
 if __name__ == "__main__":
     (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.cifar10.load_data()
     # data_train, data_test = tf.keras.datasets.cifar10.load_data()
+    # (train_images, train_labels), (test_images, test_labels) = tf.keras.datasets.mnist.load_data()
+    # train_images, train_labels, test_images, test_labels = np.expand_dims(train_images,-1), np.expand_dims(train_labels,-1), np.expand_dims(test_images,-1), np.expand_dims(test_labels,-1)
 
     # test = np.transpose(data_train[0])
     # test2 = np.transpose(data_train[1])
@@ -114,7 +116,7 @@ if __name__ == "__main__":
     # data_train = np.concatenate(data_train, data_test)
     # np.random.shuffle(data_train)
 
-    train_images, train_labels, test_images, test_labels = np.float64(train_images), np.uint8(train_labels), np.float64(test_images), np.uint8(test_labels)
+    train_images, train_labels, test_images, test_labels = np.float64(train_images), np.int32(train_labels), np.float64(test_images), np.int32(test_labels)
     # train_images, test_images = train_images / 255.0, test_images / 255.0
 
     # model = tf.keras.models.Sequential([
@@ -137,12 +139,42 @@ if __name__ == "__main__":
     class MyModel(tf.keras.Model):
         def __init__(self):
             super(MyModel, self).__init__()
+            # use_bias does not affect the output
             
             # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation='relu')
-            # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), use_bias=False) # use_bias does not affect the output
-            # self.layer_conv2d_in_evo = EvoNormS0(8)
+            # # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(1, 1), activation='relu')
+            self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_in_evo = EvoNormS0(16)
+            # # self.layer_conv2d_01 = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(1, 1), activation='relu')
+            self.layer_conv2d_01 = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_01_evo = EvoNormS0(16)
+            # self.layer_conv2d_02 = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(2, 2), activation='relu')
+            self.layer_conv2d_02 = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(2, 2), use_bias=False)
+            self.layer_conv2d_02_evo = EvoNormS0(16)
+            # self.layer_conv2d_03 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(1, 1), activation='relu')
+            self.layer_conv2d_03 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_03_evo = EvoNormS0(16)
+            # # self.layer_conv2d_04 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(1, 1), activation='relu')
+            self.layer_conv2d_04 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_04_evo = EvoNormS0(16)
+            # self.layer_conv2d_05 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(2, 2), activation='relu')
+            self.layer_conv2d_05 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(2, 2), use_bias=False)
+            self.layer_conv2d_05_evo = EvoNormS0(16)
 
-            self.layer_flatten = tf.keras.layers.Flatten()
+            # self.layer_conv2d_10 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(1, 1), activation='relu')
+            self.layer_conv2d_10 = tf.keras.layers.Conv2D(filters=192, kernel_size=(3, 3), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_10_evo = EvoNormS0(16)
+            # self.layer_conv2d_11 = tf.keras.layers.Conv2D(filters=192, kernel_size=(1, 1), strides=(1, 1), activation='relu')
+            self.layer_conv2d_11 = tf.keras.layers.Conv2D(filters=192, kernel_size=(1, 1), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_11_evo = EvoNormS0(16)
+            self.layer_conv2d_12 = tf.keras.layers.Conv2D(filters=10, kernel_size=(1, 1), strides=(1, 1), use_bias=False)
+            self.layer_conv2d_12_evo = EvoNormS0(2)
+
+
+            # self.layer_flatten = tf.keras.layers.Flatten()
+            
+            # self.layer_dense_01 = tf.keras.layers.Dense(1024, use_bias=False)
+            # self.layer_dense_01_evo = EvoNormS0(32)
 
             # self.layer_dense_in = tf.keras.layers.Dense(512, activation='relu')
             # self.layer_dense_in = tf.keras.layers.Dense(512, use_bias=False)
@@ -157,53 +189,105 @@ if __name__ == "__main__":
             # # self.layer_attn_in_evo = EvoNormS0(32)
 
             # self.layer_dropout = tf.keras.layers.Dropout(0.2)
-            self.layer_dense_logits_out = tf.keras.layers.Dense(10, use_bias=False)
+            self.layer_globalavg_logits_out = tf.keras.layers.GlobalAveragePooling2D()
+            # self.layer_dense_logits_out = tf.keras.layers.Dense(10, use_bias=False)
 
         @tf.function
         def call(self, inputs, training=None):
-            # out = self.layer_conv2d_in(inputs)
-            # out = self.layer_conv2d_in_evo(out)
+            out = self.layer_conv2d_in(inputs)
+            out = self.layer_conv2d_in_evo(out)
+            out = self.layer_conv2d_01(out)
+            out = self.layer_conv2d_01_evo(out)
+            out = self.layer_conv2d_02(out)
+            out = self.layer_conv2d_02_evo(out)
+            out = self.layer_conv2d_03(out)
+            out = self.layer_conv2d_03_evo(out)
+            out = self.layer_conv2d_04(out)
+            out = self.layer_conv2d_04_evo(out)
+            out = self.layer_conv2d_05(out)
+            out = self.layer_conv2d_05_evo(out)
+            out = self.layer_conv2d_10(out)
+            out = self.layer_conv2d_10_evo(out)
+            out = self.layer_conv2d_11(out)
+            out = self.layer_conv2d_11_evo(out)
+            out = self.layer_conv2d_12(out)
+            out = self.layer_conv2d_12_evo(out)
             # out = self.layer_flatten(out)
-            out = self.layer_flatten(inputs)
+            # out = self.layer_dense_01(out)
+            # out = self.layer_dense_01_evo(out)
+            # out = self.layer_flatten(inputs)
             # out = self.layer_dense_in(out)
             # out = self.layer_dense_in_evo(out)
             # out = self.layer_lstm_in(tf.expand_dims(out, axis=1))
             # out = self.layer_lstm_in_evo(out)
-            out = self.layer_attn_in(out)
+            # out = self.layer_attn_in(out)
             # out = self.layer_attn_in_evo(out)
             # out = self.layer_dropout(out, training=training)
-            out = self.layer_dense_logits_out(out)
+            out = self.layer_globalavg_logits_out(out)
+            # out = self.layer_dense_logits_out(out)
             return out
 
-        _loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-        _optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+        # _loss = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
+        def _loss(self, targets, outputs):
+            dist = tfp.distributions.Categorical(logits=outputs)
+            loss = dist.log_prob(targets)
+            return -tf.reduce_mean(loss)
+
+        metric_train_loss = tf.keras.metrics.Mean()
+        # _optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
+        _optimizer = tf.keras.optimizers.SGD(learning_rate=1e-5)
         @tf.function
         def train(self, inputs, targets):
+            targets = tf.squeeze(targets, axis=-1) # only needed for Categorical?
             with tf.GradientTape() as tape:
                 outputs = self(inputs, training=True)
                 loss = self._loss(targets, outputs)
             gradients = tape.gradient(loss, self.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-            return outputs, loss
+            self.metric_train_loss.update_state(loss)
+            return outputs
+        
+        metric_test_loss = tf.keras.metrics.Mean()
+        metric_test_acc = tf.keras.metrics.CategoricalAccuracy()
+        metric_test_auc = tf.keras.metrics.AUC()
         @tf.function
         def test(self, inputs, targets):
+            targets = tf.squeeze(targets, axis=-1) # only needed for Categorical?
             outputs = self(inputs, training=False)
-            return outputs, self._loss(targets, outputs)
+            self.metric_test_loss.update_state(self._loss(targets, outputs))
+            onehot, softmax = tf.one_hot(targets, outputs.shape[1]), tf.nn.softmax(outputs)
+            self.metric_test_acc.update_state(onehot, softmax)
+            self.metric_test_auc.update_state(onehot, softmax)
+            return outputs
     model = MyModel()
     
-    batch_size = 1000
-    for epoc in range(5):
+    epocs = 10
+    batch_size = 1
+    metric_train_loss, metric_test_loss, metric_test_acc, metric_test_auc = [], [], [], []
+    for epoc in range(epocs):
         # np.random.shuffle(train_images)
 
-        data_size_train, loss_total_train = train_images.shape[0], 0.0
-        for i in range(0, data_size_train, batch_size):
-            outputs, loss = model.train(train_images[i:i+batch_size], train_labels[i:i+batch_size])
-            loss_total_train += loss
+        model.metric_train_loss.reset_states()
+        for i in range(0, train_images.shape[0], batch_size):
+            outputs = model.train(train_images[i:i+batch_size], train_labels[i:i+batch_size])
+            metric_train_loss.append(model.metric_train_loss.result())
 
-        data_size_test, loss_total_test = test_images.shape[0], 0.0
-        for i in range(0, data_size_test, batch_size):
-            outputs, loss = model.test(test_images[i:i+batch_size], test_labels[i:i+batch_size])
-            loss_total_test += loss
+        model.metric_test_loss.reset_states(); model.metric_test_acc.reset_states(); model.metric_test_auc.reset_states()
+        for i in range(0, test_images.shape[0], batch_size):
+            outputs = model.test(test_images[i:i+batch_size], test_labels[i:i+batch_size])
+            metric_test_loss.append(model.metric_test_loss.result()); metric_test_acc.append(model.metric_test_acc.result()); metric_test_auc.append(model.metric_test_auc.result())
         
-        print('#{} avg train loss {:.12f} avg test loss {:.12f}'.format(epoc, loss_total_train / (data_size_train / batch_size), loss_total_test / (data_size_test / batch_size)))
+        print('#{} train loss {:.12f} test loss {:.12f} test acc {:.12f} test auc {:.12f}'.format(epoc, model.metric_train_loss.result(), model.metric_test_loss.result(), model.metric_test_acc.result(), model.metric_test_auc.result()))
 
+    plt.figure(num='evonorm', figsize=(24, 16), tight_layout=True)
+    x = np.arange(len(metric_test_loss))
+    ax3 = plt.subplot2grid((3, 1), (2, 0))
+    plt.plot(x, metric_test_loss, label='metric_test_loss')
+    plt.ylabel('value'); plt.xlabel('train step'); plt.legend(loc='upper left')
+    ax2 = plt.subplot2grid((3, 1), (1, 0), sharex=ax3)
+    plt.plot(x, metric_test_acc, label='metric_test_acc')
+    plt.ylabel('value'); plt.xlabel('train step'); plt.legend(loc='upper left')
+    ax1 = plt.subplot2grid((3, 1), (0, 0), sharex=ax3)
+    plt.plot(x, metric_test_auc, label='metric_test_auc')
+    plt.ylabel('value'); plt.xlabel('train step'); plt.legend(loc='upper left')
+    plt.title('evonorm'); plt.show()
