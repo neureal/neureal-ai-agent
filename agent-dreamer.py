@@ -41,9 +41,9 @@ class WorldModel(tf.keras.layers.Layer):
         outputs = {}
         return outputs
 
-class ActionModel(tf.keras.layers.Layer):
+class ActionNet(tf.keras.layers.Layer):
     def __init__(self, env):
-        super(ActionModel, self).__init__()
+        super(ActionNet, self).__init__()
         # for space in env.action_space:
         #     pass
 
@@ -75,9 +75,9 @@ class ActionModel(tf.keras.layers.Layer):
         # return self._loss_fn(tf.constant([[2]]), predicted_value)
         return -tf.reduce_sum(predicted_value)
 
-class ValueModel(tf.keras.layers.Layer):
+class ValueNet(tf.keras.layers.Layer):
     def __init__(self, env):
-        super(ValueModel, self).__init__()
+        super(ValueNet, self).__init__()
         self.layer_value_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='value_dense_in')
         self.layer_value_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='value_dense_01')
         self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
@@ -92,13 +92,13 @@ class ValueModel(tf.keras.layers.Layer):
     def loss(self, rewards, dones): # top level purpose, for instance "maximize total rewards in the shortest time possible"
         return -tf.reduce_sum(rewards)
 
-class DreamerModel(tf.keras.Model):
+class DreamerAI(tf.keras.Model):
     def __init__(self, env):
-        super(DreamerModel, self).__init__()
-        self.action = ActionModel(env)
-        self.value = ValueModel(env)
+        super(DreamerAI, self).__init__()
+        self.action = ActionNet(env)
+        self.value = ValueNet(env)
 
-        self(env_obs_sample(env)) # force the model to build
+        self(env_obs_sample(env)) # force the ai_model to build
 
     @tf.function
     def call(self, inputs, training=False): # inference/predict
@@ -142,9 +142,9 @@ def env_obs_sample(env):
 # def env_space_to_tensor(env, space):
 #     pass
 
-class ActorCriticModel(tf.keras.Model):
+class ActorCriticAI(tf.keras.Model):
     def __init__(self, env):
-        super(ActorCriticModel, self).__init__()
+        super(ActorCriticAI, self).__init__()
 
         self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in')
         self.layer_action_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='action_dense_01')
@@ -157,7 +157,7 @@ class ActorCriticModel(tf.keras.Model):
         self.layer_value_dense_logits_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_logits_out')
 
         self._obs_sample = env_obs_sample(env)
-        self(self._obs_sample) # force the model to build
+        self(self._obs_sample) # force the ai_model to build
 
         self._UPDATE_FREQ = tf.constant(8)
         self._steps = tf.Variable(0)
@@ -281,8 +281,8 @@ def _timestamp_convert_from_output(self, low, high): # [low(float32), high(float
     # TODO
     return np.float64(0.0) # unix (epoc) timestamp float with microseconds (time.time())
 
-## Generic agent that uses models
-class ModelAgent(object):
+## Generic agent that uses AI models
+class AIAgent(object):
     def __init__(self, model, env):
         self.model, self.env = model, env
         self.obs_old = env_obs_sample(env)['obs']
@@ -331,18 +331,18 @@ if __name__ == '__main__':
     env = gym.make('Trader-v0', agent_id=me)
     env.seed(0)
 
-    # model = DreamerModel(env)
-    model = ActorCriticModel(env)
+    # model = DreamerAI(env)
+    model = ActorCriticAI(env)
     
     model_file = "{}/tf_models/{}-{}.h5".format(curdir, model_name, me)
     if tf.io.gfile.exists(model_file):
         model.load_weights(model_file, by_name=True, skip_mismatch=True)
         print("LOADED model weights from {}".format(model_file))
 
-    agent = ModelAgent(model, env)
+    agent = AIAgent(model, env)
     reward, done, info = 0.0, True, {}
     for i_episode in range(3):
-        # TODO env.reset and env.step could take lots of time, and model needs to run independently, need to figure out threading/multiprocessing
+        # TODO env.reset and env.step could take lots of time, and ai_model needs to run independently, need to figure out threading/multiprocessing
         obs = env.reset()
         reward_episode = 0.0
         # print("{}\n".format(obs))
