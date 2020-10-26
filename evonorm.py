@@ -87,10 +87,9 @@ class EvoNormS0(tf.keras.layers.Layer):
         self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.initializers.Ones())
 
         groups = min(input_shape[self.axis], self.groups)
-        group_shape = input_shape.as_list()
-        group_shape[self.axis] = input_shape[self.axis] // groups
-        group_shape.insert(self.axis, groups)
-        self.group_shape = tf.TensorShape(group_shape)
+        self.group_shape = input_shape.as_list()
+        self.group_shape[self.axis] = input_shape[self.axis] // groups
+        self.group_shape.insert(self.axis, groups)
 
         std_shape = list(range(1, inlen+self.axis))
         std_shape.append(inlen)
@@ -98,11 +97,13 @@ class EvoNormS0(tf.keras.layers.Layer):
 
     @tf.function
     def call(self, inputs, training=True):
+        input_shape = tf.shape(inputs)
+        self.group_shape[0] = input_shape[0]
         grouped_inputs = tf.reshape(inputs, self.group_shape)
         _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
         std = tf.sqrt(var + self.eps)
         std = tf.broadcast_to(std, self.group_shape)
-        group_std = tf.reshape(std, tf.shape(inputs))
+        group_std = tf.reshape(std, input_shape)
 
         return (inputs * tf.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
 
@@ -144,8 +145,8 @@ if __name__ == "__main__":
 
             num_components, event_shape = 12, 1
             params_size = self.categories # Categorical
-            params_size = tfp.layers.MixtureSameFamily.params_size(num_components,
-                component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_shape))
+            # params_size = tfp.layers.MixtureSameFamily.params_size(num_components,
+            #     component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_shape))
             
             # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation='relu')
             # # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(1, 1), activation='relu')
@@ -237,11 +238,11 @@ if __name__ == "__main__":
 
         # _loss_scc = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
         def _loss(self, targets, outputs):
-            # dist = tfp.distributions.Categorical(logits=outputs)
-            # loss = dist.log_prob(tf.squeeze(targets, axis=-1)) # Categorical
-            dist = self.dist(outputs)
-            loss = dist.log_prob(tf.cast(targets, dtype=tf.float64))
-            loss = fixinfnan(loss)
+            dist = tfp.distributions.Categorical(logits=outputs)
+            loss = dist.log_prob(tf.squeeze(targets, axis=-1)) # Categorical
+            # dist = self.dist(outputs)
+            # loss = dist.log_prob(tf.cast(targets, dtype=tf.float64))
+            # loss = fixinfnan(loss)
 
             # loss = -tf.math.reduce_mean(loss)
             # loss = tf.math.abs(loss)
