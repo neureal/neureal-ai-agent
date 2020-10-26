@@ -9,38 +9,99 @@ tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 # tf.random.set_seed(0)
 import matplotlib.pyplot as plt
+import talib
 import gym, gym_trader
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
-class DenseNormPReLU(tf.keras.layers.Layer):
-    def __init__(self, units, kernel_initializer='glorot_uniform', name=None):
-        super(DenseNormPReLU, self).__init__(name=name)
-        self.layer_dense = tf.keras.layers.Dense(units, kernel_initializer=kernel_initializer)
-        self.layer_norm = tf.keras.layers.BatchNormalization()
-        self.layer_activation = tf.keras.layers.PReLU()
-        # self.layer_norm = EvoNormS0(16, groups=8)
-    def call(self, inputs, training=None):
-        out = self.layer_dense(inputs)
-        out = self.layer_norm(out, training=training)
-        out = self.layer_activation(out)
-        return out
+# class DenseNormPReLU(tf.keras.layers.Layer):
+#     def __init__(self, units, kernel_initializer='glorot_uniform', name=None):
+#         super(DenseNormPReLU, self).__init__(name=name)
+#         self.layer_dense = tf.keras.layers.Dense(units, kernel_initializer=kernel_initializer)
+#         self.layer_norm = tf.keras.layers.BatchNormalization()
+#         self.layer_activation = tf.keras.layers.PReLU()
+#         # self.layer_norm = EvoNormS0(16, groups=8)
+#     def call(self, inputs, training=None):
+#         out = self.layer_dense(inputs)
+#         out = self.layer_norm(out, training=training)
+#         out = self.layer_activation(out)
+#         return out
+
+
+class EvoNormS0(tf.keras.layers.Layer):
+    def __init__(self, groups, eps=1e-5, axis=-1, name=None):
+        # TODO make diff axis work
+        super(EvoNormS0, self).__init__(name=name)
+        self.groups, self.eps, self.axis = groups, eps, axis
+
+    def build(self, input_shape):
+        inlen = len(input_shape)
+        shape = [1] * inlen
+        shape[self.axis] = input_shape[self.axis]
+        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.initializers.Ones())
+        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.initializers.Zeros())
+        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.initializers.Ones())
+
+        groups = min(input_shape[self.axis], self.groups)
+        self.group_shape = input_shape.as_list()
+        self.group_shape[self.axis] = input_shape[self.axis] // groups
+        self.group_shape.insert(self.axis, groups)
+
+        std_shape = list(range(1, inlen+self.axis))
+        std_shape.append(inlen)
+        self.std_shape = tf.TensorShape(std_shape)
+
+    @tf.function
+    def call(self, inputs, training=True):
+        input_shape = tf.shape(inputs)
+        self.group_shape[0] = input_shape[0]
+        grouped_inputs = tf.reshape(inputs, self.group_shape)
+        _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
+        std = tf.sqrt(var + self.eps)
+        std = tf.broadcast_to(std, self.group_shape)
+        group_std = tf.reshape(std, input_shape)
+
+        return (inputs * tf.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
 
 
 class ProbabilityDistribution(tf.keras.Model):
     def call(self, logits, **kwargs):
         # Sample a random categorical action from the given logits.
-        sample = tf.squeeze(tf.random.categorical(logits, 1), axis=-1)
+        sample = tf.random.categorical(logits, 1)
+        sample = tf.squeeze(sample, axis=-1)
         return sample
+
 
 class Model(tf.keras.Model):
     def __init__(self, env):
         super().__init__('mlp_policy')
         # input_shape = [1] + list(num_obs)
+        self.params_size = env.action_space.n
 
-        # # self.layer_action_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
+
+        # self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', input_shape=num_obs)
+        # self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in') # kernel_initializer='identity' sucks ass lol
+        # self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
+        self.layer_action_dense_in = tf.keras.layers.Dense(128, use_bias=False, name='action_dense_in'); self.layer_action_dense_in_evo = EvoNormS0(16, name='action_dense_in_evo')
+        # self.layer_action_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='action_dense_01')
+        self.layer_action_dense_01 = tf.keras.layers.Dense(64, use_bias=False, name='action_dense_01'); self.layer_action_dense_01_evo = EvoNormS0(16, name='action_dense_01_evo')
+        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(64, name='action_lstm_01')
+        self.layer_action_lstm_01 = tf.keras.layers.LSTM(64, activation='linear', use_bias=False, name='action_lstm_01'); self.layer_action_lstm_01_evo = EvoNormS0(16, name='action_lstm_01_evo')
+        # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/2, 2, name='action_deconv1d_logits_out')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
+        self.model_action_sample = ProbabilityDistribution()
+        # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', input_shape=num_obs)
+        # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
+        self.layer_value_dense_in = tf.keras.layers.Dense(128, use_bias=False, name='value_dense_in'); self.layer_value_dense_in_evo = EvoNormS0(16, name='value_dense_in_evo')
+        # self.layer_value_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='value_dense_01')
+        self.layer_value_dense_01 = tf.keras.layers.Dense(64, use_bias=False, name='value_dense_01'); self.layer_value_dense_01_evo = EvoNormS0(16, name='value_dense_01_evo')
+        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(64, name='value_lstm_01')
+        self.layer_value_lstm_01 = tf.keras.layers.LSTM(64, activation='linear', use_bias=False, name='value_lstm_01'); self.layer_value_lstm_01_evo = EvoNormS0(16, name='value_lstm_01_evo')
+        self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
+
+
         # self.layer_action_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='action_dense_in')
         # self.layer_action_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='action_dense_01')
         # self.layer_action_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_02')
@@ -50,10 +111,8 @@ class Model(tf.keras.Model):
         # self.layer_action_lstm_02 = tf.keras.layers.LSTM(1024, name='action_lstm_02')
         # self.layer_action_lstm_03 = tf.keras.layers.LSTM(1024, name='action_lstm_03')
         # self.layer_action_lstm_04 = tf.keras.layers.LSTM(1024, name='action_lstm_04')
-        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
+        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, kernel_initializer='identity', activation='linear', name='action_dense_logits_out')
         # self.model_action_sample = ProbabilityDistribution()
-
-        # # self.layer_value_dense_in = tf.keras.layers.Dense(1024, activation='relu', input_shape=num_obs)
         # self.layer_value_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='value_dense_in')
         # self.layer_value_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='value_dense_01')
         # self.layer_value_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_02')
@@ -64,33 +123,62 @@ class Model(tf.keras.Model):
         # self.layer_value_lstm_03 = tf.keras.layers.LSTM(1024, name='value_lstm_03')
         # self.layer_value_lstm_04 = tf.keras.layers.LSTM(1024, name='value_lstm_04')
         # self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
+        
+
+        # self.layer_action_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='action_dense_in')
+        # self.layer_action_dense_01 = DenseNormPReLU(1024, name='action_dense_01')
+        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
+        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, kernel_initializer='identity', activation='linear', name='action_dense_logits_out')
+        # self.model_action_sample = ProbabilityDistribution()
+        # self.layer_value_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='value_dense_in')
+        # self.layer_value_dense_01 = DenseNormPReLU(1024, name='value_dense_01')
+        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
+        # self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
 
 
+        # self.layer_action_dense_in = tf.keras.layers.Dense(1024, use_bias=False, name='action_dense_in'); self.layer_action_dense_in_evo = EvoNormS0(32, name='action_dense_in_evo')
+        # self.layer_action_dense_01 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_01'); self.layer_action_dense_01_evo = EvoNormS0(32, name='action_dense_01_evo')
+        # self.layer_action_dense_02 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_02'); self.layer_action_dense_02_evo = EvoNormS0(32, name='action_dense_02_evo')
+        # self.layer_action_dense_03 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_03'); self.layer_action_dense_03_evo = EvoNormS0(32, name='action_dense_03_evo')
+        # self.layer_action_dense_04 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_04'); self.layer_action_dense_04_evo = EvoNormS0(32, name='action_dense_04_evo')
+        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_01'); self.layer_action_lstm_01_evo = EvoNormS0(32, name='action_lstm_01_evo')
+        # self.layer_action_lstm_02 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_02'); self.layer_action_lstm_02_evo = EvoNormS0(32, name='action_lstm_02_evo')
+        # self.layer_action_lstm_03 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_03'); self.layer_action_lstm_03_evo = EvoNormS0(32, name='action_lstm_03_evo')
+        # self.layer_action_lstm_04 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_04'); self.layer_action_lstm_04_evo = EvoNormS0(32, name='action_lstm_04_evo')
+        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out')
+        # self.model_action_sample = ProbabilityDistribution()
+        # self.layer_value_dense_in = tf.keras.layers.Dense(1024, use_bias=False, name='value_dense_in'); self.layer_value_dense_in_evo = EvoNormS0(32, name='value_dense_in_evo')
+        # self.layer_value_dense_01 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_01'); self.layer_value_dense_01_evo = EvoNormS0(32, name='value_dense_01_evo')
+        # self.layer_value_dense_02 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_02'); self.layer_value_dense_02_evo = EvoNormS0(32, name='value_dense_02_evo')
+        # self.layer_value_dense_03 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_03'); self.layer_value_dense_03_evo = EvoNormS0(32, name='value_dense_03_evo')
+        # self.layer_value_dense_04 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_04'); self.layer_value_dense_04_evo = EvoNormS0(32, name='value_dense_04_evo')
+        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_01'); self.layer_value_lstm_01_evo = EvoNormS0(32, name='value_lstm_01_evo')
+        # self.layer_value_lstm_02 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_02'); self.layer_value_lstm_02_evo = EvoNormS0(32, name='value_lstm_02_evo')
+        # self.layer_value_lstm_03 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_03'); self.layer_value_lstm_03_evo = EvoNormS0(32, name='value_lstm_03_evo')
+        # self.layer_value_lstm_04 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_04'); self.layer_value_lstm_04_evo = EvoNormS0(32, name='value_lstm_04_evo')
+        # self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
 
-        self.layer_action_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='action_dense_in')
-        self.layer_action_dense_01 = DenseNormPReLU(1024, name='action_dense_01')
-        self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(env.action_space.n, kernel_initializer='identity', activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
 
-        self.model_action_sample = ProbabilityDistribution()
-
-        self.layer_value_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='value_dense_in')
-        self.layer_value_dense_01 = DenseNormPReLU(1024, name='value_dense_01')
-        self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
-        self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
-
-
-        logits, value = self(tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0))
-        # self(tf.convert_to_tensor(env.observation_space.sample()[None, :]))
+        # pre build model
+        sample = tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample(), dtype=tf.float64), 0)
+        logits, value = self(sample)
         action = self.model_action_sample(logits)
 
     @tf.function
     def call(self, inputs, training=None):
-        # Inputs is a numpy array, convert to a tensor.
-        # input = tf.convert_to_tensor(inputs)
+        # seperate action model
+        action = self.layer_action_dense_in(inputs); action = self.layer_action_dense_in_evo(action)
+        action = self.layer_action_dense_01(action); action = self.layer_action_dense_01_evo(action)
+        action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_01_evo(action)
+        action = self.layer_action_dense_logits_out(action)
+        # seperate value model
+        value = self.layer_value_dense_in(inputs); value = self.layer_value_dense_in_evo(value)
+        value = self.layer_value_dense_01(value); value = self.layer_value_dense_01_evo(value)
+        value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_01_evo(value)
+        value = self.layer_value_dense_out(value)
 
-        # # Separate hidden layers from the same input tensor.
-        # action = self.layer_action_dense_in(inputs) # seperate action model
+
+        # action = self.layer_action_dense_in(inputs)
         # action = self.layer_action_dense_01(action)
         # action = self.layer_action_dense_02(action)
         # action = self.layer_action_dense_03(action)
@@ -100,8 +188,7 @@ class Model(tf.keras.Model):
         # action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1))
         # action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1))
         # action = self.layer_action_dense_logits_out(action)
-
-        # value = self.layer_value_dense_in(inputs) # seperate value model
+        # value = self.layer_value_dense_in(inputs)
         # value = self.layer_value_dense_01(value)
         # value = self.layer_value_dense_02(value)
         # value = self.layer_value_dense_03(value)
@@ -112,29 +199,48 @@ class Model(tf.keras.Model):
         # value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1))
         # value = self.layer_value_dense_out(value)
 
+        
+        # action = self.layer_action_dense_in(inputs); action = self.layer_action_dense_in_evo(action)
+        # action = self.layer_action_dense_01(action); action = self.layer_action_dense_01_evo(action)
+        # action = self.layer_action_dense_02(action); action = self.layer_action_dense_02_evo(action)
+        # action = self.layer_action_dense_03(action); action = self.layer_action_dense_03_evo(action)
+        # action = self.layer_action_dense_04(action); action = self.layer_action_dense_04_evo(action)
+        # action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_01_evo(action)
+        # action = self.layer_action_lstm_02(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_02_evo(action)
+        # action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_03_evo(action)
+        # action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_04_evo(action)
+        # action = self.layer_action_dense_logits_out(action)
+        # value = self.layer_value_dense_in(inputs); value = self.layer_value_dense_in_evo(value)
+        # value = self.layer_value_dense_01(value); value = self.layer_value_dense_01_evo(value)
+        # value = self.layer_value_dense_02(value); value = self.layer_value_dense_02_evo(value)
+        # value = self.layer_value_dense_03(value); value = self.layer_value_dense_03_evo(value)
+        # value = self.layer_value_dense_04(value); value = self.layer_value_dense_04_evo(value)
+        # value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_01_evo(value)
+        # value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_02_evo(value)
+        # value = self.layer_value_lstm_03(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_03_evo(value)
+        # value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_04_evo(value)
+        # value = self.layer_value_dense_out(value)
 
-        action = self.layer_action_dense_in(inputs, training=training) # seperate action model
-        action = self.layer_action_dense_01(action, training=training)
-        action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1))
-        action = self.layer_action_dense_logits_out(action)
-
-        value = self.layer_value_dense_in(inputs, training=training) # seperate value model
-        value = self.layer_value_dense_01(value, training=training)
-        value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1))
-        value = self.layer_value_dense_out(value)
 
         return action, value
 
     # @tf.function
-    def action_value(self, obs):
+    def _action_value(self, obs):
         # Executes `call()` under the hood.
         logits, value = self.predict_on_batch(obs)
         action = self.model_action_sample.predict_on_batch(logits)
         # Another way to sample actions:
         #     action = tf.random.categorical(logits, 1)
         # Will become clearer later why we don't use it.
-        action = tf.squeeze(action).numpy()
-        value = tf.squeeze(value).numpy()
+        action = tf.squeeze(action)
+        value = tf.squeeze(value)
+        return action, value
+
+    def action_value(self, obs):
+        obs = tf.expand_dims(tf.convert_to_tensor(obs, dtype=tf.float64), 0) # add batch size 1
+        # obs = tf.convert_to_tensor(obs[None, :], dtype=tf.float64))
+        action, value = self._action_value(obs)
+        action, value = action.numpy(), value.numpy()
         # print("action {} value {}".format(action, value))
         return action, value
 
@@ -153,16 +259,18 @@ class A2CAgent:
             loss=[self._action_logits_loss, self._value_loss]
         )
 
-    def train(self, env, batch_sz=64, updates=250):
+    def train(self, env, render=False, batch_sz=64, updates=250):
         # Storage helpers for a single batch of data.
         actions = np.empty((batch_sz,), dtype=np.int32)
         rewards, dones, values = np.empty((3, batch_sz))
         observations = np.empty((batch_sz,) + env.observation_space.shape)
 
         # Training loop: collect samples, send to optimizer, repeat updates times.
-        next_obs = env.reset(); env.render()
+        next_obs = env.reset()
+        if render: env.render()
 
-        epi_rewards, epi_steps, epi_end_bals, epi_avg_bals, epi_sim_times = [0.0], 0, [], [], []
+        loss_total, loss_action, loss_value, losses = [], [], [], (0.0,0.0,0.0)
+        epi_total_rewards, epi_steps, epi_avg_reward, epi_end_reward, epi_avg_rewards, epi_end_rewards, epi_sim_times = [0.0], 0, 0, 0, [], [], []
         update, finished, early_quit = 0, False, False
         t_sim_total, t_sim_epi_start, t_real_start = 0.0, next_obs[0], time.time()
         steps_total, t_steps_total = 0, 0.0
@@ -170,36 +278,37 @@ class A2CAgent:
         while update < updates or not finished:
             for step in range(batch_sz):
                 observations[step] = next_obs.copy()
-                actions[step], values[step] = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
-                # actions[step], values[step] = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
+                actions[step], values[step] = self.model.action_value(next_obs)
                 
                 step_time_start = time.perf_counter_ns()
                 next_obs, rewards[step], dones[step], _ = env.step(actions[step])
                 t_steps_total += (time.perf_counter_ns() - step_time_start) / 1e9 # seconds
                 steps_total += 1
-                if env.render(): early_quit = True; break
+                if render:
+                    if not env.render(): epi_total_rewards = epi_total_rewards[:-1]; early_quit = True; break
 
-                epi_rewards[-1] += rewards[step]
+                epi_total_rewards[-1] += rewards[step]
                 epi_steps += 1
                 if dones[step]:
-                    epi_end_bal = np.expm1(rewards[step])
-                    epi_end_bals.append(epi_end_bal)
-                    epi_avg_bal = np.expm1(epi_rewards[-1] / epi_steps)
-                    epi_avg_bals.append(epi_avg_bal)
+                    epi_end_reward = np.expm1(rewards[step])
+                    epi_end_rewards.append(epi_end_reward)
+                    epi_avg_reward = np.expm1(epi_total_rewards[-1] / epi_steps)
+                    epi_avg_rewards.append(epi_avg_reward)
                     t_sim_epi = next_obs[0] - t_sim_epi_start
                     epi_sim_times.append(t_sim_epi / 60)
-                    print("DONE episode #{:03d}  sim epi time {}    avg reward {:.2f}    end balance {:.2f}\n".format(len(epi_rewards)-1, _print_time(t_sim_epi), epi_avg_bal, epi_end_bal))
+                    loss_total.append(losses[0]); loss_action.append(losses[1]); loss_value.append(losses[2])
+                    print("DONE episode #{:03d}  sim-epi-time {}    total-reward {:.2f}    avg-reward {:.2f}    end-reward {:.2f}\n".format(len(epi_total_rewards)-1, _print_time(t_sim_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
                     if update >= updates-1: finished = True; break
-                    epi_rewards.append(0.0)
+                    epi_total_rewards.append(0.0)
                     epi_steps = 0
                     t_sim_total += t_sim_epi
 
-                    next_obs = env.reset(); env.render()
+                    next_obs = env.reset()
+                    if render: env.render()
                     t_sim_epi_start = next_obs[0]
             if early_quit: break
 
-            _, next_value = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(next_obs),0))
-            # _, next_value = self.model.action_value(tf.convert_to_tensor(next_obs[None, :]))
+            _, next_value = self.model.action_value(next_obs)
             # returns ~ [7,6,5,4,3,2,1,0] for reward = 1 per step, advs = returns - values output
             returns, advs = self._returns_advantages(rewards, dones, values, next_value)
 
@@ -210,24 +319,23 @@ class A2CAgent:
             # Note: no need to mess around with gradients, Keras API handles it.
             losses = self.model.train_on_batch(observations, [acts_and_advs, returns]) # input, targets
             # print("update [{:03d}/{:03d}]  {} = {}".format(update + 1, updates, self.model.metrics_names, losses))
-            # print("update [{:03d}/{:03d}]  avg reward {:.2f}  last balance {:.2f}  losses {}".format(update, updates, epi_avg_bal, np.expm1(rewards[step]), losses))
+            print("update [{:03d}/{:03d}]  total-reward {:.2f}   avg-reward {:.2f}   last-reward {:.2f}   losses {}".format(update, updates, epi_total_rewards[-1], epi_avg_reward, np.expm1(rewards[step]), losses))
             update += 1
 
-        epi_num = len(epi_end_bals)
+        epi_num = len(epi_end_rewards)
         t_sim_total += next_obs[0] - t_sim_epi_start
         t_avg_sim_epi = (t_sim_total / epi_num) if epi_num > 0 else 0
 
         t_real_total = time.time() - t_real_start
         t_avg_step = (t_steps_total / steps_total) if steps_total > 0 else 0
 
-        return epi_end_bals, epi_avg_bals, epi_sim_times, epi_num, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step
+        return epi_num, np.asarray(epi_total_rewards), np.asarray(epi_end_rewards), np.asarray(epi_avg_rewards), np.asarray(epi_sim_times), t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step, np.asarray(loss_total), np.asarray(loss_action), np.asarray(loss_value)
 
     def test(self, env, render=False):
         obs, done, ep_reward = env.reset(), False, 0
         if render: env.render()
         while not done:
-            action, _ = self.model.action_value(tf.expand_dims(tf.convert_to_tensor(obs),0))
-            # action, _ = self.model.action_value(tf.convert_to_tensor(obs[None, :]))
+            action, _ = self.model.action_value(obs)
             obs, reward, done, _ = env.step(action)
             if render: env.render()
             ep_reward += reward
@@ -282,58 +390,69 @@ def _print_time(t):
 
 class Args(): pass
 args = Args()
-args.batch_size = 512 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 500 # routhly batch_size * num_updates = total steps, unless last episode is long
+args.batch_size = 256 # about 1.5 hrs @ 1000.0 speed
+args.num_updates = 90 # routhly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
-args.render_test = False
+args.render = False
 args.plot_results = True
 
 machine, device = 'dev', 0
 
 if __name__ == '__main__':
-    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=100.0), "gym-A2C-Trader2-a"+str(device)+"-"+machine
+    # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=100.0), "gym-A2C-Trader2"
+    model_name += "-"+machine+"-a"+str(device)
 
     with tf.device('/device:GPU:'+str(device)):
         # model = Model(num_actions=env.action_space.n)
         model = Model(env)
 
-        model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name)
+        model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
         if tf.io.gfile.exists(model_file):
             model.load_weights(model_file, by_name=True, skip_mismatch=True)
-            print("LOADED model weights from {}".format(model_file))
+            print("LOADED model weights from {}".format(model_file)); loaded_model = True
         # model.summary(); quit(0)
 
         agent = A2CAgent(model, args.learning_rate)
-        epi_end_bals, epi_avg_bals, epi_sim_times, epi_num, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step = agent.train(env, args.batch_size, args.num_updates)
+        epi_num, epi_total_rewards, epi_end_rewards, epi_avg_rewards, epi_sim_times, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step, loss_total, loss_action, loss_value = agent.train(env, args.render, args.batch_size, args.num_updates)
         print("\nFinished training")
-        # reward_test = agent.test(env, args.render_test)
+        # reward_test = agent.test(env, args.render)
         # print("Test Total Episode Reward: {}".format(reward_test))
 
         fmt = (_print_time(t_real_total),_print_time(t_sim_total),_print_time(t_avg_sim_epi),t_avg_step,(t_sim_total/86400)/(t_real_total/3600),(t_sim_total/86400)/(t_real_total/86400))
-        info = "runtime: {} real {} sim    | avg-time: {} sim-episode {:12.8f} real-step    |   {:.3f} sim-days/hour  {:.3f} sim-days/day".format(*fmt)
-        print(info)
+        info = "runtime: {} real {} sim    | avg-time: {} sim-episode {:12.8f} real-step    |   {:.3f} sim-days/hour  {:.3f} sim-days/day".format(*fmt); print(info)
+        argsinfo = "batch_size:{}   num_updates:{}   learning_rate:{}   loaded_model:{}".format(args.batch_size,args.num_updates,args.learning_rate, loaded_model); print(argsinfo)
 
-        if args.plot_results:
+        if args.plot_results and epi_num > 1:
             name = model_name+time.strftime("-%Y_%m_%d-%H-%M")
             xrng = np.arange(0, epi_num, 1)
             plt.figure(num=name, figsize=(24, 16), tight_layout=True)
 
-            ax2 = plt.subplot2grid((6, 1), (5, 0), rowspan=1)
+            ax3 = plt.subplot2grid((7, 1), (6, 0), rowspan=1)
             plt.plot(xrng, epi_sim_times[::1], alpha=1.0, label='Sim Time')
-            ax2.set_ylim(0,60)
+            ax3.set_ylim(0,60)
             plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
 
-            ax1 = plt.subplot2grid((6, 1), (0, 0), rowspan=5, sharex=ax2)
-            plt.plot(xrng, epi_avg_bals[::1], alpha=0.4, label='Avg Balance')
-            plt.plot(xrng, epi_end_bals[::1], alpha=0.7, label='Final Balance')
-            ax1.set_ylim(0,30000)
+            ax2 = plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax3)
+            plt.plot(xrng, loss_total[::1], alpha=0.7, label='Total Loss')
+            plt.plot(xrng, loss_action[::1], alpha=0.7, label='Action Loss')
+            plt.plot(xrng, loss_value[::1], alpha=0.7, label='Value Loss')
+            # ax2.set_ylim(0,60)
+            plt.xlabel('Episode'); plt.ylabel('Values'); plt.legend(loc='upper left')
+
+            ax1 = plt.subplot2grid((7, 1), (0, 0), rowspan=5, sharex=ax3)
+            plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
+            epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
+            plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
+            # plt.plot(xrng, epi_avg_rewards[::1], alpha=0.4, label='Avg Reward')
+            # plt.plot(xrng, epi_end_rewards[::1], alpha=0.7, label='Final Reward')
+            # ax1.set_ylim(0,30000)
             plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
 
-            plt.title(name+"\n"+info); plt.show()
+            plt.title(name+"    "+argsinfo+"\n"+info); plt.show()
 
         model.save_weights(model_file)
         print("SAVED model weights to {}".format(model_file))
