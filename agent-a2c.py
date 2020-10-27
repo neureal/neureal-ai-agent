@@ -98,10 +98,10 @@ class Model(tf.keras.Model):
 
 
 
-        # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 1, 1, True, 128, 64, 16
+        self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 1, 1, True, 128, 64, 16
         # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 4, 4, True, 1024, 512, 32
         # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 4, 4, True, 2048, 1024, 32
-        self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 6, 6, True, 2048, 1024, 32
+        # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 6, 6, True, 2048, 1024, 32
 
         self.net_arch = "inD{}-{:02d}D{}-{:02d}LS{}-outD{}".format(inp, self.net_DNN, mid, self.net_LSTM, mid, "-Evo"+str(evo) if self.net_evo else "")
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
@@ -338,9 +338,9 @@ def _print_time(t):
 
 class Args(): pass
 args = Args()
-args.batch_size = 2048 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 10 # roughly batch_size * num_updates = total steps, unless last episode is long
-args.learning_rate = 1e-6 # start with 4 for rough train, 5 for fine tune and 6 for when trained
+args.batch_size = 1024 # about 1.5 hrs @ 1000.0 speed
+args.num_updates = 3 # roughly batch_size * num_updates = total steps, unless last episode is long
+args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render = False
 args.plot_results = True
 
@@ -348,10 +348,10 @@ machine, device = 'dev', 0
 
 if __name__ == '__main__':
     # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
     # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont" # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing" # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
+    # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
     with tf.device('/device:GPU:'+str(device)):
         # model = Model(num_actions=env.action_space.n)
@@ -377,29 +377,33 @@ if __name__ == '__main__':
         if args.plot_results and epi_num > 1:
             name = model_name+time.strftime("-%Y_%m_%d-%H-%M")
             xrng = np.arange(0, epi_num, 1)
-            plt.figure(num=name, figsize=(24, 16), tight_layout=True)
+            plt.figure(num=name, figsize=(24, 16), tight_layout=True); ax = []
 
-            ax3 = plt.subplot2grid((7, 1), (6, 0), rowspan=1)
+            ax.insert(0, plt.subplot2grid((7, 1), (6, 0), rowspan=1))
             plt.plot(xrng, epi_sim_times[::1], alpha=1.0, label='Sim Time')
-            ax3.set_ylim(0,64)
+            ax[0].set_ylim(0,64)
             plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
 
-            ax2 = plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax3)
+            ax.insert(0, plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax[-1]))
             plt.plot(xrng, loss_total[::1], alpha=0.7, label='Total Loss')
             plt.plot(xrng, loss_action[::1], alpha=0.7, label='Action Loss')
             plt.plot(xrng, loss_value[::1], alpha=0.7, label='Value Loss')
-            # ax2.set_ylim(0,60)
+            # ax[0].set_ylim(0,60)
             plt.xlabel('Episode'); plt.ylabel('Values'); plt.legend(loc='upper left')
 
-            ax1 = plt.subplot2grid((7, 1), (0, 0), rowspan=5, sharex=ax3)
-            # plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
-            # epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
-            # plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
-            plt.plot(xrng, epi_avg_rewards[::1], alpha=0.2, label='Avg Reward')
-            plt.plot(xrng, epi_end_rewards[::1], alpha=0.5, label='Final Reward')
-            epi_end_rewards_ema = talib.EMA(epi_end_rewards, timeperiod=epi_num//10+2)
-            plt.plot(xrng, epi_end_rewards_ema, alpha=0.8, label='Final Reward EMA')
-            ax1.set_ylim(0,30000)
+
+            ax.insert(0, plt.subplot2grid((7, 1), (0, 0), rowspan=5, sharex=ax[-1]))
+
+            plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
+            epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
+            plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
+
+            # plt.plot(xrng, epi_avg_rewards[::1], alpha=0.2, label='Avg Reward')
+            # plt.plot(xrng, epi_end_rewards[::1], alpha=0.5, label='Final Reward')
+            # epi_end_rewards_ema = talib.EMA(epi_end_rewards, timeperiod=epi_num//10+2)
+            # plt.plot(xrng, epi_end_rewards_ema, alpha=0.8, label='Final Reward EMA')
+            # ax[0].set_ylim(0,30000)
+
             plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
 
             plt.title(name+"    "+argsinfo+"\n"+info); plt.show()
