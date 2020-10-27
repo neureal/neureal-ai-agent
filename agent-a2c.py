@@ -77,53 +77,14 @@ class ProbabilityDistribution(tf.keras.Model):
 class Model(tf.keras.Model):
     def __init__(self, env):
         super().__init__('mlp_policy')
+        # Logits are unnormalized log probabilities.
         # input_shape = [1] + list(num_obs)
+        # self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', input_shape=num_obs)
+        # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', input_shape=num_obs)
+        # self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in') # kernel_initializer='identity' sucks ass lol
+        # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/2, 2, name='action_deconv1d_logits_out')
         self.params_size = env.action_space.n
 
-
-        # self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', input_shape=num_obs)
-        # self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in') # kernel_initializer='identity' sucks ass lol
-        # self.layer_action_dense_in = tf.keras.layers.Dense(128, activation='relu', name='action_dense_in')
-        self.layer_action_dense_in = tf.keras.layers.Dense(128, use_bias=False, name='action_dense_in'); self.layer_action_dense_in_evo = EvoNormS0(16, name='action_dense_in_evo')
-        # self.layer_action_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='action_dense_01')
-        self.layer_action_dense_01 = tf.keras.layers.Dense(64, use_bias=False, name='action_dense_01'); self.layer_action_dense_01_evo = EvoNormS0(16, name='action_dense_01_evo')
-        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(64, name='action_lstm_01')
-        self.layer_action_lstm_01 = tf.keras.layers.LSTM(64, activation='linear', use_bias=False, name='action_lstm_01'); self.layer_action_lstm_01_evo = EvoNormS0(16, name='action_lstm_01_evo')
-        # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/2, 2, name='action_deconv1d_logits_out')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out') # Logits are unnormalized log probabilities.
-        self.model_action_sample = ProbabilityDistribution()
-        # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', input_shape=num_obs)
-        # self.layer_value_dense_in = tf.keras.layers.Dense(128, activation='relu', name='value_dense_in')
-        self.layer_value_dense_in = tf.keras.layers.Dense(128, use_bias=False, name='value_dense_in'); self.layer_value_dense_in_evo = EvoNormS0(16, name='value_dense_in_evo')
-        # self.layer_value_dense_01 = tf.keras.layers.Dense(64, activation='relu', name='value_dense_01')
-        self.layer_value_dense_01 = tf.keras.layers.Dense(64, use_bias=False, name='value_dense_01'); self.layer_value_dense_01_evo = EvoNormS0(16, name='value_dense_01_evo')
-        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(64, name='value_lstm_01')
-        self.layer_value_lstm_01 = tf.keras.layers.LSTM(64, activation='linear', use_bias=False, name='value_lstm_01'); self.layer_value_lstm_01_evo = EvoNormS0(16, name='value_lstm_01_evo')
-        self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
-
-
-        # self.layer_action_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='action_dense_in')
-        # self.layer_action_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='action_dense_01')
-        # self.layer_action_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_02')
-        # self.layer_action_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_03')
-        # self.layer_action_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='action_dense_04')
-        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(1024, name='action_lstm_01')
-        # self.layer_action_lstm_02 = tf.keras.layers.LSTM(1024, name='action_lstm_02')
-        # self.layer_action_lstm_03 = tf.keras.layers.LSTM(1024, name='action_lstm_03')
-        # self.layer_action_lstm_04 = tf.keras.layers.LSTM(1024, name='action_lstm_04')
-        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, kernel_initializer='identity', activation='linear', name='action_dense_logits_out')
-        # self.model_action_sample = ProbabilityDistribution()
-        # self.layer_value_dense_in = tf.keras.layers.Dense(4096, kernel_initializer='identity', activation='relu', name='value_dense_in')
-        # self.layer_value_dense_01 = tf.keras.layers.Dense(2048, activation='relu', name='value_dense_01')
-        # self.layer_value_dense_02 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_02')
-        # self.layer_value_dense_03 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_03')
-        # self.layer_value_dense_04 = tf.keras.layers.Dense(1024, activation='relu', name='value_dense_04')
-        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(1024, name='value_lstm_01')
-        # self.layer_value_lstm_02 = tf.keras.layers.LSTM(1024, name='value_lstm_02')
-        # self.layer_value_lstm_03 = tf.keras.layers.LSTM(1024, name='value_lstm_03')
-        # self.layer_value_lstm_04 = tf.keras.layers.LSTM(1024, name='value_lstm_04')
-        # self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
-        
 
         # self.layer_action_dense_in = DenseNormPReLU(2048, kernel_initializer='identity', name='action_dense_in')
         # self.layer_action_dense_01 = DenseNormPReLU(1024, name='action_dense_01')
@@ -136,28 +97,49 @@ class Model(tf.keras.Model):
         # self.layer_value_dense_out = tf.keras.layers.Dense(1, kernel_initializer='identity', activation='linear', name='value_dense_out')
 
 
-        # self.layer_action_dense_in = tf.keras.layers.Dense(1024, use_bias=False, name='action_dense_in'); self.layer_action_dense_in_evo = EvoNormS0(32, name='action_dense_in_evo')
-        # self.layer_action_dense_01 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_01'); self.layer_action_dense_01_evo = EvoNormS0(32, name='action_dense_01_evo')
-        # self.layer_action_dense_02 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_02'); self.layer_action_dense_02_evo = EvoNormS0(32, name='action_dense_02_evo')
-        # self.layer_action_dense_03 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_03'); self.layer_action_dense_03_evo = EvoNormS0(32, name='action_dense_03_evo')
-        # self.layer_action_dense_04 = tf.keras.layers.Dense(512, use_bias=False, name='action_dense_04'); self.layer_action_dense_04_evo = EvoNormS0(32, name='action_dense_04_evo')
-        # self.layer_action_lstm_01 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_01'); self.layer_action_lstm_01_evo = EvoNormS0(32, name='action_lstm_01_evo')
-        # self.layer_action_lstm_02 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_02'); self.layer_action_lstm_02_evo = EvoNormS0(32, name='action_lstm_02_evo')
-        # self.layer_action_lstm_03 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_03'); self.layer_action_lstm_03_evo = EvoNormS0(32, name='action_lstm_03_evo')
-        # self.layer_action_lstm_04 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='action_lstm_04'); self.layer_action_lstm_04_evo = EvoNormS0(32, name='action_lstm_04_evo')
-        # self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out')
-        # self.model_action_sample = ProbabilityDistribution()
-        # self.layer_value_dense_in = tf.keras.layers.Dense(1024, use_bias=False, name='value_dense_in'); self.layer_value_dense_in_evo = EvoNormS0(32, name='value_dense_in_evo')
-        # self.layer_value_dense_01 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_01'); self.layer_value_dense_01_evo = EvoNormS0(32, name='value_dense_01_evo')
-        # self.layer_value_dense_02 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_02'); self.layer_value_dense_02_evo = EvoNormS0(32, name='value_dense_02_evo')
-        # self.layer_value_dense_03 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_03'); self.layer_value_dense_03_evo = EvoNormS0(32, name='value_dense_03_evo')
-        # self.layer_value_dense_04 = tf.keras.layers.Dense(512, use_bias=False, name='value_dense_04'); self.layer_value_dense_04_evo = EvoNormS0(32, name='value_dense_04_evo')
-        # self.layer_value_lstm_01 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_01'); self.layer_value_lstm_01_evo = EvoNormS0(32, name='value_lstm_01_evo')
-        # self.layer_value_lstm_02 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_02'); self.layer_value_lstm_02_evo = EvoNormS0(32, name='value_lstm_02_evo')
-        # self.layer_value_lstm_03 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_03'); self.layer_value_lstm_03_evo = EvoNormS0(32, name='value_lstm_03_evo')
-        # self.layer_value_lstm_04 = tf.keras.layers.LSTM(512, activation='linear', use_bias=False, name='value_lstm_04'); self.layer_value_lstm_04_evo = EvoNormS0(32, name='value_lstm_04_evo')
-        # self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
 
+        # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 1, 1, True, 128, 64, 16
+        # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 4, 4, True, 1024, 512, 32
+        # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 4, 4, True, 2048, 1024, 32
+        self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 6, 6, True, 2048, 1024, 32
+
+        self.net_arch = "inD{}-{:02d}D{}-{:02d}LS{}-outD{}".format(inp, self.net_DNN, mid, self.net_LSTM, mid, "-Evo"+str(evo) if self.net_evo else "")
+        self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
+        self.layer_action_dense_evo, self.layer_action_lstm_evo, self.layer_value_dense_evo, self.layer_value_lstm_evo = [], [], [], []
+
+        ## action network
+        if not self.net_evo:
+            self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation='relu', name='action_dense_in')
+            for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation='relu', name='action_dense_{:02d}'.format(i)))
+            for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, name='action_lstm_{:02d}'.format(i)))
+        else:
+            self.layer_action_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='action_dense_in')
+            self.layer_action_dense_in_evo = EvoNormS0(evo, name='action_dense_in_evo')
+            for i in range(self.net_DNN):
+                self.layer_action_dense.append(tf.keras.layers.Dense(mid, use_bias=False, name='action_dense_{:02d}'.format(i)))
+                self.layer_action_dense_evo.append(EvoNormS0(evo, name='action_dense_{:02d}_evo'.format(i)))
+            for i in range(self.net_LSTM):
+                self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, activation='linear', use_bias=False, name='action_lstm_{:02d}'.format(i)))
+                self.layer_action_lstm_evo.append(EvoNormS0(evo, name='action_lstm_{:02d}_evo'.format(i)))
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out')
+        self.model_action_sample = ProbabilityDistribution()
+
+        ## value network
+        if not self.net_evo:
+            self.layer_value_dense_in = tf.keras.layers.Dense(inp, activation='relu', name='value_dense_in')
+            for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation='relu', name='value_dense_{:02d}'.format(i)))
+            for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, name='value_lstm_{:02d}'.format(i)))
+        else:
+            self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
+            self.layer_value_dense_in_evo = EvoNormS0(evo, name='value_dense_in_evo')
+            for i in range(self.net_DNN):
+                self.layer_value_dense.append(tf.keras.layers.Dense(mid, use_bias=False, name='value_dense_{:02d}'.format(i)))
+                self.layer_value_dense_evo.append(EvoNormS0(evo, name='value_dense_{:02d}_evo'.format(i)))
+            for i in range(self.net_LSTM):
+                self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, activation='linear', use_bias=False, name='value_lstm_{:02d}'.format(i)))
+                self.layer_value_lstm_evo.append(EvoNormS0(evo, name='value_lstm_{:02d}_evo'.format(i)))
+        self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
+        
 
         # pre build model
         sample = tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample(), dtype=tf.float64), 0)
@@ -166,61 +148,27 @@ class Model(tf.keras.Model):
 
     @tf.function
     def call(self, inputs, training=None):
-        # seperate action model
-        action = self.layer_action_dense_in(inputs); action = self.layer_action_dense_in_evo(action)
-        action = self.layer_action_dense_01(action); action = self.layer_action_dense_01_evo(action)
-        action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_01_evo(action)
+        ## action network
+        action = self.layer_action_dense_in(inputs)
+        if self.net_evo: action = self.layer_action_dense_in_evo(action)
+        for i in range(self.net_DNN):
+            action = self.layer_action_dense[i](action)
+            if self.net_evo: action = self.layer_action_dense_evo[i](action)
+        for i in range(self.net_LSTM):
+            action = self.layer_action_lstm[i](tf.expand_dims(action, axis=1))
+            if self.net_evo: action = self.layer_action_lstm_evo[i](action)
         action = self.layer_action_dense_logits_out(action)
-        # seperate value model
-        value = self.layer_value_dense_in(inputs); value = self.layer_value_dense_in_evo(value)
-        value = self.layer_value_dense_01(value); value = self.layer_value_dense_01_evo(value)
-        value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_01_evo(value)
+
+        ## value network
+        value = self.layer_value_dense_in(inputs)
+        if self.net_evo: value = self.layer_value_dense_in_evo(value)
+        for i in range(self.net_DNN):
+            value = self.layer_value_dense[i](value)
+            if self.net_evo: value = self.layer_value_dense_evo[i](value)
+        for i in range(self.net_LSTM):
+            value = self.layer_value_lstm[i](tf.expand_dims(value, axis=1))
+            if self.net_evo: value = self.layer_value_lstm_evo[i](value)
         value = self.layer_value_dense_out(value)
-
-
-        # action = self.layer_action_dense_in(inputs)
-        # action = self.layer_action_dense_01(action)
-        # action = self.layer_action_dense_02(action)
-        # action = self.layer_action_dense_03(action)
-        # action = self.layer_action_dense_04(action)
-        # action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1))
-        # action = self.layer_action_lstm_02(tf.expand_dims(action, axis=1))
-        # action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1))
-        # action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1))
-        # action = self.layer_action_dense_logits_out(action)
-        # value = self.layer_value_dense_in(inputs)
-        # value = self.layer_value_dense_01(value)
-        # value = self.layer_value_dense_02(value)
-        # value = self.layer_value_dense_03(value)
-        # value = self.layer_value_dense_04(value)
-        # value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1))
-        # value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1))
-        # value = self.layer_value_lstm_03(tf.expand_dims(value, axis=1))
-        # value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1))
-        # value = self.layer_value_dense_out(value)
-
-        
-        # action = self.layer_action_dense_in(inputs); action = self.layer_action_dense_in_evo(action)
-        # action = self.layer_action_dense_01(action); action = self.layer_action_dense_01_evo(action)
-        # action = self.layer_action_dense_02(action); action = self.layer_action_dense_02_evo(action)
-        # action = self.layer_action_dense_03(action); action = self.layer_action_dense_03_evo(action)
-        # action = self.layer_action_dense_04(action); action = self.layer_action_dense_04_evo(action)
-        # action = self.layer_action_lstm_01(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_01_evo(action)
-        # action = self.layer_action_lstm_02(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_02_evo(action)
-        # action = self.layer_action_lstm_03(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_03_evo(action)
-        # action = self.layer_action_lstm_04(tf.expand_dims(action, axis=1)); action = self.layer_action_lstm_04_evo(action)
-        # action = self.layer_action_dense_logits_out(action)
-        # value = self.layer_value_dense_in(inputs); value = self.layer_value_dense_in_evo(value)
-        # value = self.layer_value_dense_01(value); value = self.layer_value_dense_01_evo(value)
-        # value = self.layer_value_dense_02(value); value = self.layer_value_dense_02_evo(value)
-        # value = self.layer_value_dense_03(value); value = self.layer_value_dense_03_evo(value)
-        # value = self.layer_value_dense_04(value); value = self.layer_value_dense_04_evo(value)
-        # value = self.layer_value_lstm_01(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_01_evo(value)
-        # value = self.layer_value_lstm_02(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_02_evo(value)
-        # value = self.layer_value_lstm_03(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_03_evo(value)
-        # value = self.layer_value_lstm_04(tf.expand_dims(value, axis=1)); value = self.layer_value_lstm_04_evo(value)
-        # value = self.layer_value_dense_out(value)
-
 
         return action, value
 
@@ -390,25 +338,25 @@ def _print_time(t):
 
 class Args(): pass
 args = Args()
-args.batch_size = 256 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 90 # routhly batch_size * num_updates = total steps, unless last episode is long
-args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
+args.batch_size = 2048 # about 1.5 hrs @ 1000.0 speed
+args.num_updates = 10 # roughly batch_size * num_updates = total steps, unless last episode is long
+args.learning_rate = 1e-6 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render = False
 args.plot_results = True
 
 machine, device = 'dev', 0
 
 if __name__ == '__main__':
-    env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
+    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
-    # env = gym.make('LunarLanderContinuous-v2') # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
-    # env = gym.make('CarRacing-v0') # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
-    # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=100.0), "gym-A2C-Trader2"
-    model_name += "-"+machine+"-a"+str(device)
+    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont" # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
+    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing" # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
+    env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
     with tf.device('/device:GPU:'+str(device)):
         # model = Model(num_actions=env.action_space.n)
-        model = Model(env)
+        model = Model(env);
+        model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
 
         model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
         if tf.io.gfile.exists(model_file):
@@ -433,7 +381,7 @@ if __name__ == '__main__':
 
             ax3 = plt.subplot2grid((7, 1), (6, 0), rowspan=1)
             plt.plot(xrng, epi_sim_times[::1], alpha=1.0, label='Sim Time')
-            ax3.set_ylim(0,60)
+            ax3.set_ylim(0,64)
             plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
 
             ax2 = plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax3)
@@ -444,12 +392,14 @@ if __name__ == '__main__':
             plt.xlabel('Episode'); plt.ylabel('Values'); plt.legend(loc='upper left')
 
             ax1 = plt.subplot2grid((7, 1), (0, 0), rowspan=5, sharex=ax3)
-            plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
-            epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
-            plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
-            # plt.plot(xrng, epi_avg_rewards[::1], alpha=0.4, label='Avg Reward')
-            # plt.plot(xrng, epi_end_rewards[::1], alpha=0.7, label='Final Reward')
-            # ax1.set_ylim(0,30000)
+            # plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
+            # epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
+            # plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
+            plt.plot(xrng, epi_avg_rewards[::1], alpha=0.2, label='Avg Reward')
+            plt.plot(xrng, epi_end_rewards[::1], alpha=0.5, label='Final Reward')
+            epi_end_rewards_ema = talib.EMA(epi_end_rewards, timeperiod=epi_num//10+2)
+            plt.plot(xrng, epi_end_rewards_ema, alpha=0.8, label='Final Reward EMA')
+            ax1.set_ylim(0,30000)
             plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
 
             plt.title(name+"    "+argsinfo+"\n"+info); plt.show()
