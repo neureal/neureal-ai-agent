@@ -236,17 +236,12 @@ if __name__ == "__main__":
             # out = self.layer_dense_logits_out(out)
             return out
 
-        # _loss_scc = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
         def _loss(self, targets, outputs):
             dist = tfp.distributions.Categorical(logits=outputs)
-            loss = dist.log_prob(tf.squeeze(targets, axis=-1)) # Categorical
-            # dist = self.dist(outputs)
-            # loss = dist.log_prob(tf.cast(targets, dtype=tf.float64))
-            # loss = fixinfnan(loss)
+            loss = -dist.log_prob(tf.squeeze(targets, axis=-1)) # cross_entropy
 
-            # loss = -tf.math.reduce_mean(loss)
-            # loss = tf.math.abs(loss)
-            loss = tf.math.negative(loss)
+            # dist = self.dist(outputs)
+            # loss = -fixinfnan(dist.log_prob(tf.cast(targets, dtype=tf.float64))) # cross_entropy
 
             onehot = tf.one_hot(tf.squeeze(targets, axis=-1), self.categories)
             softmax = tf.transpose(tf.map_fn(fn=lambda v:dist.prob(v), elems=tf.range(self.categories, dtype=tf.float64)))
