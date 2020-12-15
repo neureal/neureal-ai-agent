@@ -14,7 +14,9 @@ import talib
 import gym, gym_trader
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
-for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
+for i in range(len(physical_devices_gpu)):
+    tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
+    tf.config.experimental.enable_mlir_graph_optimization()
 
 
 @tf.function
@@ -183,7 +185,7 @@ class Model(tf.keras.Model):
         loss = dist.log_prob(actions)
         loss = -fixinfnan(loss) # cross_entropy
         # entropy = tf.reduce_mean(-dist.log_prob(dist.sample(4096)), axis=0)
-        entropy = dist.sample(4096)
+        entropy = dist.sample(16)
         entropy = -dist.log_prob(entropy)
         entropy = tf.reduce_mean(entropy, axis=0)
 
@@ -380,6 +382,7 @@ if __name__ == '__main__':
             plt.plot(xrng, loss_action[::1], alpha=0.7, label='Action Loss')
             plt.plot(xrng, loss_value[::1], alpha=0.7, label='Value Loss')
             # ax[0].set_ylim(0,60)
+            plt.grid(axis='y',alpha=0.5)
             plt.xlabel('Episode'); plt.ylabel('Values'); plt.legend(loc='upper left')
 
 
@@ -394,7 +397,7 @@ if __name__ == '__main__':
             # epi_end_rewards_ema = talib.EMA(epi_end_rewards, timeperiod=epi_num//10+2)
             # plt.plot(xrng, epi_end_rewards_ema, alpha=0.8, label='Final Reward EMA')
             # ax[0].set_ylim(0,30000)
-
+            plt.grid(axis='y',alpha=0.5)
             plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
 
             plt.title(name+"    "+argsinfo+"\n"+info); plt.show()
