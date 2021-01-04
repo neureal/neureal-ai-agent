@@ -145,8 +145,7 @@ if __name__ == "__main__":
 
             num_components, event_shape = 12, 1
             params_size = self.categories # Categorical
-            # params_size = tfp.layers.MixtureSameFamily.params_size(num_components,
-            #     component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_shape))
+            # params_size = tfp.layers.MixtureSameFamily.params_size(num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_shape))
             
             # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation='relu')
             # # self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=96, kernel_size=(3, 3), strides=(1, 1), activation='relu')
@@ -236,17 +235,18 @@ if __name__ == "__main__":
             # out = self.layer_dense_logits_out(out)
             return out
 
-        def _loss(self, targets, outputs):
+        def _loss(self, targets, outputs, training=None):
             dist = tfp.distributions.Categorical(logits=outputs)
             loss = -dist.log_prob(tf.squeeze(targets, axis=-1)) # cross_entropy
 
             # dist = self.dist(outputs)
             # loss = -fixinfnan(dist.log_prob(tf.cast(targets, dtype=tf.float64))) # cross_entropy
 
-            onehot = tf.one_hot(tf.squeeze(targets, axis=-1), self.categories)
-            softmax = tf.transpose(tf.map_fn(fn=lambda v:dist.prob(v), elems=tf.range(self.categories, dtype=tf.float64)))
-
-            return loss, onehot, tf.clip_by_value(softmax, 0.0, 1.0)
+            if training: return loss
+            else:
+                onehot = tf.one_hot(tf.squeeze(targets, axis=-1), self.categories)
+                softmax = tf.transpose(tf.map_fn(fn=lambda v:dist.prob(v), elems=tf.range(self.categories, dtype=tf.float64)))
+                return loss, onehot, tf.clip_by_value(softmax, 0.0, 1.0)
 
         _optimizer = tf.keras.optimizers.Adam(learning_rate=1e-4)
         # _optimizer = tf.keras.optimizers.SGD(learning_rate=1e-5)
@@ -255,7 +255,7 @@ if __name__ == "__main__":
         def train(self, inputs, targets):
             with tf.GradientTape() as tape:
                 outputs = self(inputs, training=True)
-                loss = self._loss(targets, outputs)[0]
+                loss = self._loss(targets, outputs, training=True)
             gradients = tape.gradient(loss, self.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
