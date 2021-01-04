@@ -7,6 +7,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
+# tf.config.experimental.enable_mlir_graph_optimization()
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -14,9 +15,7 @@ import talib
 import gym, gym_trader
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
-for i in range(len(physical_devices_gpu)):
-    tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
-    tf.config.experimental.enable_mlir_graph_optimization()
+for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
 @tf.function
@@ -80,6 +79,7 @@ class Model(tf.keras.Model):
         self._optimizer = tf.keras.optimizers.Adam(lr=lr)
 
         self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 1, 1, True, 128, 64, 16
+        # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 2, 2, True, 256, 128, 16
         # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 4, 4, True, 1024, 512, 32
         # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 4, 4, True, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, self.net_evo, inp, mid, evo = 6, 6, True, 2048, 1024, 32
@@ -100,15 +100,15 @@ class Model(tf.keras.Model):
                 self.layer_action_dense.append(tf.keras.layers.Dense(mid, use_bias=False, name='action_dense_{:02d}'.format(i)))
                 self.layer_action_dense_evo.append(EvoNormS0(evo, name='action_dense_{:02d}_evo'.format(i)))
             for i in range(self.net_LSTM):
-                self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, activation='linear', use_bias=False, name='action_lstm_{:02d}'.format(i)))
+                self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, stateful=True, activation='linear', use_bias=False, name='action_lstm_{:02d}'.format(i))) # return_sequences=True for batch size > 1
                 self.layer_action_lstm_evo.append(EvoNormS0(evo, name='action_lstm_{:02d}_evo'.format(i)))
 
         # self.params_size, self.action_size = env.action_space.n, 1 # Categorical
-        num_components, self.action_size = 16, env.action_space.shape[0]
-        self.params_size = tfp.layers.MixtureSameFamily.params_size(num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.action_size))
-        self.layer_action_dist = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(self.action_size))
-
+        self.num_components, self.action_size = 64, env.action_space.shape[0]
+        self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.action_size))
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out')
+        # self.layer_action_de_conv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_de_conv1d_logits_out')
+        self.layer_action_dist = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(self.action_size))
 
         ## value network
         if not self.net_evo:
@@ -122,7 +122,7 @@ class Model(tf.keras.Model):
                 self.layer_value_dense.append(tf.keras.layers.Dense(mid, use_bias=False, name='value_dense_{:02d}'.format(i)))
                 self.layer_value_dense_evo.append(EvoNormS0(evo, name='value_dense_{:02d}_evo'.format(i)))
             for i in range(self.net_LSTM):
-                self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, activation='linear', use_bias=False, name='value_lstm_{:02d}'.format(i)))
+                self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, stateful=True, activation='linear', use_bias=False, name='value_lstm_{:02d}'.format(i))) # return_sequences=True for batch size > 1
                 self.layer_value_lstm_evo.append(EvoNormS0(evo, name='value_lstm_{:02d}_evo'.format(i)))
         self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
         
@@ -140,9 +140,12 @@ class Model(tf.keras.Model):
             action = self.layer_action_dense[i](action)
             if self.net_evo: action = self.layer_action_dense_evo[i](action)
         for i in range(self.net_LSTM):
-            action = self.layer_action_lstm[i](tf.expand_dims(action, axis=1))
+            action = tf.expand_dims(action, axis=0) # use batch as sequence
+            action = self.layer_action_lstm[i](action)
+            # action = tf.squeeze(action, axis=0) # needed for batch size > 1
             if self.net_evo: action = self.layer_action_lstm_evo[i](action)
         action = self.layer_action_dense_logits_out(action)
+        # action = self.layer_action_de_conv1d_logits_out(action)
 
         ## value network
         value = self.layer_value_dense_in(inputs)
@@ -151,7 +154,9 @@ class Model(tf.keras.Model):
             value = self.layer_value_dense[i](value)
             if self.net_evo: value = self.layer_value_dense_evo[i](value)
         for i in range(self.net_LSTM):
-            value = self.layer_value_lstm[i](tf.expand_dims(value, axis=1))
+            value = tf.expand_dims(value, axis=0) # use batch as sequence
+            value = self.layer_value_lstm[i](value)
+            # value = tf.squeeze(value, axis=0) # needed for batch size > 1
             if self.net_evo: value = self.layer_value_lstm_evo[i](value)
         value = self.layer_value_dense_out(value)
 
@@ -185,7 +190,7 @@ class Model(tf.keras.Model):
         loss = dist.log_prob(actions)
         loss = -fixinfnan(loss) # cross_entropy
         # entropy = tf.reduce_mean(-dist.log_prob(dist.sample(4096)), axis=0)
-        entropy = dist.sample(16)
+        entropy = dist.sample(self.num_components)
         entropy = -dist.log_prob(entropy)
         entropy = tf.reduce_mean(entropy, axis=0)
 
@@ -207,15 +212,30 @@ class Model(tf.keras.Model):
         return loss_value # shape = (batch size,)
 
     @tf.function
-    def train(self, inputs, actions, advantages, returns):
+    def train(self, inputs, actions, advantages, returns, dones):
         inputs = tf.cast(inputs, dtype=tf.float64) # some envs have float32 observations
-        with tf.GradientTape() as tape:
-            action_logits, value = self(inputs, training=True)
-            loss_action = self._loss_action(actions, advantages, action_logits)
-            loss_value = self._loss_value(returns, value)
-            loss_total = loss_action + loss_value
-        gradients = tape.gradient(loss_total, self.trainable_variables)
-        self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+        # with tf.GradientTape() as tape:
+        #     action_logits, value = self(inputs, training=True)
+        #     loss_action = self._loss_action(actions, advantages, action_logits)
+        #     loss_value = self._loss_value(returns, value)
+        #     loss_total = loss_action + loss_value
+        # gradients = tape.gradient(loss_total, self.trainable_variables)
+        # self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+
+        # dones = tf.cast(dones, dtype=tf.bool)
+        # loop through timesteps instead of batch so can keep batch size = 1 with LSTM and take out return_sequences=True, add self.reset_states() on episode end
+        # TODO save state and reset state here, then restore state before leaving
+        batch_size, event_shape = inputs.shape
+        for i in tf.range(batch_size):
+            with tf.GradientTape() as tape:
+                action_logits, value = self(inputs[None, i], training=True)
+                loss_action = self._loss_action(actions[None, i], advantages[None, i], action_logits)
+                loss_value = self._loss_value(returns[None, i], value)
+                loss_total = loss_action + loss_value
+            gradients = tape.gradient(loss_total, self.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
+            if dones[i]: self.reset_states()
+
         return tf.reduce_mean(loss_total), tf.reduce_mean(loss_action), tf.reduce_mean(loss_value)
 
 
@@ -283,6 +303,8 @@ class A2CAgent:
                     epi_sim_times.append(t_sim_epi / 60)
                     loss_total.append(loss_total_cur); loss_action.append(loss_action_cur); loss_value.append(loss_value_cur)
                     print("DONE episode #{:03d}  {} sim-epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, _print_time(t_sim_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
+                    self.model.reset_states()
+                    # TODO train/update after every done
                     if update >= updates-1: finished = True; break
                     epi_total_rewards.append(0.0)
                     epi_steps = 0
@@ -297,7 +319,7 @@ class A2CAgent:
             # returns ~ [7,6,5,4,3,2,1,0] for reward = 1 per step, advantages = returns - values output
             returns, advantages = self.model.calc_returns_advantages(rewards, dones, values, next_value)
 
-            loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, advantages, returns)
+            loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, advantages, returns, dones)
             loss_total_cur, loss_action_cur, loss_value_cur = loss_total_cur.numpy(), loss_action_cur.numpy(), loss_value_cur.numpy()
 
             print("---> update [{:03d}/{:03d}]                                                                                            {:16.8f} loss_total {:16.8f} loss_action {:16.8f} loss_value".format(update, updates, loss_total_cur, loss_action_cur, loss_value_cur))
