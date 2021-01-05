@@ -5,7 +5,7 @@ np.random.seed(0)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 tf.keras.backend.set_floatx('float64')
-# tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -182,6 +182,15 @@ if __name__ == "__main__":
             
             # self.layer_lstm_in = tf.keras.layers.LSTM(512)
             # self.layer_lstm_in = tf.keras.layers.LSTM(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False)
+            # self.layer_lstm_in = tf.keras.layers.LSTM(512, stateful=True) # 3X faster but not as accurate, but still pretty accurate
+            # self.layer_lstm_in = tf.keras.layers.LSTM(512, activation='linear', recurrent_activation='sigmoid', use_bias=False)
+            # self.layer_lstm_in = tf.keras.layers.LSTM(512, activation=None, recurrent_activation=None, use_bias=False)
+            # self.layer_lstm_in = tf.keras.layers.LSTM(512, stateful=True, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False)
+            # self.layer_lstm_in = tf.keras.layers.RNN(tf.keras.layers.LSTMCell(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False), stateful=True)
+            # self.layer_lstm_in = tf.keras.layers.RNN(tf.keras.layers.GRUCell(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False), stateful=True)
+            # self.layer_lstm_in = tf.keras.layers.RNN(tfa.rnn.PeepholeLSTMCell(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False), stateful=True)
+            # self.layer_lstm_01 = tf.keras.layers.LSTM(512, stateful=True, activation=EvoNormS0(16), recurrent_activation=EvoNormS0(16), use_bias=False)
+            
 
             # self.layer_attn_in = tf.keras.layers.LSTM(512)
             # self.layer_attn_in = tf.keras.layers.LSTM(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False)
@@ -207,6 +216,7 @@ if __name__ == "__main__":
             # out = self.layer_dense_01(out)
             # out = self.layer_flatten(inputs)
             # out = self.layer_dense_in(out)
+            # # out = tf.squeeze(self.layer_lstm_in(tf.expand_dims(out, axis=0)), axis=0)
             # out = self.layer_lstm_in(tf.expand_dims(out, axis=1))
             # out = self.layer_attn_in(out)
             # out = self.layer_dropout(out, training=training)
@@ -264,6 +274,7 @@ if __name__ == "__main__":
         for i in range(0, train_images.shape[0], batch_size):
             outputs = model.train(train_images[i:i+batch_size], train_labels[i:i+batch_size])
             metric_train_loss.append(model.metric_train_loss.result())
+            # if i%32 == 0: model.reset_states()
         t1_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
 
         model.metric_test_loss.reset_states(); model.metric_test_acc.reset_states(); model.metric_test_auc.reset_states()
@@ -271,9 +282,11 @@ if __name__ == "__main__":
         for i in range(0, test_images.shape[0], batch_size):
             outputs = model.test(test_images[i:i+batch_size], test_labels[i:i+batch_size])
             metric_test_loss.append(model.metric_test_loss.result()); metric_test_acc.append(model.metric_test_acc.result()); metric_test_auc.append(model.metric_test_auc.result())
+            # if i%32 == 0: model.reset_states()
         t2_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
         
         print('#{} train loss {:.12f} test loss {:.12f} test acc {:.12f} test auc {:.12f}    training time (sec): {}  testing time (sec): {}'.format(epoc, model.metric_train_loss.result(), model.metric_test_loss.result(), model.metric_test_acc.result(), model.metric_test_auc.result(), t1_time, t2_time))
+        # model.reset_states()
 
     # plt.figure(num='evonorm', figsize=(24, 16), tight_layout=True)
     # x = np.arange(len(metric_test_loss))
