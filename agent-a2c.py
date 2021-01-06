@@ -70,7 +70,6 @@ class Model(tf.keras.Model):
         super().__init__('mlp_policy')
         # Logits are unnormalized log probabilities.
         # self.layer_action_dense_in = tf.keras.layers.Dense(128, kernel_initializer='identity', activation='relu', name='action_dense_in') # kernel_initializer='identity' sucks ass lol
-        # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/2, 2, name='action_deconv1d_logits_out')
         # self.action_size = self.action_size['action_dist_pair'] + self.action_size['action_dist_percent'] # latent_size
 
         self.categorical = isinstance(env.action_space, gym.spaces.Discrete) # TODO expand to handle Dict
@@ -98,13 +97,15 @@ class Model(tf.keras.Model):
             for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
             for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, activation=EvoNormS0(evo), recurrent_activation=EvoNormS0(evo), use_bias=False, stateful=True, name='action_lstm_{:02d}'.format(i)))
 
-        if self.categorical: self.params_size, self.action_size = env.action_space.n, 1 # non one-hot categorical
+        if self.categorical:
+            self.params_size, self.action_size = env.action_space.n, 1 # non one-hot categorical
+            self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
         else:
             self.num_components, self.action_size = 16, env.action_space.shape[0]
             self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.action_size))
+            self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
+            # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_deconv1d_logits_out')
             self.layer_action_dist = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(self.action_size))
-        # self.layer_action_de_conv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_de_conv1d_logits_out')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
 
         ## value network
         if not self.net_evo:
@@ -124,17 +125,21 @@ class Model(tf.keras.Model):
 
     @tf.function
     def call(self, inputs, training=None):
+        batch_size = inputs.shape[0]
+
         ## action network
         action = self.layer_action_dense_in(inputs)
-        for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
         for i in range(self.net_LSTM): action = self.layer_action_lstm[i](tf.expand_dims(action, axis=1))
+        # for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
         action = self.layer_action_dense_logits_out(action)
-        # action = self.layer_action_de_conv1d_logits_out(action)
+        # action = tf.expand_dims(action, axis=1)
+        # action = self.layer_deconv1d_logits_out(action)
+        # action = tf.reshape(action, (batch_size, self.params_size))
 
         ## value network
         value = self.layer_value_dense_in(inputs)
-        for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
         for i in range(self.net_LSTM): value = self.layer_value_lstm[i](tf.expand_dims(value, axis=1))
+        # for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
         value = self.layer_value_dense_out(value)
 
         return action, value
@@ -201,9 +206,9 @@ class Model(tf.keras.Model):
         # self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
 
         # dones = tf.cast(dones, dtype=tf.bool)
-        # loop through timesteps instead of batch so can keep batch size = 1 with LSTM and take out return_sequences=True, add self.reset_states() on episode end
+        # ??? loop through timesteps instead of batch so can keep batch size = 1 with LSTM and take out return_sequences=True, add self.reset_states() on episode end
         # TODO save state and reset state here, then restore state before leaving
-        batch_size, event_shape = inputs.shape
+        batch_size = inputs.shape[0]
         for i in tf.range(batch_size):
             with tf.GradientTape() as tape:
                 action_logits, value = self(inputs[None, i], training=True)
