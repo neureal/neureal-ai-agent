@@ -18,16 +18,16 @@ physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
-@tf.function
-def fixinfnan(t):
-    zero = tf.constant(0.0, dtype=tf.float64)
-    isinf = tf.math.is_inf(t)
-    isneg = tf.math.equal(tf.math.sign(t),-1.0)
-    ispos = tf.math.logical_not(isneg)
-    isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
-    t = tf.where(ispinf, zero, t) # inf = 0.0
-    t = tf.where(tf.math.logical_or(tf.math.is_nan(t), isninf), tf.float64.min, t) # nan = tf.float32.min, -inf = tf.float32.min
-    return t
+# @tf.function
+# def fixinfnan(t):
+#     zero = tf.constant(0.0, dtype=tf.float64)
+#     isinf = tf.math.is_inf(t)
+#     isneg = tf.math.equal(tf.math.sign(t),-1.0)
+#     ispos = tf.math.logical_not(isneg)
+#     isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
+#     t = tf.where(ispinf, zero, t) # inf = 0.0
+#     t = tf.where(tf.math.logical_or(tf.math.is_nan(t), isninf), tf.float64.min, t) # nan = tf.float32.min, -inf = tf.float32.min
+#     return t
 
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=1e-5, axis=-1, name=None):
@@ -73,6 +73,7 @@ class Model(tf.keras.Model):
         # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/2, 2, name='action_deconv1d_logits_out')
         # self.action_size = self.action_size['action_dist_pair'] + self.action_size['action_dist_percent'] # latent_size
 
+        self.categorical = isinstance(env.action_space, gym.spaces.Discrete) # TODO expand to handle Dict
         # `gamma` is the discount factor; coefficients are used for the loss terms.
         self.gamma, self.value_c, self.entropy_c = tf.constant(gamma, dtype=tf.float64), tf.constant(value_c, dtype=tf.float64), tf.constant(entropy_c, dtype=tf.float64)
 
@@ -97,12 +98,13 @@ class Model(tf.keras.Model):
             for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
             for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, activation=EvoNormS0(evo), recurrent_activation=EvoNormS0(evo), use_bias=False, stateful=True, name='action_lstm_{:02d}'.format(i)))
 
-        # self.params_size, self.action_size = env.action_space.n, 1 # Categorical
-        self.num_components, self.action_size = 16, env.action_space.shape[0]
-        self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.action_size))
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
+        if self.categorical: self.params_size, self.action_size = env.action_space.n, 1 # non one-hot categorical
+        else:
+            self.num_components, self.action_size = 16, env.action_space.shape[0]
+            self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.action_size))
+            self.layer_action_dist = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(self.action_size))
         # self.layer_action_de_conv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_de_conv1d_logits_out')
-        self.layer_action_dist = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(self.action_size))
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
 
         ## value network
         if not self.net_evo:
@@ -155,19 +157,20 @@ class Model(tf.keras.Model):
         return returns, advantages
 
     def _loss_action(self, actions, advantages, action_logits): # targets, output (acts_and_advs, layer_action_dense_logits_out)
-        # dist = tfp.distributions.Categorical(logits=action_logits)
-        # loss = -dist.log_prob(tf.squeeze(actions, axis=-1)) # cross_entropy
-        # entropy = dist.entropy()
-
-        dist = self.layer_action_dist(action_logits)
-        actions = tf.cast(actions, dtype=tf.float64) # some envs have float32 actions
-        # loss = -fixinfnan(dist.log_prob(actions)) # cross_entropy
-        loss = dist.log_prob(actions)
-        loss = -fixinfnan(loss) # cross_entropy
-        # entropy = tf.reduce_mean(-dist.log_prob(dist.sample(4096)), axis=0)
-        entropy = dist.sample(self.num_components)
-        entropy = -dist.log_prob(entropy)
-        entropy = tf.reduce_mean(entropy, axis=0)
+        if self.categorical:
+            dist = tfp.distributions.Categorical(logits=action_logits)
+            loss = -dist.log_prob(tf.squeeze(actions, axis=-1)) # cross_entropy
+            entropy = dist.entropy()
+        else:
+            dist = self.layer_action_dist(action_logits)
+            actions = tf.cast(actions, dtype=tf.float64) # some envs have float32 actions
+            # loss = -fixinfnan(dist.log_prob(actions)) # cross_entropy
+            loss = dist.log_prob(actions)
+            loss = -fixinfnan(loss) # cross_entropy
+            # entropy = tf.reduce_mean(-dist.log_prob(dist.sample(4096)), axis=0)
+            entropy = dist.sample(self.num_components)
+            entropy = -dist.log_prob(entropy)
+            entropy = tf.reduce_mean(entropy, axis=0)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
         # loss = tf.math.reduce_mean(loss) # tf.keras.losses.Reduction.SUM_OVER_BATCH_SIZE
@@ -217,8 +220,8 @@ class Model(tf.keras.Model):
     @tf.function
     def _action_value(self, inputs):
         action_logits, value = self(inputs)
-        # dist = tfp.distributions.Categorical(logits=action_logits)
-        dist = self.layer_action_dist(action_logits)
+        if self.categorical: dist = tfp.distributions.Categorical(logits=action_logits)
+        else: dist = self.layer_action_dist(action_logits)
         action = dist.sample()
 
         action, value = tf.squeeze(action), tf.squeeze(value) # get rid of single batch
@@ -329,7 +332,7 @@ def _print_time(t):
 class Args(): pass
 args = Args()
 args.batch_size = 1024 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 100 # roughly batch_size * num_updates = total steps, unless last episode is long
+args.num_updates = 10 # roughly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render = False
 args.plot_results = True
@@ -338,8 +341,8 @@ machine, device = 'dev', 0
 
 if __name__ == '__main__':
     # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
-    env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont" # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
+    env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
+    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont" # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
     # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing" # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
     # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
