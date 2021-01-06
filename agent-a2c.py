@@ -86,27 +86,21 @@ class Model(tf.keras.Model):
 
         self.net_arch = "inD{}-{:02d}D{}-{:02d}LS{}-outD{}".format(inp, self.net_DNN, mid, self.net_LSTM, mid, "-Evo"+str(evo) if self.net_evo else "")
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
-        self.layer_action_dense_evo, self.layer_action_lstm_evo, self.layer_value_dense_evo, self.layer_value_lstm_evo = [], [], [], []
 
         ## action network
         if not self.net_evo:
             self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation='relu', name='action_dense_in')
             for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation='relu', name='action_dense_{:02d}'.format(i)))
-            for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, name='action_lstm_{:02d}'.format(i)))
+            for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, stateful=True, name='action_lstm_{:02d}'.format(i)))
         else:
-            self.layer_action_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='action_dense_in')
-            self.layer_action_dense_in_evo = EvoNormS0(evo, name='action_dense_in_evo')
-            for i in range(self.net_DNN):
-                self.layer_action_dense.append(tf.keras.layers.Dense(mid, use_bias=False, name='action_dense_{:02d}'.format(i)))
-                self.layer_action_dense_evo.append(EvoNormS0(evo, name='action_dense_{:02d}_evo'.format(i)))
-            for i in range(self.net_LSTM):
-                self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, stateful=True, activation='linear', use_bias=False, name='action_lstm_{:02d}'.format(i))) # return_sequences=True for batch size > 1
-                self.layer_action_lstm_evo.append(EvoNormS0(evo, name='action_lstm_{:02d}_evo'.format(i)))
+            self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=EvoNormS0(evo), use_bias=False, name='action_dense_in')
+            for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
+            for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, activation=EvoNormS0(evo), recurrent_activation=EvoNormS0(evo), use_bias=False, stateful=True, name='action_lstm_{:02d}'.format(i)))
 
         # self.params_size, self.action_size = env.action_space.n, 1 # Categorical
-        self.num_components, self.action_size = 64, env.action_space.shape[0]
+        self.num_components, self.action_size = 16, env.action_space.shape[0]
         self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.action_size))
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, activation='linear', name='action_dense_logits_out')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
         # self.layer_action_de_conv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_de_conv1d_logits_out')
         self.layer_action_dist = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(self.action_size))
 
@@ -114,17 +108,12 @@ class Model(tf.keras.Model):
         if not self.net_evo:
             self.layer_value_dense_in = tf.keras.layers.Dense(inp, activation='relu', name='value_dense_in')
             for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation='relu', name='value_dense_{:02d}'.format(i)))
-            for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, name='value_lstm_{:02d}'.format(i)))
+            for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, stateful=True, name='value_lstm_{:02d}'.format(i)))
         else:
             self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
-            self.layer_value_dense_in_evo = EvoNormS0(evo, name='value_dense_in_evo')
-            for i in range(self.net_DNN):
-                self.layer_value_dense.append(tf.keras.layers.Dense(mid, use_bias=False, name='value_dense_{:02d}'.format(i)))
-                self.layer_value_dense_evo.append(EvoNormS0(evo, name='value_dense_{:02d}_evo'.format(i)))
-            for i in range(self.net_LSTM):
-                self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, stateful=True, activation='linear', use_bias=False, name='value_lstm_{:02d}'.format(i))) # return_sequences=True for batch size > 1
-                self.layer_value_lstm_evo.append(EvoNormS0(evo, name='value_lstm_{:02d}_evo'.format(i)))
-        self.layer_value_dense_out = tf.keras.layers.Dense(1, activation='linear', name='value_dense_out')
+            for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
+            for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, activation=EvoNormS0(evo), recurrent_activation=EvoNormS0(evo), use_bias=False, stateful=True, name='value_lstm_{:02d}'.format(i)))
+        self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
         
 
         # pre build model
@@ -135,29 +124,15 @@ class Model(tf.keras.Model):
     def call(self, inputs, training=None):
         ## action network
         action = self.layer_action_dense_in(inputs)
-        if self.net_evo: action = self.layer_action_dense_in_evo(action)
-        for i in range(self.net_DNN):
-            action = self.layer_action_dense[i](action)
-            if self.net_evo: action = self.layer_action_dense_evo[i](action)
-        for i in range(self.net_LSTM):
-            action = tf.expand_dims(action, axis=0) # use batch as sequence
-            action = self.layer_action_lstm[i](action)
-            # action = tf.squeeze(action, axis=0) # needed for batch size > 1
-            if self.net_evo: action = self.layer_action_lstm_evo[i](action)
+        for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
+        for i in range(self.net_LSTM): action = self.layer_action_lstm[i](tf.expand_dims(action, axis=1))
         action = self.layer_action_dense_logits_out(action)
         # action = self.layer_action_de_conv1d_logits_out(action)
 
         ## value network
         value = self.layer_value_dense_in(inputs)
-        if self.net_evo: value = self.layer_value_dense_in_evo(value)
-        for i in range(self.net_DNN):
-            value = self.layer_value_dense[i](value)
-            if self.net_evo: value = self.layer_value_dense_evo[i](value)
-        for i in range(self.net_LSTM):
-            value = tf.expand_dims(value, axis=0) # use batch as sequence
-            value = self.layer_value_lstm[i](value)
-            # value = tf.squeeze(value, axis=0) # needed for batch size > 1
-            if self.net_evo: value = self.layer_value_lstm_evo[i](value)
+        for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
+        for i in range(self.net_LSTM): value = self.layer_value_lstm[i](tf.expand_dims(value, axis=1))
         value = self.layer_value_dense_out(value)
 
         return action, value

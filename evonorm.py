@@ -185,11 +185,11 @@ if __name__ == "__main__":
             # self.layer_lstm_in = tf.keras.layers.LSTM(512, stateful=True) # 3X faster but not as accurate, but still pretty accurate
             # self.layer_lstm_in = tf.keras.layers.LSTM(512, activation='linear', recurrent_activation='sigmoid', use_bias=False)
             # self.layer_lstm_in = tf.keras.layers.LSTM(512, activation=None, recurrent_activation=None, use_bias=False)
-            # self.layer_lstm_in = tf.keras.layers.LSTM(512, stateful=True, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False)
+            # self.layer_lstm_in = tf.keras.layers.LSTM(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False, stateful=True)
             # self.layer_lstm_in = tf.keras.layers.RNN(tf.keras.layers.LSTMCell(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False), stateful=True)
             # self.layer_lstm_in = tf.keras.layers.RNN(tf.keras.layers.GRUCell(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False), stateful=True)
             # self.layer_lstm_in = tf.keras.layers.RNN(tfa.rnn.PeepholeLSTMCell(512, activation=EvoNormS0(32), recurrent_activation=EvoNormS0(32), use_bias=False), stateful=True)
-            # self.layer_lstm_01 = tf.keras.layers.LSTM(512, stateful=True, activation=EvoNormS0(16), recurrent_activation=EvoNormS0(16), use_bias=False)
+            # self.layer_lstm_01 = tf.keras.layers.LSTM(512, activation=EvoNormS0(16), recurrent_activation=EvoNormS0(16), use_bias=False, stateful=True)
             
 
             # self.layer_attn_in = tf.keras.layers.LSTM(512)
@@ -197,7 +197,10 @@ if __name__ == "__main__":
 
             # self.layer_dropout = tf.keras.layers.Dropout(0.2)
             self.layer_globalavg_logits_out = tf.keras.layers.GlobalAveragePooling2D()
+            # self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, activation=EvoNormS0(32))
             # self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, use_bias=False)
+            # self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, activation='linear')
+            # self.layer_dense_logits_out = tf.keras.layers.Dense(params_size)
             
             # self.dist = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(event_shape))
 
@@ -227,6 +230,7 @@ if __name__ == "__main__":
         def _loss(self, targets, outputs, training=None):
             dist = tfp.distributions.Categorical(logits=outputs)
             loss = -dist.log_prob(tf.squeeze(targets, axis=-1)) # cross_entropy
+            # loss = -fixinfnan(dist.log_prob(tf.squeeze(targets, axis=-1))) # cross_entropy
 
             # dist = self.dist(outputs)
             # loss = -fixinfnan(dist.log_prob(tf.cast(targets, dtype=tf.float64))) # cross_entropy
