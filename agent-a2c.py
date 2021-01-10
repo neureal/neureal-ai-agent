@@ -73,14 +73,9 @@ class Model(tf.keras.Model):
 
         # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
         # TODO expand to handle Dict, make so discrete and continuous can be output at the same time
-        # self.event_size = self.action_size['action_dist_pair'] + self.action_size['action_dist_percent']
-        if isinstance(env.action_space, gym.spaces.Discrete):
-            self.categorical = True
-            self.params_size = env.action_space.n
-            self.event_size = 1 # non one-hot categorical (scaler category)
-        else if isinstance(env.action_space, gym.spaces.Box):
-            self.categorical = False
-            self.event_size = env.action_space.shape[0]
+        # event_shape = action_size['action_dist_pair'] + action_size['action_dist_percent']
+        if isinstance(env.action_space, gym.spaces.Discrete): self.categorical = True
+        elif isinstance(env.action_space, gym.spaces.Box): self.categorical = False
 
         # `gamma` is the discount factor; coefficients are used for the loss terms.
         self.gamma, self.value_c, self.entropy_c = tf.constant(gamma, dtype=tf.float64), tf.constant(value_c, dtype=tf.float64), tf.constant(entropy_c, dtype=tf.float64)
@@ -107,13 +102,15 @@ class Model(tf.keras.Model):
             for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, activation=EvoNormS0(evo), recurrent_activation=EvoNormS0(evo), use_bias=False, stateful=True, name='action_lstm_{:02d}'.format(i)))
 
         if self.categorical:
+            self.params_size, event_shape = env.action_space.n, 1 # Categorical
             self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
+            self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input))
         else:
-            self.num_components = 16
-            self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(self.event_size))
+            self.num_components, event_shape = 16, env.action_space.shape[0] # MixtureDensityNetwork
+            self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_shape))
             self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
             # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_deconv1d_logits_out')
-            self.layer_action_dist = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(self.event_size))
+            self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_shape))
 
         ## value network
         if not self.net_evo:
@@ -170,12 +167,11 @@ class Model(tf.keras.Model):
         return returns, advantages
 
     def _loss_action(self, actions, advantages, action_logits): # targets, output (acts_and_advs, layer_action_dense_logits_out)
+        dist = self.dist_action(action_logits)
         if self.categorical:
-            dist = tfp.distributions.Categorical(logits=action_logits)
             loss = -dist.log_prob(tf.squeeze(actions, axis=-1)) # cross_entropy
             entropy = dist.entropy()
         else:
-            dist = self.layer_action_dist(action_logits)
             actions = tf.cast(actions, dtype=tf.float64) # some envs have float32 actions
             # loss = -fixinfnan(dist.log_prob(actions)) # cross_entropy
             loss = dist.log_prob(actions)
@@ -234,7 +230,7 @@ class Model(tf.keras.Model):
     def _action_value(self, inputs):
         action_logits, value = self(inputs)
         if self.categorical: dist = tfp.distributions.Categorical(logits=action_logits)
-        else: dist = self.layer_action_dist(action_logits)
+        else: dist = self.dist_action(action_logits)
         action = dist.sample()
 
         action, value = tf.squeeze(action), tf.squeeze(value) # get rid of single batch
@@ -254,9 +250,11 @@ class A2CAgent:
         self.model = model
 
     def train(self, env, render=False, batch_sz=64, updates=250):
+        if isinstance(env.action_space, gym.spaces.Discrete): action_size = 1
+        elif isinstance(env.action_space, gym.spaces.Box): action_size = env.action_space.shape[0]
         # Storage helpers for a single batch of data.
         observations = np.empty((batch_sz, env.observation_space.shape[0]), dtype=env.observation_space.dtype)
-        actions = np.empty((batch_sz, self.model.event_size), dtype=env.action_space.dtype)
+        actions = np.empty((batch_sz, action_size), dtype=env.action_space.dtype)
         values = np.empty((batch_sz,), dtype=np.float64)
         rewards = np.empty((batch_sz,), dtype=np.float64)
         dones = np.empty((batch_sz,), dtype=np.bool)
