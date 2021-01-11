@@ -16,15 +16,15 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 # TODO put these in a "tensorflow_neureal" or "wilutil" library, import tensorflow_neureal as tfn, tfn.fixinfnan(), tfn.EvoNormS0()
 
 @tf.function
-def fixinfnan(t):
-    zero = tf.constant(0.0, dtype=tf.float64)
-    isinf = tf.math.is_inf(t)
-    isneg = tf.math.equal(tf.math.sign(t),-1.0)
+def fixinfnan(inputs):
+    zero = tf.constant(0.0, dtype=inputs.dtype)
+    isinf = tf.math.is_inf(inputs)
+    isneg = tf.math.equal(tf.math.sign(inputs),-1.0)
     ispos = tf.math.logical_not(isneg)
     isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
-    t = tf.where(ispinf, zero, t) # inf = 0.0
-    t = tf.where(tf.math.logical_or(tf.math.is_nan(t), isninf), tf.float64.min, t) # nan = tf.float32.min, -inf = tf.float32.min
-    return t
+    inputs = tf.where(ispinf, zero, inputs) # inf = 0.0
+    inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
+    return inputs
 
 
 # https://www.reddit.com/r/tensorflow/comments/g5y1o5/implementation_of_evonorm_s0_and_b0_on_tensorflow/
@@ -80,29 +80,31 @@ def fixinfnan(t):
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=1e-5, axis=-1, name=None):
         super(EvoNormS0, self).__init__(name=name)
-        self.groups, self.eps, self.axis = groups, eps, axis
+        self.groups, self.axis = groups, axis
+        self.eps = tf.constant(eps, dtype=self.compute_dtype)
 
     def build(self, input_shape):
         inlen = len(input_shape)
         shape = [1] * inlen
         shape[self.axis] = input_shape[self.axis]
-        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.initializers.Ones())
-        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.initializers.Zeros())
-        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.initializers.Ones())
+        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.keras.initializers.Ones())
+        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.keras.initializers.Zeros())
+        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.keras.initializers.Ones())
 
         groups = min(input_shape[self.axis], self.groups)
         self.group_shape = input_shape.as_list()
         self.group_shape[self.axis] = input_shape[self.axis] // groups
         self.group_shape.insert(self.axis, groups)
+        self.group_shape = tf.Variable(self.group_shape, trainable=False)
 
         std_shape = list(range(1, inlen+self.axis))
         std_shape.append(inlen)
-        self.std_shape = tf.TensorShape(std_shape)
+        self.std_shape = tf.constant(std_shape)
 
     @tf.function
     def call(self, inputs, training=True):
         input_shape = tf.shape(inputs)
-        self.group_shape[0] = input_shape[0]
+        self.group_shape[0].assign(input_shape[0])
         grouped_inputs = tf.reshape(inputs, self.group_shape)
         _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
         std = tf.sqrt(var + self.eps)
