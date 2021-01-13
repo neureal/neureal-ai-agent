@@ -7,7 +7,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
-# tf.config.experimental.enable_mlir_graph_optimization()
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -18,16 +17,16 @@ physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
-# @tf.function
-# def fixinfnan(inputs):
-#     zero = tf.constant(0.0, dtype=inputs.dtype)
-#     isinf = tf.math.is_inf(inputs)
-#     isneg = tf.math.equal(tf.math.sign(inputs),-1.0)
-#     ispos = tf.math.logical_not(isneg)
-#     isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
-#     inputs = tf.where(ispinf, zero, inputs) # inf = 0.0
-#     inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
-#     return inputs
+@tf.function
+def fixinfnan(inputs):
+    zero = tf.constant(0.0, dtype=inputs.dtype)
+    isinf = tf.math.is_inf(inputs)
+    isneg = tf.math.equal(tf.math.sign(inputs),-1.0)
+    ispos = tf.math.logical_not(isneg)
+    isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
+    inputs = tf.where(ispinf, zero, inputs) # inf = 0.0
+    inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
+    return inputs
 
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=1e-5, axis=-1, name=None):
@@ -75,38 +74,63 @@ class Model(tf.keras.Model):
         self._optimizer = tf.keras.optimizers.Adam(lr=lr)
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 1024, 32
+
+        self.num_components = 32
+        cat_dtype = tf.int32
+        self.categorical = True
+        if isinstance(env.action_space, gym.spaces.Discrete):
+            self.params_size = env.action_space.n
+            if env.action_space.n < 2: self.dist_action = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
+            else: self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+        elif isinstance(env.action_space, gym.spaces.Box):
+            event_shape = list(env.action_space.shape)
+            event_size = np.prod(event_shape).item()
+            if env.action_space.dtype == np.uint8:
+                self.params_size = event_size * 256
+                if event_size == 1: self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+                else:
+                    params_shape = event_shape+[256]
+                    self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
+                        tfp.distributions.Categorical(logits=tf.reshape(input, tf.concat([tf.shape(input)[:-1], params_shape], axis=0)), dtype=cat_dtype), reinterpreted_batch_ndims=len(event_shape)
+                    ))
+            elif env.action_space.dtype == np.float32 or env.action_space.dtype == np.float64:
+                if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
+                    # self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
+                    # self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
+                    self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
+                    self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
+                else:
+                    self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
+                    self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
+                self.categorical = False
+        else:
+            # TODO expand to handle Dict, make so discrete and continuous can be output at the same time
+            # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
+            return
+
+
+        # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 2, 256, 128, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 1024, 512, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 6, 6, 2048, 1024, 32
-        self.net_arch = "inD{}-{:02d}D{}-{:02d}LS{}-outD".format(inp, self.net_DNN, mid, self.net_LSTM, mid)
-
-
-        # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
-        # TODO expand to handle Dict, make so discrete and continuous can be output at the same time
-        # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
-        if isinstance(env.action_space, gym.spaces.Discrete):
-            self.params_size, event_size = env.action_space.n, 1 # Categorical
-            self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input))
-        elif isinstance(env.action_space, gym.spaces.Box):
-            self.num_components, event_size = 16, env.action_space.shape[0] # MixtureDensityNetwork
-            self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-            self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
+        self.net_arch = "inD{}-{:02d}D{}-{:02d}LS{}-out{}".format(inp, self.net_DNN, mid, self.net_LSTM, mid, 'Cat' if self.categorical else 'Cont')
 
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
-
         ## action network
         self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=EvoNormS0(evo), use_bias=False, name='action_dense_in')
-        # for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
+        for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='action_lstm_{:02d}'.format(i)))
+        if not self.categorical: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_cont')
         # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_deconv1d_logits_out')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
 
         ## value network
         self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
-        # for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
+        for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='value_lstm_{:02d}'.format(i)))
         self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
 
@@ -120,8 +144,9 @@ class Model(tf.keras.Model):
 
         ## action network
         action = self.layer_action_dense_in(inputs)
-        # for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
+        for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
         for i in range(self.net_LSTM): action = tf.squeeze(self.layer_action_lstm[i](tf.expand_dims(action, axis=0)), axis=0)
+        if not self.categorical: action = self.layer_action_dense_cont(action)
         action = self.layer_action_dense_logits_out(action)
         # batch_size = inputs.shape[0]
         # action = tf.expand_dims(action, axis=1)
@@ -130,7 +155,7 @@ class Model(tf.keras.Model):
 
         ## value network
         value = self.layer_value_dense_in(inputs)
-        # for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
+        for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
         for i in range(self.net_LSTM): value = tf.squeeze(self.layer_value_lstm[i](tf.expand_dims(value, axis=0)), axis=0)
         value = self.layer_value_dense_out(value)
 
@@ -156,20 +181,15 @@ class Model(tf.keras.Model):
     def _loss_action(self, actions, advantages, action_logits): # targets, output (acts_and_advs, layer_action_dense_logits_out)
         dist = self.dist_action(action_logits)
         actions = tf.cast(actions, dtype=dist.dtype)
-        if dist.event_shape.rank == 0:
-            actions = tf.squeeze(actions, axis=-1) # expects scaler
+        if dist.event_shape.rank == 0: actions = tf.squeeze(actions, axis=-1)
+        if self.categorical:
+            loss = -dist.log_prob(actions)
             entropy = dist.entropy()
         else:
-            # entropy = tf.reduce_mean(-dist.log_prob(dist.sample(self.num_components)), axis=0)
-            entropy = dist.sample(self.num_components)
-            entropy = -dist.log_prob(entropy)
-            # entropy = -fixinfnan(dist.log_prob(entropy))
-            entropy = tf.reduce_mean(entropy, axis=0)
-        loss = -dist.log_prob(actions)
-        # loss = -fixinfnan(dist.log_prob(actions))
+            loss = -fixinfnan(dist.log_prob(actions))
+            entropy = tf.reduce_mean(-fixinfnan(dist.log_prob(dist.sample(self.num_components))), axis=0)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
-
         # We want to minimize policy and maximize entropy losses.
         # Here signs are flipped because the optimizer minimizes.
         loss_action = loss - entropy * self.entropy_c
@@ -335,14 +355,15 @@ args.plot_results = True
 machine, device = 'dev', 0
 
 if __name__ == '__main__':
-    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole" # Box(4,)	Discrete(2)	(-inf, inf)	200	100	195.0
-    env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander" # Box(8,)	Discrete(4)	(-inf, inf)	1000	100	200
-    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont" # Box(8,)	Box(2,)	(-inf, inf)	1000	100	200
-    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing" # Box(96, 96, 3)	Box(3,)	(-inf, inf)	1000	100	900
+    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                             # Box((4),-inf:inf,float32)         Discrete(2,int64)             200   100  195.0
+    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                       # Box((8),-inf:inf,float32)       Discrete(4,int64)           1000  100  200
+    env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"         # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000  100  200
+    # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore"   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                           # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000  100  900
     # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
     with tf.device('/device:GPU:'+str(device)):
-        # model = Model(num_actions=env.action_space.n)
         model = Model(env, lr=args.learning_rate);
         model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
 
