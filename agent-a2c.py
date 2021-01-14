@@ -19,14 +19,8 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 @tf.function
 def fixinfnan(inputs):
-    zero = tf.constant(0.0, dtype=inputs.dtype)
-    isinf = tf.math.is_inf(inputs)
-    isneg = tf.math.equal(tf.math.sign(inputs),-1.0)
-    ispos = tf.math.logical_not(isneg)
-    isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
-    inputs = tf.where(ispinf, zero, inputs) # inf = 0.0
-    inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
-    return inputs
+    isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
+    return tf.where(isinfnan, inputs.dtype.max, inputs)
 
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=1e-5, axis=-1, name=None):
@@ -95,10 +89,8 @@ class Model(tf.keras.Model):
                     ))
             elif env.action_space.dtype == np.float32 or env.action_space.dtype == np.float64:
                 if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
-                    # self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-                    # self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
-                    self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
-                    self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
+                    self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
+                    self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
                 else:
                     self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
                     self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
@@ -186,8 +178,15 @@ class Model(tf.keras.Model):
             loss = -dist.log_prob(actions)
             entropy = dist.entropy()
         else:
-            loss = -fixinfnan(dist.log_prob(actions))
-            entropy = tf.reduce_mean(-fixinfnan(dist.log_prob(dist.sample(self.num_components))), axis=0)
+            loss = dist.log_prob(actions)
+            loss = tf.math.negative(loss)
+            # loss = tf.math.abs(loss)
+            loss = fixinfnan(loss)
+            entropy = dist.sample(self.num_components)
+            entropy = dist.log_prob(entropy)
+            entropy = tf.math.negative(entropy)
+            entropy = fixinfnan(entropy)
+            entropy = tf.reduce_mean(entropy, axis=0)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
         # We want to minimize policy and maximize entropy losses.

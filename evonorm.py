@@ -15,16 +15,20 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 # TODO put these in a "tensorflow_neureal" or "wilutil" library, import tensorflow_neureal as tfn, tfn.fixinfnan(), tfn.EvoNormS0()
 
+# @tf.function
+# def fixinfnan(inputs):
+#     zero = tf.constant(0.0, dtype=inputs.dtype)
+#     isinf = tf.math.is_inf(inputs)
+#     isneg = tf.math.equal(tf.math.sign(inputs),-1.0)
+#     ispos = tf.math.logical_not(isneg)
+#     isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
+#     inputs = tf.where(ispinf, zero, inputs) # inf = 0.0
+#     inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
+#     return inputs
 @tf.function
 def fixinfnan(inputs):
-    zero = tf.constant(0.0, dtype=inputs.dtype)
-    isinf = tf.math.is_inf(inputs)
-    isneg = tf.math.equal(tf.math.sign(inputs),-1.0)
-    ispos = tf.math.logical_not(isneg)
-    isninf, ispinf = tf.math.logical_and(isinf, isneg), tf.math.logical_and(isinf, ispos)
-    inputs = tf.where(ispinf, zero, inputs) # inf = 0.0
-    inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
-    return inputs
+    isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
+    return tf.where(isinfnan, inputs.dtype.max, inputs)
 
 
 # https://www.reddit.com/r/tensorflow/comments/g5y1o5/implementation_of_evonorm_s0_and_b0_on_tensorflow/
