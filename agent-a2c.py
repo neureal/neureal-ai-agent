@@ -5,7 +5,7 @@ np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
-tf.keras.backend.set_floatx('float64')
+# tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
@@ -69,9 +69,9 @@ class Model(tf.keras.Model):
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
 
 
-        self.num_components = 32
+        self.num_components = 16
         cat_dtype = tf.int32
-        self.categorical = True
+        self.discrete = True
         if isinstance(env.action_space, gym.spaces.Discrete):
             self.params_size = env.action_space.n
             if env.action_space.n < 2: self.dist_action = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
@@ -94,29 +94,34 @@ class Model(tf.keras.Model):
                 else:
                     self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
                     self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
-                self.categorical = False
+                self.discrete = False
         else:
             # TODO expand to handle Dict, make so discrete and continuous can be output at the same time
             # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
             return
 
-
         # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
+        self.input_vec = (len(env.observation_space.shape) == 1)
+
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 2048, 1024, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 2, 256, 128, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 1024, 512, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 6, 6, 2048, 1024, 32
-        self.net_arch = "inD{}-{:02d}D{}-{:02d}LS{}-out{}".format(inp, self.net_DNN, mid, self.net_LSTM, mid, 'Cat' if self.categorical else 'Cont')
+        self.net_arch = "{}inD{}-{:02d}D{}-{:02d}LS{}-out{}".format('' if self.input_vec else 'Conv2D-', inp, self.net_DNN, mid, self.net_LSTM, mid, 'D' if self.discrete else 'Cont'+str(self.num_components))
 
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
+        if not self.input_vec:
+            self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(32))
+            # self.layer_conv1d_in = tf.keras.layers.Conv1D(filters=16, kernel_size=(2,), activation=EvoNormS0(32))
+            self.layer_flatten = tf.keras.layers.Flatten()
         ## action network
         self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=EvoNormS0(evo), use_bias=False, name='action_dense_in')
         for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='action_lstm_{:02d}'.format(i)))
-        if not self.categorical: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_cont')
+        if not self.discrete: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_cont')
         # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_deconv1d_logits_out')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
 
@@ -133,12 +138,15 @@ class Model(tf.keras.Model):
     @tf.function
     def call(self, inputs, training=None):
         inputs = tf.cast(inputs, dtype=self.compute_dtype)
+        if not self.input_vec:
+            inputs = self.layer_conv2d_in(inputs)
+            inputs = self.layer_flatten(inputs)
 
         ## action network
         action = self.layer_action_dense_in(inputs)
         for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
         for i in range(self.net_LSTM): action = tf.squeeze(self.layer_action_lstm[i](tf.expand_dims(action, axis=0)), axis=0)
-        if not self.categorical: action = self.layer_action_dense_cont(action)
+        if not self.discrete: action = self.layer_action_dense_cont(action)
         action = self.layer_action_dense_logits_out(action)
         # batch_size = inputs.shape[0]
         # action = tf.expand_dims(action, axis=1)
@@ -174,7 +182,7 @@ class Model(tf.keras.Model):
         dist = self.dist_action(action_logits)
         actions = tf.cast(actions, dtype=dist.dtype)
         if dist.event_shape.rank == 0: actions = tf.squeeze(actions, axis=-1)
-        if self.categorical:
+        if self.discrete:
             loss = -dist.log_prob(actions)
             entropy = dist.entropy()
         else:
@@ -253,11 +261,11 @@ class A2CAgent:
         self.model = model
 
     def train(self, env, render=False, batch_sz=64, updates=250):
-        if isinstance(env.action_space, gym.spaces.Discrete): action_size = 1
-        elif isinstance(env.action_space, gym.spaces.Box): action_size = env.action_space.shape[0]
+        if isinstance(env.action_space, gym.spaces.Discrete): action_shape = [1]
+        elif isinstance(env.action_space, gym.spaces.Box): action_shape = list(env.action_space.shape)
         # Storage helpers for a single batch of data.
-        observations = np.empty((batch_sz, env.observation_space.shape[0]), dtype=env.observation_space.dtype)
-        actions = np.empty((batch_sz, action_size), dtype=env.action_space.dtype)
+        observations = np.empty([batch_sz]+list(env.observation_space.shape), dtype=env.observation_space.dtype)
+        actions = np.empty([batch_sz]+action_shape, dtype=env.action_space.dtype)
         values = np.empty((batch_sz,), dtype=model.compute_dtype)
         rewards = np.empty((batch_sz,), dtype=model.compute_dtype)
         dones = np.empty((batch_sz,), dtype=np.bool)
@@ -269,7 +277,7 @@ class A2CAgent:
         loss_total, loss_action, loss_value, loss_total_cur, loss_action_cur, loss_value_cur = [], [], [], 0.0, 0.0, 0.0
         epi_total_rewards, epi_steps, epi_avg_reward, epi_end_reward, epi_avg_rewards, epi_end_rewards, epi_sim_times = [0.0], 0, 0, 0, [], [], []
         update, finished, early_quit = 0, False, False
-        t_sim_total, t_sim_epi_start, t_real_start = 0.0, next_obs[0], time.time()
+        t_real_start, t_sim_total, t_sim_epi_start  = time.time(), 0.0, np.mean(next_obs[0])
         steps_total, t_steps_total = 0, 0.0
 
         while update < updates or not finished:
@@ -291,7 +299,7 @@ class A2CAgent:
                     epi_end_rewards.append(epi_end_reward)
                     epi_avg_reward = np.expm1(epi_total_rewards[-1] / epi_steps)
                     epi_avg_rewards.append(epi_avg_reward)
-                    t_sim_epi = next_obs[0] - t_sim_epi_start
+                    t_sim_epi = np.mean(next_obs[0]) - t_sim_epi_start
                     epi_sim_times.append(t_sim_epi / 60)
                     loss_total.append(loss_total_cur); loss_action.append(loss_action_cur); loss_value.append(loss_value_cur)
                     print("DONE episode #{:03d}  {} sim-epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, _print_time(t_sim_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
@@ -303,7 +311,7 @@ class A2CAgent:
 
                     next_obs = env.reset()
                     if render: env.render()
-                    t_sim_epi_start = next_obs[0]
+                    t_sim_epi_start = np.mean(next_obs[0])
             if early_quit: break
 
             _, next_value = self.model.action_value(next_obs)
@@ -319,7 +327,7 @@ class A2CAgent:
             update += 1
 
         epi_num = len(epi_end_rewards)
-        t_sim_total += next_obs[0] - t_sim_epi_start
+        t_sim_total += np.mean(next_obs[0]) - t_sim_epi_start
         t_avg_sim_epi = (t_sim_total / epi_num) if epi_num > 0 else 0
 
         t_real_total = time.time() - t_real_start
@@ -355,11 +363,11 @@ machine, device = 'dev', 0
 
 if __name__ == '__main__':
     # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                             # Box((4),-inf:inf,float32)         Discrete(2,int64)             200   100  195.0
-    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                       # Box((8),-inf:inf,float32)       Discrete(4,int64)           1000  100  200
-    env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"         # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000  100  200
+    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                       # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000  100  200
+    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"         # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000  100  200
     # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
     # env, model_name = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore"   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                           # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000  100  900
+    env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                           # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000  100  900
     # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
     with tf.device('/device:GPU:'+str(device)):
