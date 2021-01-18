@@ -103,8 +103,9 @@ class Model(tf.keras.Model):
         # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
         self.input_vec = (len(env.observation_space.shape) == 1)
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 2048, 1024, 16
-        # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 8, 1, 4096, 2048, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 2, 256, 128, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 1024, 512, 32
@@ -113,11 +114,11 @@ class Model(tf.keras.Model):
         self.net_arch = "{}inD{}-{:02d}D{}-{:02d}LS{}-out{}".format('' if self.input_vec else 'Conv2D-', inp, self.net_DNN, mid, self.net_LSTM, mid, 'D' if self.discrete else 'Cont'+str(self.num_components))
 
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
-        if not self.input_vec:
-            self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(32))
-            # self.layer_conv1d_in = tf.keras.layers.Conv1D(filters=16, kernel_size=(2,), activation=EvoNormS0(32))
-            self.layer_flatten = tf.keras.layers.Flatten()
+        self.layer_flatten = tf.keras.layers.Flatten()
+        # if not self.input_vec: self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(32), name='conv2d_in')
+
         ## action network
+        # if not self.input_vec: self.layer_action_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(evo), name='action_conv2d_in')
         self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=EvoNormS0(evo), use_bias=False, name='action_dense_in')
         for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='action_lstm_{:02d}'.format(i)))
@@ -126,6 +127,7 @@ class Model(tf.keras.Model):
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
 
         ## value network
+        # if not self.input_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(evo), name='value_conv2d_in')
         self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
         for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='value_lstm_{:02d}'.format(i)))
@@ -138,12 +140,19 @@ class Model(tf.keras.Model):
     @tf.function
     def call(self, inputs, training=None):
         inputs = tf.cast(inputs, dtype=self.compute_dtype)
-        if not self.input_vec:
-            inputs = self.layer_conv2d_in(inputs)
-            inputs = self.layer_flatten(inputs)
+        if not self.input_vec: inputs = self.layer_flatten(inputs)
+        # if not self.input_vec:
+        #     inputs = self.layer_conv2d_in(inputs)
+        #     inputs = self.layer_flatten(inputs)
 
         ## action network
         action = self.layer_action_dense_in(inputs)
+        # if self.input_vec:
+        #     action = self.layer_action_dense_in(inputs)
+        # else:
+        #     action = self.layer_action_conv2d_in(inputs)
+        #     action = self.layer_flatten(action)
+        #     action = self.layer_action_dense_in(action)
         for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
         for i in range(self.net_LSTM): action = tf.squeeze(self.layer_action_lstm[i](tf.expand_dims(action, axis=0)), axis=0)
         if not self.discrete: action = self.layer_action_dense_cont(action)
@@ -155,6 +164,12 @@ class Model(tf.keras.Model):
 
         ## value network
         value = self.layer_value_dense_in(inputs)
+        # if self.input_vec:
+        #     value = self.layer_value_dense_in(inputs)
+        # else:
+        #     value = self.layer_value_conv2d_in(inputs)
+        #     value = self.layer_flatten(value)
+        #     value = self.layer_value_dense_in(value)
         for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
         for i in range(self.net_LSTM): value = tf.squeeze(self.layer_value_lstm[i](tf.expand_dims(value, axis=0)), axis=0)
         value = self.layer_value_dense_out(value)
@@ -361,13 +376,24 @@ args.plot_results = True
 
 machine, device = 'dev', 0
 
+import envs_local.bipedal_walker as env_bipedal_walker
+import envs_local.car_racing as env_car_racing
+
 if __name__ == '__main__':
-    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                             # Box((4),-inf:inf,float32)         Discrete(2,int64)             200   100  195.0
-    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                       # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000  100  200
-    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"         # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000  100  200
-    # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore"   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                           # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000  100  900
+    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                                   # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0
+    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                             # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
+    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"               # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
+    # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    env, model_name = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore"         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name = env_bipedal_walker.BipedalWalkerHardcore(), "gym-A2C-BipedalWalkerHardcore"   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                                 # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900
+    # env, model_name = env_car_racing.CarRacing(), "gym-A2C-CarRacing"                               # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900
+    # env, model_name = gym.make('QbertNoFrameskip-v4'), "gym-A2C-QbertNoFrameskip-v4"                # Box((210,160,3),0:255,uint8)      Discrete(6)                   400000 100  None
+    # env, model_name = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4"              # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4"        # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name = gym.make('PitfallNoFrameskip-v4'), "gym-A2C-PitfallNoFrameskip-v4"            # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevengeNoFrameskip-v4" # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
     # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
     with tf.device('/device:GPU:'+str(device)):
