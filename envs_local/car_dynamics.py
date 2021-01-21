@@ -18,6 +18,10 @@ WHEEL_MOMENT_OF_INERTIA = 4000*SIZE*SIZE
 FRICTION_LIMIT = 1000000*SIZE*SIZE     # friction ~= mass ~= size^2 (calculated implicitly using density)
 WHEEL_R = 27
 WHEEL_W = 14
+WHEEL_POLY = [
+    (-WHEEL_W, +WHEEL_R), (+WHEEL_W, +WHEEL_R),
+    (+WHEEL_W, -WHEEL_R), (-WHEEL_W, -WHEEL_R)
+    ]
 WHEELPOS = [
     (-55, +80), (+55, +80),
     (-55, -82), (+55, -82)
@@ -49,39 +53,37 @@ WHEEL_WHITE = (0.3, 0.3, 0.3)
 MUD_COLOR = (0.4, 0.4, 0.0)
 
 
+HULL_FD = [
+    fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY1]), density=1.0),
+    fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY2]), density=1.0),
+    fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY3]), density=1.0),
+    fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY4]), density=1.0)
+    ]
+WHEEL_FD = fixtureDef(
+    shape=polygonShape(vertices=[(x*SIZE,y*SIZE) for x, y in WHEEL_POLY]),
+    density=0.1,
+    categoryBits=0x0020,
+    maskBits=0x001,
+    restitution=0.0)
+
 class Car:
     def __init__(self, world, init_angle, init_x, init_y):
         self.world = world
         self.hull = self.world.CreateDynamicBody(
             position=(init_x, init_y),
             angle=init_angle,
-            fixtures=[
-                fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY1]), density=1.0),
-                fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY2]), density=1.0),
-                fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY3]), density=1.0),
-                fixtureDef(shape=polygonShape(vertices=[(x*SIZE, y*SIZE) for x, y in HULL_POLY4]), density=1.0)
-                ]
+            fixtures=HULL_FD
             )
         self.hull.color = (0.8, 0.0, 0.0)
         self.wheels = []
         self.fuel_spent = 0.0
-        WHEEL_POLY = [
-            (-WHEEL_W, +WHEEL_R), (+WHEEL_W, +WHEEL_R),
-            (+WHEEL_W, -WHEEL_R), (-WHEEL_W, -WHEEL_R)
-            ]
         for wx, wy in WHEELPOS:
-            front_k = 1.0 if wy > 0 else 1.0
             w = self.world.CreateDynamicBody(
                 position=(init_x+wx*SIZE, init_y+wy*SIZE),
                 angle=init_angle,
-                fixtures=fixtureDef(
-                    shape=polygonShape(vertices=[(x*front_k*SIZE,y*front_k*SIZE) for x, y in WHEEL_POLY]),
-                    density=0.1,
-                    categoryBits=0x0020,
-                    maskBits=0x001,
-                    restitution=0.0)
+                fixtures=WHEEL_FD
                     )
-            w.wheel_rad = front_k*WHEEL_R*SIZE
+            w.wheel_rad = WHEEL_R*SIZE
             w.color = WHEEL_COLOR
             w.gas = 0.0
             w.brake = 0.0
