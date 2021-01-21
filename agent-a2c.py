@@ -5,7 +5,7 @@ np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
-# tf.keras.backend.set_floatx('float64')
+tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
@@ -18,14 +18,15 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 @tf.function
-def fixinfnan(inputs):
+def fixinfnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
-    return tf.where(isinfnan, inputs.dtype.max, inputs)
+    return tf.where(isinfnan, replace, inputs)
 
 class EvoNormS0(tf.keras.layers.Layer):
-    def __init__(self, groups, eps=1e-5, axis=-1, name=None):
+    def __init__(self, groups, eps=None, axis=-1, name=None):
         super(EvoNormS0, self).__init__(name=name)
         self.groups, self.axis = groups, axis
+        if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
         self.eps = tf.constant(eps, dtype=self.compute_dtype)
 
     def build(self, input_shape):
@@ -64,6 +65,9 @@ class Model(tf.keras.Model):
         super().__init__('mlp_policy')
         # `gamma` is the discount factor; coefficients are used for the loss terms.
         self.gamma, self.value_c, self.entropy_c = tf.constant(gamma, dtype=self.compute_dtype), tf.constant(value_c, dtype=self.compute_dtype), tf.constant(entropy_c, dtype=self.compute_dtype)
+        self.float_max = tf.constant(tf.dtypes.as_dtype(self.compute_dtype).max, dtype=self.compute_dtype)
+        self.float_maxroot = tf.constant(tf.math.sqrt(tf.dtypes.as_dtype(self.compute_dtype).max), dtype=self.compute_dtype)
+        self.float_eps = tf.constant(tf.experimental.numpy.finfo(self.compute_dtype).eps, dtype=self.compute_dtype)
 
         self._optimizer = tf.keras.optimizers.Adam(lr=lr)
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
@@ -89,8 +93,10 @@ class Model(tf.keras.Model):
                     ))
             elif env.action_space.dtype == np.float32 or env.action_space.dtype == np.float64:
                 if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
-                    self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-                    self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
+                    # self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
+                    # self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
+                    self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
+                    self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
                 else:
                     self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
                     self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
@@ -129,13 +135,14 @@ class Model(tf.keras.Model):
         ## value network
         # if not self.input_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(evo), name='value_conv2d_in')
         self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
-        for i in range(self.net_DNN): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
+        for i in range(self.net_DNN+2): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='value_lstm_{:02d}'.format(i)))
         self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
 
         # pre build model
         sample = tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0)
         action, value = self(sample)
+        self.reset_states() # needed because the previous call unnormally advances the state!
 
     @tf.function
     def call(self, inputs, training=None):
@@ -170,7 +177,7 @@ class Model(tf.keras.Model):
         #     value = self.layer_value_conv2d_in(inputs)
         #     value = self.layer_flatten(value)
         #     value = self.layer_value_dense_in(value)
-        for i in range(self.net_DNN): value = self.layer_value_dense[i](value)
+        for i in range(self.net_DNN+2): value = self.layer_value_dense[i](value)
         for i in range(self.net_LSTM): value = tf.squeeze(self.layer_value_lstm[i](tf.expand_dims(value, axis=0)), axis=0)
         value = self.layer_value_dense_out(value)
 
@@ -191,6 +198,7 @@ class Model(tf.keras.Model):
 
         # Advantages are equal to returns - baseline (value estimates in our case).
         advantages = returns - values
+        # advantages = np.abs(advantages) # for MAE, could be np.square() for MSE
         return returns, advantages
 
     def _loss_action(self, actions, advantages, action_logits): # targets, output (acts_and_advs, layer_action_dense_logits_out)
@@ -201,37 +209,50 @@ class Model(tf.keras.Model):
             loss = -dist.log_prob(actions)
             entropy = dist.entropy()
         else:
-            loss = dist.log_prob(actions)
-            loss = tf.math.negative(loss)
-            # loss = tf.math.abs(loss)
-            loss = fixinfnan(loss)
+            loss = -dist.log_prob(actions)
             entropy = dist.sample(self.num_components)
-            entropy = dist.log_prob(entropy)
-            entropy = tf.math.negative(entropy)
-            entropy = fixinfnan(entropy)
+            entropy = -dist.log_prob(entropy)
+            # entropy = fixinfnan(entropy, self.float_maxroot)
             entropy = tf.reduce_mean(entropy, axis=0)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
         # We want to minimize policy and maximize entropy losses.
         # Here signs are flipped because the optimizer minimizes.
-        loss_action = loss - entropy * self.entropy_c
-        return loss_action # shape = (batch size,)
+        loss = loss - entropy * self.entropy_c
+        loss = fixinfnan(loss, self.float_maxroot)
+        return loss # shape = (batch size,)
 
-    def _loss_value(self, returns, values): # targets, output (returns, layer_value_dense_out)
+    # loss_fn = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.NONE)
+    # def _loss_value(self, returns, values): # targets, output (returns, layer_value_dense_out)
+    # def _loss_value(self, returns, values, advantages): # targets, output (returns, layer_value_dense_out)
+    def _loss_value(self, advantages):
         # Value loss is typically MSE between value estimates and returns.
-        returns = tf.expand_dims(returns, 1)
-        loss_value = tf.keras.losses.mean_squared_error(returns, values) # regress [layer_value_dense_out] to [7,6,5,4,3,2,1,0]
-        loss_value = loss_value * self.value_c
+        # returns = tf.expand_dims(returns, 1)
+        # loss_value = self.loss_fn(returns, values)
+        # loss_value = tf.keras.losses.mean_squared_error(returns, values)
+        # loss_value = tf.math.square(advantages)
+        # loss_value = loss_value * self.value_c
+        loss_value = tf.math.square(advantages) * self.value_c
         return loss_value # shape = (batch size,)
 
     @tf.function
-    # def train(self, inputs, actions, advantages, returns, dones):
-    def train(self, inputs, actions, advantages, returns):
+    # def train(self, inputs, actions, returns, advantages, dones):
+    # def train(self, inputs, actions, returns, advantages):
+    def train(self, inputs, actions, returns):
         self.reset_states()
         with tf.GradientTape() as tape:
-            action_logits, value = self(inputs, training=True)
+            action_logits, values = self(inputs, training=True) # redundant, but needed to be able to calculate the gradients backwards
+            values = tf.squeeze(values, axis=-1)
+            advantages = returns - values # should calculate returns inside gradient tape so can do backprop on it!!
+            # advantages = tf.math.square(advantages)
+            # advantages = tf.math.abs(advantages) # CRASHES!!
+            # isneg = tf.math.equal(tf.math.sign(advantages),-1.0)
+            # advantages = tf.where(isneg, advantages*-1.0, advantages)
+
             loss_action = self._loss_action(actions, advantages, action_logits)
-            loss_value = self._loss_value(returns, value)
+            # loss_value = self._loss_value(returns, values) # redundant, but needed to be able to calculate the gradients backwards
+            # loss_value = self._loss_value(returns, new_values, advantages)
+            loss_value = self._loss_value(advantages)
             loss_total = loss_action + loss_value
         gradients = tape.gradient(loss_total, self.trainable_variables)
         self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
@@ -329,12 +350,14 @@ class A2CAgent:
                     t_sim_epi_start = np.mean(next_obs[0])
             if early_quit: break
 
+            self.model.reset_states() # needed because otherwise this next call unnormally advances the state, ineffecient!
             _, next_value = self.model.action_value(next_obs)
             # returns ~ [7,6,5,4,3,2,1,0] for reward = 1 per step, advantages = returns - values output
             returns, advantages = self.model.calc_returns_advantages(rewards, dones, values, next_value)
 
-            # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, advantages, returns, dones)
-            loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, advantages, returns)
+            # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns, advantages, dones)
+            # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns, advantages)
+            loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns)
             loss_total_cur, loss_action_cur, loss_value_cur = loss_total_cur.numpy(), loss_action_cur.numpy(), loss_value_cur.numpy()
 
             print("---> update [{:03d}/{:03d}]                                                                                            {:16.8f} loss_total {:16.8f} loss_action {:16.8f} loss_value".format(update, updates, loss_total_cur, loss_action_cur, loss_value_cur))
@@ -382,13 +405,13 @@ import envs_local.car_racing as env_car_racing
 if __name__ == '__main__':
     # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                                   # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                             # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
-    # env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"               # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
+    env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"               # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
     # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    env, model_name = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
     # env, model_name = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore"         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
     # env, model_name = env_bipedal_walker.BipedalWalkerHardcore(), "gym-A2C-BipedalWalkerHardcore"   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                                 # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900
-    # env, model_name = env_car_racing.CarRacing(), "gym-A2C-CarRacing"                               # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900
+    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                                 # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
+    # env, model_name = env_car_racing.CarRacing(), "gym-A2C-CarRacing"                               # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
     # env, model_name = gym.make('QbertNoFrameskip-v4'), "gym-A2C-QbertNoFrameskip-v4"                # Box((210,160,3),0:255,uint8)      Discrete(6)                   400000 100  None
     # env, model_name = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4"              # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
     # env, model_name = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4"        # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
@@ -396,8 +419,9 @@ if __name__ == '__main__':
     # env, model_name = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevengeNoFrameskip-v4" # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
     # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
+    # env.seed(0)
     with tf.device('/device:GPU:'+str(device)):
-        model = Model(env, lr=args.learning_rate);
+        model = Model(env, lr=args.learning_rate, value_c=1.0, entropy_c=1e-2);
         model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
 
         model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False

@@ -26,9 +26,9 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 #     inputs = tf.where(tf.math.logical_or(tf.math.is_nan(inputs), isninf), inputs.dtype.min, inputs) # nan = tf.float32.min, -inf = tf.float32.min
 #     return inputs
 @tf.function
-def fixinfnan(inputs):
+def fixinfnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
-    return tf.where(isinfnan, inputs.dtype.max, inputs)
+    return tf.where(isinfnan, replace, inputs)
 
 
 # https://www.reddit.com/r/tensorflow/comments/g5y1o5/implementation_of_evonorm_s0_and_b0_on_tensorflow/
@@ -82,9 +82,10 @@ def fixinfnan(inputs):
 
 # TODO double check side effects and change list to TensorArray (list.append())
 class EvoNormS0(tf.keras.layers.Layer):
-    def __init__(self, groups, eps=1e-5, axis=-1, name=None):
+    def __init__(self, groups, eps=None, axis=-1, name=None):
         super(EvoNormS0, self).__init__(name=name)
         self.groups, self.axis = groups, axis
+        if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
         self.eps = tf.constant(eps, dtype=self.compute_dtype)
 
     def build(self, input_shape):
