@@ -17,6 +17,10 @@ physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
+def _print_time(t):
+    days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
+    return "{:4d}:{:02d}:{:02d}:{:02d}".format(days,hours,mins,secs)
+
 @tf.function
 def fixinfnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
@@ -60,7 +64,7 @@ class EvoNormS0(tf.keras.layers.Layer):
         return (inputs * tf.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
 
 
-class Model(tf.keras.Model):
+class ActorCriticAI(tf.keras.Model):
     def __init__(self, env, lr=7e-3, gamma=0.99, value_c=0.5, entropy_c=1e-4):
         super().__init__('mlp_policy')
         # `gamma` is the discount factor; coefficients are used for the loss terms.
@@ -109,8 +113,8 @@ class Model(tf.keras.Model):
         # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
         self.input_vec = (len(env.observation_space.shape) == 1)
 
-        # self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 8, 1, 4096, 2048, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 2, 256, 128, 16
@@ -292,7 +296,7 @@ class Model(tf.keras.Model):
         return action, value
 
 
-class A2CAgent:
+class AgentA2C:
     def __init__(self, model):
         self.model = model
 
@@ -385,14 +389,10 @@ class A2CAgent:
 
 
 
-def _print_time(t):
-    days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
-    return "{:4d}:{:02d}:{:02d}:{:02d}".format(days,hours,mins,secs)
-
 class Args(): pass
 args = Args()
 args.batch_size = 1024 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 10 # roughly batch_size * num_updates = total steps, unless last episode is long
+args.num_updates = 3000 # roughly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.render = False
 args.plot_results = True
@@ -421,7 +421,7 @@ if __name__ == '__main__':
 
     # env.seed(0)
     with tf.device('/device:GPU:'+str(device)):
-        model = Model(env, lr=args.learning_rate, value_c=1.0, entropy_c=1e-2);
+        model = ActorCriticAI(env, lr=args.learning_rate, value_c=1.0, entropy_c=1e-2)
         model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
 
         model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
@@ -430,7 +430,7 @@ if __name__ == '__main__':
             print("LOADED model weights from {}".format(model_file)); loaded_model = True
         # model.summary(); quit(0)
 
-        agent = A2CAgent(model)
+        agent = AgentA2C(model)
         epi_num, epi_total_rewards, epi_end_rewards, epi_avg_rewards, epi_sim_times, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step, loss_total, loss_action, loss_value = agent.train(env, args.render, args.batch_size, args.num_updates)
         print("\nFinished training")
         # reward_test = agent.test(env, args.render)
