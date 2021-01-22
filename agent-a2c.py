@@ -99,11 +99,12 @@ class ActorCriticAI(tf.keras.Model):
                 if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
                     # self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
                     # self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
-                    self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
-                    self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
+                    self.params_size = tfp.layers.MixtureLogistic.params_size(self.num_components, event_shape)
+                    self.dist_action = tfp.layers.MixtureLogistic(self.num_components, event_shape)
                 else:
                     self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
                     self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
+                # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
                 self.discrete = False
         else:
             # TODO expand to handle Dict, make so discrete and continuous can be output at the same time
@@ -207,6 +208,7 @@ class ActorCriticAI(tf.keras.Model):
 
     def _loss_action(self, actions, advantages, action_logits): # targets, output (acts_and_advs, layer_action_dense_logits_out)
         dist = self.dist_action(action_logits)
+        # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector)
         actions = tf.cast(actions, dtype=dist.dtype)
         if dist.event_shape.rank == 0: actions = tf.squeeze(actions, axis=-1)
         if self.discrete:
@@ -282,6 +284,7 @@ class ActorCriticAI(tf.keras.Model):
     def _action_value(self, inputs):
         action_logits, value = self(inputs)
         dist = self.dist_action(action_logits)
+        # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector) # doesn't sample with float64
         action = dist.sample()
 
         action, value = tf.squeeze(action), tf.squeeze(value) # get rid of single batch
@@ -392,8 +395,10 @@ class AgentA2C:
 class Args(): pass
 args = Args()
 args.batch_size = 1024 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 3000 # roughly batch_size * num_updates = total steps, unless last episode is long
+args.num_updates = 10 # roughly batch_size * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
+args.value_c = 0.9 # scaler for value loss contribution
+args.entropy_c = 1e-4 # scaler for entropy loss contribution
 args.render = False
 args.plot_results = True
 
@@ -421,7 +426,7 @@ if __name__ == '__main__':
 
     # env.seed(0)
     with tf.device('/device:GPU:'+str(device)):
-        model = ActorCriticAI(env, lr=args.learning_rate, value_c=1.0, entropy_c=1e-2)
+        model = ActorCriticAI(env, lr=args.learning_rate, value_c=args.value_c, entropy_c=args.entropy_c)
         model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
 
         model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
