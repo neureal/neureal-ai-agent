@@ -12,56 +12,10 @@ import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
 import talib
 import gym, gym_trader
+import util
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
-
-
-def _print_time(t):
-    days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
-    return "{:4d}:{:02d}:{:02d}:{:02d}".format(days,hours,mins,secs)
-
-@tf.function
-def fixinfnan(inputs, replace):
-    isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
-    return tf.where(isinfnan, replace, inputs)
-
-class EvoNormS0(tf.keras.layers.Layer):
-    def __init__(self, groups, eps=None, axis=-1, name=None):
-        super(EvoNormS0, self).__init__(name=name)
-        self.groups, self.axis = groups, axis
-        if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
-        self.eps = tf.constant(eps, dtype=self.compute_dtype)
-
-    def build(self, input_shape):
-        inlen = len(input_shape)
-        shape = [1] * inlen
-        shape[self.axis] = input_shape[self.axis]
-        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.keras.initializers.Ones())
-        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.keras.initializers.Zeros())
-        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.keras.initializers.Ones())
-
-        groups = min(input_shape[self.axis], self.groups)
-        self.group_shape = input_shape.as_list()
-        self.group_shape[self.axis] = input_shape[self.axis] // groups
-        self.group_shape.insert(self.axis, groups)
-        self.group_shape = tf.Variable(self.group_shape, trainable=False)
-
-        std_shape = list(range(1, inlen+self.axis))
-        std_shape.append(inlen)
-        self.std_shape = tf.constant(std_shape)
-
-    @tf.function
-    def call(self, inputs, training=True):
-        input_shape = tf.shape(inputs)
-        self.group_shape[0].assign(input_shape[0])
-        grouped_inputs = tf.reshape(inputs, self.group_shape)
-        _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
-        std = tf.sqrt(var + self.eps)
-        std = tf.broadcast_to(std, self.group_shape)
-        group_std = tf.reshape(std, input_shape)
-
-        return (inputs * tf.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
 
 
 class ActorCriticAI(tf.keras.Model):
@@ -69,9 +23,8 @@ class ActorCriticAI(tf.keras.Model):
         super().__init__('mlp_policy')
         # `gamma` is the discount factor; coefficients are used for the loss terms.
         self.gamma, self.value_c, self.entropy_c = tf.constant(gamma, dtype=self.compute_dtype), tf.constant(value_c, dtype=self.compute_dtype), tf.constant(entropy_c, dtype=self.compute_dtype)
-        self.float_max = tf.constant(tf.dtypes.as_dtype(self.compute_dtype).max, dtype=self.compute_dtype)
+        # self.float_max = tf.constant(tf.dtypes.as_dtype(self.compute_dtype).max, dtype=self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(tf.dtypes.as_dtype(self.compute_dtype).max), dtype=self.compute_dtype)
-        self.float_eps = tf.constant(tf.experimental.numpy.finfo(self.compute_dtype).eps, dtype=self.compute_dtype)
 
         self._optimizer = tf.keras.optimizers.Adam(lr=lr)
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
@@ -126,21 +79,21 @@ class ActorCriticAI(tf.keras.Model):
 
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
         self.layer_flatten = tf.keras.layers.Flatten()
-        # if not self.input_vec: self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(32), name='conv2d_in')
+        # if not self.input_vec: self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(32), name='conv2d_in')
 
         ## action network
-        # if not self.input_vec: self.layer_action_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(evo), name='action_conv2d_in')
-        self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=EvoNormS0(evo), use_bias=False, name='action_dense_in')
-        for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
+        # if not self.input_vec: self.layer_action_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='action_conv2d_in')
+        self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_in')
+        for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='action_lstm_{:02d}'.format(i)))
-        if not self.discrete: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='action_dense_cont')
+        if not self.discrete: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_cont')
         # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_deconv1d_logits_out')
         self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
 
         ## value network
-        # if not self.input_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=EvoNormS0(evo), name='value_conv2d_in')
+        # if not self.input_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='value_conv2d_in')
         self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
-        for i in range(self.net_DNN+2): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
+        for i in range(self.net_DNN+2): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='value_lstm_{:02d}'.format(i)))
         self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
 
@@ -218,14 +171,14 @@ class ActorCriticAI(tf.keras.Model):
             loss = -dist.log_prob(actions)
             entropy = dist.sample(self.num_components)
             entropy = -dist.log_prob(entropy)
-            # entropy = fixinfnan(entropy, self.float_maxroot)
+            # entropy = util.replace_infnan(entropy, self.float_maxroot)
             entropy = tf.reduce_mean(entropy, axis=0)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
         # We want to minimize policy and maximize entropy losses.
         # Here signs are flipped because the optimizer minimizes.
         loss = loss - entropy * self.entropy_c
-        loss = fixinfnan(loss, self.float_maxroot)
+        loss = util.replace_infnan(loss, self.float_maxroot)
         return loss # shape = (batch size,)
 
     # loss_fn = tf.keras.losses.MeanSquaredError(reduction=tf.keras.losses.Reduction.NONE)
@@ -345,7 +298,7 @@ class AgentA2C:
                     t_sim_epi = np.mean(next_obs[0]) - t_sim_epi_start
                     epi_sim_times.append(t_sim_epi / 60)
                     loss_total.append(loss_total_cur); loss_action.append(loss_action_cur); loss_value.append(loss_value_cur)
-                    print("DONE episode #{:03d}  {} sim-epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, _print_time(t_sim_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
+                    print("DONE episode #{:03d}  {} sim-epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, util.print_time(t_sim_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
                     # TODO train/update after every done
                     if update >= updates-1: finished = True; break
                     epi_total_rewards.append(0.0)
@@ -441,7 +394,7 @@ if __name__ == '__main__':
         # reward_test = agent.test(env, args.render)
         # print("Test Total Episode Reward: {}".format(reward_test))
 
-        fmt = (_print_time(t_real_total),_print_time(t_sim_total),_print_time(t_avg_sim_epi),t_avg_step,(t_sim_total/86400)/(t_real_total/3600),(t_sim_total/86400)/(t_real_total/86400))
+        fmt = (util.print_time(t_real_total),util.print_time(t_sim_total),util.print_time(t_avg_sim_epi),t_avg_step,(t_sim_total/86400)/(t_real_total/3600),(t_sim_total/86400)/(t_real_total/86400))
         info = "runtime: {} real {} sim    | avg-time: {} sim-episode {:12.8f} real-step    |   {:.3f} sim-days/hour  {:.3f} sim-days/day".format(*fmt); print(info)
         argsinfo = "batch_size:{}   num_updates:{}   learning_rate:{}   loaded_model:{}".format(args.batch_size,args.num_updates,args.learning_rate, loaded_model); print(argsinfo)
 
