@@ -30,45 +30,47 @@ class ActorCriticAI(tf.keras.Model):
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
 
 
-        self.num_components = 16
+        self.action_num_components = 16
+        self.action_params_size, self.action_dist, self.action_is_discrete = 0, {}, True
+        # self.action_params_size, self.action_dist, self.action_is_discrete = util.gym_action_dist(env.action_space, dtype=self.compute_dtype, num_components=self.action_num_components)
         cat_dtype = tf.int32
-        self.params_size, self.dist_action, self.discrete = 0, {}, True
         if isinstance(env.action_space, gym.spaces.Discrete):
-            self.params_size = env.action_space.n
-            if env.action_space.n < 2: self.dist_action = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
-            else: self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+            self.action_params_size = env.action_space.n
+            if env.action_space.n < 2: self.action_dist = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
+            else: self.action_dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
         elif isinstance(env.action_space, gym.spaces.Box):
             event_shape = list(env.action_space.shape)
             event_size = np.prod(event_shape).item()
             if env.action_space.dtype == np.uint8:
-                self.params_size = event_size * 256
-                if event_size == 1: self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+                self.action_params_size = event_size * 256
+                if event_size == 1: self.action_dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
                 else:
                     params_shape = event_shape+[256]
-                    self.dist_action = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
+                    self.action_dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
                         tfp.distributions.Categorical(logits=tf.reshape(input, tf.concat([tf.shape(input)[:-1], params_shape], axis=0)), dtype=cat_dtype), reinterpreted_batch_ndims=len(event_shape)
                     ))
             elif env.action_space.dtype == np.float32 or env.action_space.dtype == np.float64:
                 if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
-                    # self.params_size = tfp.layers.MixtureSameFamily.params_size(self.num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-                    # self.dist_action = tfp.layers.MixtureSameFamily(self.num_components, tfp.layers.MultivariateNormalTriL(event_size))
-                    self.params_size = tfp.layers.MixtureLogistic.params_size(self.num_components, event_shape)
-                    self.dist_action = tfp.layers.MixtureLogistic(self.num_components, event_shape)
+                    # self.action_params_size = tfp.layers.MixtureSameFamily.params_size(self.action_num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
+                    # self.action_dist = tfp.layers.MixtureSameFamily(self.action_num_components, tfp.layers.MultivariateNormalTriL(event_size))
+                    self.action_params_size = tfp.layers.MixtureLogistic.params_size(self.action_num_components, event_shape)
+                    self.action_dist = tfp.layers.MixtureLogistic(self.action_num_components, event_shape)
                 else:
-                    self.params_size = tfp.layers.MixtureNormal.params_size(self.num_components, event_shape)
-                    self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
+                    self.action_params_size = tfp.layers.MixtureNormal.params_size(self.action_num_components, event_shape)
+                    self.action_dist = tfp.layers.MixtureNormal(self.action_num_components, event_shape)
                 # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
-                self.discrete = False
+                self.action_is_discrete = False
         # TODO expand to handle Tuple+Dict, make so discrete and continuous can be output at the same time
         # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
         elif isinstance(env.action_space, gym.spaces.Tuple):
             for space in env.action_space.spaces:
-                self.params_size += space.n
+                self.action_params_size += space.n
                 print(space)
             quit(0)
 
         # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
-        self.input_vec = (len(env.observation_space.shape) == 1)
+        self.obs_is_vec = (len(env.observation_space.shape) == 1)
+        # self.obs_is_vec = util.gym_obs_embed(env.observation_space)
 
         self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
@@ -78,23 +80,23 @@ class ActorCriticAI(tf.keras.Model):
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 1024, 512, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 6, 6, 2048, 1024, 32
-        self.net_arch = "{}inD{}-{:02d}D{}-{:02d}LS{}-out{}".format('' if self.input_vec else 'Conv2D-', inp, self.net_DNN, mid, self.net_LSTM, mid, 'D' if self.discrete else 'Cont'+str(self.num_components))
+        self.net_arch = "{}inD{}-{:02d}D{}-{:02d}LS{}-out{}".format('' if self.obs_is_vec else 'Conv2D-', inp, self.net_DNN, mid, self.net_LSTM, mid, 'D' if self.action_is_discrete else 'Cont'+str(self.action_num_components))
 
         self.layer_action_dense, self.layer_action_lstm, self.layer_value_dense, self.layer_value_lstm = [], [], [], []
         self.layer_flatten = tf.keras.layers.Flatten()
-        # if not self.input_vec: self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(32), name='conv2d_in')
+        # if not self.obs_is_vec: self.layer_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(32), name='conv2d_in')
 
         ## action network
-        # if not self.input_vec: self.layer_action_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='action_conv2d_in')
+        # if not self.obs_is_vec: self.layer_action_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='action_conv2d_in')
         self.layer_action_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_in')
         for i in range(self.net_DNN): self.layer_action_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_action_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='action_lstm_{:02d}'.format(i)))
-        if not self.discrete: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_cont')
-        # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.params_size/4, 4, name='action_deconv1d_logits_out')
-        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.params_size, name='action_dense_logits_out')
+        if not self.action_is_discrete: self.layer_action_dense_cont = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='action_dense_cont')
+        # self.layer_action_deconv1d_logits_out = tf.keras.layers.Conv1DTranspose(self.action_params_size/4, 4, name='action_deconv1d_logits_out')
+        self.layer_action_dense_logits_out = tf.keras.layers.Dense(self.action_params_size, name='action_dense_logits_out')
 
         ## value network
-        # if not self.input_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='value_conv2d_in')
+        # if not self.obs_is_vec: self.layer_value_conv2d_in = tf.keras.layers.Conv2D(filters=16, kernel_size=(3, 3), activation=util.EvoNormS0(evo), name='value_conv2d_in')
         self.layer_value_dense_in = tf.keras.layers.Dense(inp, use_bias=False, name='value_dense_in')
         for i in range(self.net_DNN+2): self.layer_value_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='value_dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_value_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='value_lstm_{:02d}'.format(i)))
@@ -109,14 +111,14 @@ class ActorCriticAI(tf.keras.Model):
     @tf.function
     def call(self, inputs, training=None):
         print("tracing -> call")
-        if not self.input_vec: inputs = self.layer_flatten(inputs)
-        # if not self.input_vec:
+        if not self.obs_is_vec: inputs = self.layer_flatten(inputs)
+        # if not self.obs_is_vec:
         #     inputs = self.layer_conv2d_in(inputs)
         #     inputs = self.layer_flatten(inputs)
 
         ## action network
         action = self.layer_action_dense_in(inputs)
-        # if self.input_vec:
+        # if self.obs_is_vec:
         #     action = self.layer_action_dense_in(inputs)
         # else:
         #     action = self.layer_action_conv2d_in(inputs)
@@ -124,16 +126,16 @@ class ActorCriticAI(tf.keras.Model):
         #     action = self.layer_action_dense_in(action)
         for i in range(self.net_DNN): action = self.layer_action_dense[i](action)
         for i in range(self.net_LSTM): action = tf.squeeze(self.layer_action_lstm[i](tf.expand_dims(action, axis=0)), axis=0)
-        if not self.discrete: action = self.layer_action_dense_cont(action)
+        if not self.action_is_discrete: action = self.layer_action_dense_cont(action)
         action = self.layer_action_dense_logits_out(action)
         # batch_size = inputs.shape[0]
         # action = tf.expand_dims(action, axis=1)
         # action = self.layer_deconv1d_logits_out(action)
-        # action = tf.reshape(action, (batch_size, self.params_size))
+        # action = tf.reshape(action, (batch_size, self.action_params_size))
 
         ## value network
         value = self.layer_value_dense_in(inputs)
-        # if self.input_vec:
+        # if self.obs_is_vec:
         #     value = self.layer_value_dense_in(inputs)
         # else:
         #     value = self.layer_value_conv2d_in(inputs)
@@ -164,16 +166,16 @@ class ActorCriticAI(tf.keras.Model):
         return returns, advantages
 
     def _loss_action(self, actions, action_logits, advantages): # targets, output (layer_action_dense_logits_out, returns - values)
-        dist = self.dist_action(action_logits)
+        dist = self.action_dist(action_logits)
         # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector)
         actions = tf.cast(actions, dtype=dist.dtype)
         if dist.event_shape.rank == 0: actions = tf.squeeze(actions, axis=-1)
-        if self.discrete:
+        if self.action_is_discrete:
             loss = -dist.log_prob(actions)
             entropy = dist.entropy()
         else:
             loss = -dist.log_prob(actions)
-            entropy = dist.sample(self.num_components)
+            entropy = dist.sample(self.action_num_components)
             entropy = -dist.log_prob(entropy)
             # entropy = util.replace_infnan(entropy, self.float_maxroot)
             entropy = tf.reduce_mean(entropy, axis=0)
@@ -248,12 +250,12 @@ class ActorCriticAI(tf.keras.Model):
     @tf.function
     def _action_value(self, inputs):
         action_logits, value = self(inputs)
-        dist = self.dist_action(action_logits)
+        dist = self.action_dist(action_logits)
         # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector) # doesn't sample with float64
         action = dist.sample()
 
         # action = {}
-        # for name, dist in self.dist_action:
+        # for name, dist in self.action_dist:
         #     dist = dist(action_logits[])
         #     action[name] = tf.squeeze(dist.sample())
 
