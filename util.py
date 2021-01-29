@@ -1,5 +1,15 @@
+import numpy as np
 import tensorflow as tf
+import gym
 
+# TODO put this in "wilutil" library
+
+def gym_flatten(self, space, x, dtype=np.float32):
+    if isinstance(space, gym.spaces.Tuple): return np.concatenate([self._flatten(s, x_part, dtype) for x_part, s in zip(x, space.spaces)])
+    elif isinstance(space, gym.spaces.Dict): return np.concatenate([self._flatten(s, x[key], dtype) for key, s in space.spaces.items()])
+    elif isinstance(space, gym.spaces.Discrete):
+        onehot = np.zeros(space.n, dtype=dtype); onehot[x] = 1.0; return onehot
+    else: return np.asarray(x, dtype=dtype).flatten()
 
 def print_time(t):
     days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
@@ -37,7 +47,7 @@ class EvoNormS0(tf.keras.layers.Layer):
     @tf.function
     def call(self, inputs, training=True):
         input_shape = tf.shape(inputs)
-        self.group_shape[0].assign(input_shape[0])
+        self.group_shape[0].assign(input_shape[0]) # use same learned parameters with different batch size
         grouped_inputs = tf.reshape(inputs, self.group_shape)
         _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
         std = tf.sqrt(var + self.eps)

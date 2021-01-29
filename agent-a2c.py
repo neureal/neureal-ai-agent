@@ -32,7 +32,7 @@ class ActorCriticAI(tf.keras.Model):
 
         self.num_components = 16
         cat_dtype = tf.int32
-        self.discrete = True
+        self.params_size, self.dist_action, self.discrete = 0, {}, True
         if isinstance(env.action_space, gym.spaces.Discrete):
             self.params_size = env.action_space.n
             if env.action_space.n < 2: self.dist_action = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
@@ -59,10 +59,13 @@ class ActorCriticAI(tf.keras.Model):
                     self.dist_action = tfp.layers.MixtureNormal(self.num_components, event_shape)
                 # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
                 self.discrete = False
-        else:
-            # TODO expand to handle Dict, make so discrete and continuous can be output at the same time
-            # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
-            return
+        # TODO expand to handle Tuple+Dict, make so discrete and continuous can be output at the same time
+        # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
+        elif isinstance(env.action_space, gym.spaces.Tuple):
+            for space in env.action_space.spaces:
+                self.params_size += space.n
+                print(space)
+            quit(0)
 
         # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
         self.input_vec = (len(env.observation_space.shape) == 1)
@@ -98,13 +101,14 @@ class ActorCriticAI(tf.keras.Model):
         self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
 
         # pre build model
-        sample = tf.expand_dims(tf.convert_to_tensor(env.observation_space.sample()), 0)
-        action, value = self(sample)
+        sample = tf.convert_to_tensor([env.observation_space.sample()], dtype=self.compute_dtype)
+        # action, value = self(sample)
+        outputs = self(sample)
         self.reset_states() # needed because the previous call unnormally advances the state!
 
     @tf.function
     def call(self, inputs, training=None):
-        inputs = tf.cast(inputs, dtype=self.compute_dtype)
+        print("tracing -> call")
         if not self.input_vec: inputs = self.layer_flatten(inputs)
         # if not self.input_vec:
         #     inputs = self.layer_conv2d_in(inputs)
@@ -159,7 +163,7 @@ class ActorCriticAI(tf.keras.Model):
         # advantages = np.abs(advantages) # for MAE, could be np.square() for MSE
         return returns, advantages
 
-    def _loss_action(self, actions, advantages, action_logits): # targets, output (acts_and_advs, layer_action_dense_logits_out)
+    def _loss_action(self, actions, action_logits, advantages): # targets, output (layer_action_dense_logits_out, returns - values)
         dist = self.dist_action(action_logits)
         # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector)
         actions = tf.cast(actions, dtype=dist.dtype)
@@ -197,7 +201,8 @@ class ActorCriticAI(tf.keras.Model):
     @tf.function
     # def train(self, inputs, actions, returns, advantages, dones):
     # def train(self, inputs, actions, returns, advantages):
-    def train(self, inputs, actions, returns):
+    def _train(self, inputs, actions, returns):
+        print("tracing -> _train")
         self.reset_states()
         with tf.GradientTape() as tape:
             action_logits, values = self(inputs, training=True) # redundant, but needed to be able to calculate the gradients backwards
@@ -208,7 +213,7 @@ class ActorCriticAI(tf.keras.Model):
             # isneg = tf.math.equal(tf.math.sign(advantages),-1.0)
             # advantages = tf.where(isneg, advantages*-1.0, advantages)
 
-            loss_action = self._loss_action(actions, advantages, action_logits)
+            loss_action = self._loss_action(actions, action_logits, advantages)
             # loss_value = self._loss_value(returns, values) # redundant, but needed to be able to calculate the gradients backwards
             # loss_value = self._loss_value(returns, new_values, advantages)
             loss_value = self._loss_value(advantages)
@@ -232,6 +237,13 @@ class ActorCriticAI(tf.keras.Model):
 
         return tf.reduce_mean(loss_total), tf.reduce_mean(loss_action), tf.reduce_mean(loss_value)
 
+    def train(self, obs, actions, returns):
+        obs = tf.convert_to_tensor(obs, dtype=self.compute_dtype)
+        actions = tf.convert_to_tensor(actions)
+        returns = tf.convert_to_tensor(returns, dtype=self.compute_dtype)
+        loss_total_cur, loss_action_cur, loss_value_cur = self._train(obs, actions, returns)
+        return loss_total_cur.numpy(), loss_action_cur.numpy(), loss_value_cur.numpy()
+
 
     @tf.function
     def _action_value(self, inputs):
@@ -240,14 +252,17 @@ class ActorCriticAI(tf.keras.Model):
         # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector) # doesn't sample with float64
         action = dist.sample()
 
-        action, value = tf.squeeze(action), tf.squeeze(value) # get rid of single batch
+        # action = {}
+        # for name, dist in self.dist_action:
+        #     dist = dist(action_logits[])
+        #     action[name] = tf.squeeze(dist.sample())
+
         return action, value
 
     def action_value(self, obs):
-        obs = tf.expand_dims(tf.convert_to_tensor(obs), 0) # add single batch
-        # obs = tf.convert_to_tensor(obs[None, :]))
+        obs = tf.convert_to_tensor([obs], dtype=self.compute_dtype) # add single batch
         action, value = self._action_value(obs)
-        action, value = action.numpy(), value.numpy()
+        action, value = action.numpy().squeeze(), value.numpy().squeeze() # get rid of single batch
         # print("action {} value {}".format(action, value))
         return action, value
 
@@ -318,7 +333,6 @@ class AgentA2C:
             # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns, advantages, dones)
             # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns, advantages)
             loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns)
-            loss_total_cur, loss_action_cur, loss_value_cur = loss_total_cur.numpy(), loss_action_cur.numpy(), loss_value_cur.numpy()
 
             print("---> update [{:03d}/{:03d}]                                                                                            {:16.8f} loss_total {:16.8f} loss_action {:16.8f} loss_value".format(update, updates, loss_total_cur, loss_action_cur, loss_value_cur))
             # print("---> update [{:03d}/{:03d}]  {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} last-reward  {:16.8f} loss_total {:16.8f} loss_action {:16.8f} loss_value".format(update, updates, epi_total_rewards[-1], epi_avg_reward, np.expm1(rewards[step]), loss_total_cur, loss_action_cur, loss_value_cur))
@@ -361,7 +375,7 @@ import envs_local.bipedal_walker as env_bipedal_walker
 import envs_local.car_racing as env_car_racing
 
 if __name__ == '__main__':
-    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                                   # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0
+    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                                   # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0 # obs return float64 even though specs say float32?!?
     # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                             # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
     env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"               # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
     # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
@@ -374,7 +388,8 @@ if __name__ == '__main__':
     # env, model_name = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4"              # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
     # env, model_name = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4"        # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
     # env, model_name = gym.make('PitfallNoFrameskip-v4'), "gym-A2C-PitfallNoFrameskip-v4"            # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevengeNoFrameskip-v4" # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevenge-v4"     # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name = gym.make('ReversedAddition3-v0'), "gym-A2C-ReversedAddition3"                 # Discrete(4)                       Tuple(Dis(4),Dis(2),Dis(3))
     # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
 
     # env.seed(0)
@@ -386,6 +401,7 @@ if __name__ == '__main__':
         if tf.io.gfile.exists(model_file):
             model.load_weights(model_file, by_name=True, skip_mismatch=True)
             print("LOADED model weights from {}".format(model_file)); loaded_model = True
+        # print(model.call.pretty_printed_concrete_signatures()); quit(0)
         # model.summary(); quit(0)
 
         agent = AgentA2C(model)
