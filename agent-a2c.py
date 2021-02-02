@@ -25,54 +25,19 @@ class ActorCriticAI(tf.keras.Model):
         self.gamma, self.value_c, self.entropy_c = tf.constant(gamma, dtype=self.compute_dtype), tf.constant(value_c, dtype=self.compute_dtype), tf.constant(entropy_c, dtype=self.compute_dtype)
         # self.float_max = tf.constant(tf.dtypes.as_dtype(self.compute_dtype).max, dtype=self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(tf.dtypes.as_dtype(self.compute_dtype).max), dtype=self.compute_dtype)
+        self.float_eps = tf.constant(tf.experimental.numpy.finfo(self.compute_dtype).eps, dtype=self.compute_dtype)
 
         self._optimizer = tf.keras.optimizers.Adam(lr=lr)
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
 
 
         self.action_num_components = 16
-        self.action_params_size, self.action_dist, self.action_is_discrete = 0, {}, True
-        # self.action_params_size, self.action_dist, self.action_is_discrete = util.gym_action_dist(env.action_space, dtype=self.compute_dtype, num_components=self.action_num_components)
-        cat_dtype = tf.int32
-        if isinstance(env.action_space, gym.spaces.Discrete):
-            self.action_params_size = env.action_space.n
-            if env.action_space.n < 2: self.action_dist = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
-            else: self.action_dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
-        elif isinstance(env.action_space, gym.spaces.Box):
-            event_shape = list(env.action_space.shape)
-            event_size = np.prod(event_shape).item()
-            if env.action_space.dtype == np.uint8:
-                self.action_params_size = event_size * 256
-                if event_size == 1: self.action_dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
-                else:
-                    params_shape = event_shape+[256]
-                    self.action_dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
-                        tfp.distributions.Categorical(logits=tf.reshape(input, tf.concat([tf.shape(input)[:-1], params_shape], axis=0)), dtype=cat_dtype), reinterpreted_batch_ndims=len(event_shape)
-                    ))
-            elif env.action_space.dtype == np.float32 or env.action_space.dtype == np.float64:
-                if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
-                    # self.action_params_size = tfp.layers.MixtureSameFamily.params_size(self.action_num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-                    # self.action_dist = tfp.layers.MixtureSameFamily(self.action_num_components, tfp.layers.MultivariateNormalTriL(event_size))
-                    self.action_params_size = tfp.layers.MixtureLogistic.params_size(self.action_num_components, event_shape)
-                    self.action_dist = tfp.layers.MixtureLogistic(self.action_num_components, event_shape)
-                else:
-                    self.action_params_size = tfp.layers.MixtureNormal.params_size(self.action_num_components, event_shape)
-                    self.action_dist = tfp.layers.MixtureNormal(self.action_num_components, event_shape)
-                # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
-                self.action_is_discrete = False
-        # TODO expand to handle Tuple+Dict, make so discrete and continuous can be output at the same time
-        # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
-        elif isinstance(env.action_space, gym.spaces.Tuple):
-            for space in env.action_space.spaces:
-                self.action_params_size += space.n
-                print(space)
-            quit(0)
+        self.action_params_size, self.action_is_discrete, self.action_dist = util.gym_action_dist(env.action_space, dtype=self.compute_dtype, num_components=self.action_num_components)
 
-        # TODO expand the Dict of observation types (env.observation_space) to auto make input networks
-        self.obs_is_vec = (len(env.observation_space.shape) == 1)
-        # self.obs_is_vec = util.gym_obs_embed(env.observation_space)
+        self.obs_is_vec, self.obs_sample = util.gym_obs_embed(env.observation_space, dtype=self.compute_dtype)
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 128, 64, 16
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 8, 1, 4096, 2048, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
@@ -103,14 +68,11 @@ class ActorCriticAI(tf.keras.Model):
         self.layer_value_dense_out = tf.keras.layers.Dense(1, name='value_dense_out')
 
         # pre build model
-        sample = tf.convert_to_tensor([env.observation_space.sample()], dtype=self.compute_dtype)
-        # action, value = self(sample)
-        outputs = self(sample)
+        outputs = self(self.obs_sample)
         self.reset_states() # needed because the previous call unnormally advances the state!
 
     @tf.function
     def call(self, inputs, training=None):
-        print("tracing -> call")
         if not self.obs_is_vec: inputs = self.layer_flatten(inputs)
         # if not self.obs_is_vec:
         #     inputs = self.layer_conv2d_in(inputs)
@@ -128,10 +90,10 @@ class ActorCriticAI(tf.keras.Model):
         for i in range(self.net_LSTM): action = tf.squeeze(self.layer_action_lstm[i](tf.expand_dims(action, axis=0)), axis=0)
         if not self.action_is_discrete: action = self.layer_action_dense_cont(action)
         action = self.layer_action_dense_logits_out(action)
-        # batch_size = inputs.shape[0]
+        # batch_sz = inputs.shape[0]
         # action = tf.expand_dims(action, axis=1)
         # action = self.layer_deconv1d_logits_out(action)
-        # action = tf.reshape(action, (batch_size, self.action_params_size))
+        # action = tf.reshape(action, (batch_sz, self.action_params_size))
 
         ## value network
         value = self.layer_value_dense_in(inputs)
@@ -145,6 +107,7 @@ class ActorCriticAI(tf.keras.Model):
         for i in range(self.net_LSTM): value = tf.squeeze(self.layer_value_lstm[i](tf.expand_dims(value, axis=0)), axis=0)
         value = self.layer_value_dense_out(value)
 
+        print("tracing -> call")
         return action, value
 
     # TODO convert to tf graph? or share this processing with CPU
@@ -161,26 +124,24 @@ class ActorCriticAI(tf.keras.Model):
         returns = returns[:-1]
 
         # Advantages are equal to returns - baseline (value estimates in our case).
-        advantages = returns - values
+        # advantages = returns - values
         # advantages = np.abs(advantages) # for MAE, could be np.square() for MSE
-        return returns, advantages
+        # return returns, advantages
+        return returns
 
-    def _loss_action(self, actions, action_logits, advantages): # targets, output (layer_action_dense_logits_out, returns - values)
-        dist = self.action_dist(action_logits)
-        # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector)
-        actions = tf.cast(actions, dtype=dist.dtype)
-        if dist.event_shape.rank == 0: actions = tf.squeeze(actions, axis=-1)
-        if self.action_is_discrete:
-            loss = -dist.log_prob(actions)
-            entropy = dist.entropy()
-        else:
-            loss = -dist.log_prob(actions)
-            entropy = dist.sample(self.action_num_components)
-            entropy = -dist.log_prob(entropy)
-            # entropy = util.replace_infnan(entropy, self.float_maxroot)
-            entropy = tf.reduce_mean(entropy, axis=0)
+    def _loss_action(self, action_logits, actions, advantages): # layer_action_dense_logits_out, targets, returns - values
+        loss, entropy = util.dist_loss_entropy(self.action_dist, action_logits, actions, self.action_is_discrete, self.action_num_components)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
+        # loss = loss - returns
+        # loss = tf.math.square(loss)
+
+        # # PPO
+        # self.clip_pram = 0.2
+        # loss_alt = tf.clip_by_value(loss, 1.0 - self.clip_pram, 1.0 + self.clip_pram)
+        # loss_alt = tf.math.multiply(loss_alt, advantages)
+        # loss = tf.math.minimum(loss, loss_alt)
+
         # We want to minimize policy and maximize entropy losses.
         # Here signs are flipped because the optimizer minimizes.
         loss = loss - entropy * self.entropy_c
@@ -198,13 +159,15 @@ class ActorCriticAI(tf.keras.Model):
         # loss_value = tf.math.square(advantages)
         # loss_value = loss_value * self.value_c
         loss_value = tf.math.square(advantages) * self.value_c
+        # loss_value = tf.math.abs(advantages) * self.value_c # TODO try this when works in tf
         return loss_value # shape = (batch size,)
 
     @tf.function
     # def train(self, inputs, actions, returns, advantages, dones):
     # def train(self, inputs, actions, returns, advantages):
     def _train(self, inputs, actions, returns):
-        print("tracing -> _train")
+        returns = ((returns - tf.math.reduce_mean(returns)) / (tf.math.reduce_std(returns) + self.float_eps))
+        # returns = tf.math.sigmoid(returns)
         self.reset_states()
         with tf.GradientTape() as tape:
             action_logits, values = self(inputs, training=True) # redundant, but needed to be able to calculate the gradients backwards
@@ -215,7 +178,7 @@ class ActorCriticAI(tf.keras.Model):
             # isneg = tf.math.equal(tf.math.sign(advantages),-1.0)
             # advantages = tf.where(isneg, advantages*-1.0, advantages)
 
-            loss_action = self._loss_action(actions, action_logits, advantages)
+            loss_action = self._loss_action(action_logits, actions, advantages)
             # loss_value = self._loss_value(returns, values) # redundant, but needed to be able to calculate the gradients backwards
             # loss_value = self._loss_value(returns, new_values, advantages)
             loss_value = self._loss_value(advantages)
@@ -224,24 +187,12 @@ class ActorCriticAI(tf.keras.Model):
         self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
         self.reset_states()
 
-        # # ??? loop through timesteps instead of batch so can keep batch size = 1 with LSTM and take out return_sequences=True, add self.reset_states() on episode end
-        # # TODO save state and reset state here, then restore state before leaving
-        # batch_size = inputs.shape[0]
-        # for i in tf.range(batch_size):
-        #     with tf.GradientTape() as tape:
-        #         action_logits, value = self(inputs[None, i], training=True)
-        #         loss_action = self._loss_action(actions[None, i], advantages[None, i], action_logits)
-        #         loss_value = self._loss_value(returns[None, i], value)
-        #         loss_total = loss_action + loss_value
-        #     gradients = tape.gradient(loss_total, self.trainable_variables)
-        #     self._optimizer.apply_gradients(zip(gradients, self.trainable_variables))
-        #     if dones[i]: self.reset_states()
-
+        print("tracing -> _train")
         return tf.reduce_mean(loss_total), tf.reduce_mean(loss_action), tf.reduce_mean(loss_value)
 
     def train(self, obs, actions, returns):
-        obs = tf.convert_to_tensor(obs, dtype=self.compute_dtype)
-        actions = tf.convert_to_tensor(actions)
+        obs = util.np_to_tf(obs, dtype=self.compute_dtype)
+        actions = util.np_to_tf(actions)
         returns = tf.convert_to_tensor(returns, dtype=self.compute_dtype)
         loss_total_cur, loss_action_cur, loss_value_cur = self._train(obs, actions, returns)
         return loss_total_cur.numpy(), loss_action_cur.numpy(), loss_value_cur.numpy()
@@ -250,21 +201,14 @@ class ActorCriticAI(tf.keras.Model):
     @tf.function
     def _action_value(self, inputs):
         action_logits, value = self(inputs)
-        dist = self.action_dist(action_logits)
-        # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector) # doesn't sample with float64
-        action = dist.sample()
-
-        # action = {}
-        # for name, dist in self.action_dist:
-        #     dist = dist(action_logits[])
-        #     action[name] = tf.squeeze(dist.sample())
-
-        return action, value
+        action = util.dist_sample(self.action_dist, action_logits)
+        print("tracing -> _action_value")
+        return action, tf.squeeze(value)
 
     def action_value(self, obs):
         obs = tf.convert_to_tensor([obs], dtype=self.compute_dtype) # add single batch
         action, value = self._action_value(obs)
-        action, value = action.numpy().squeeze(), value.numpy().squeeze() # get rid of single batch
+        action, value = util.tf_to_np(action), util.tf_to_np(value)
         # print("action {} value {}".format(action, value))
         return action, value
 
@@ -274,32 +218,32 @@ class AgentA2C:
         self.model = model
 
     def train(self, env, render=False, batch_sz=64, updates=250):
-        if isinstance(env.action_space, gym.spaces.Discrete): action_shape = [1]
-        elif isinstance(env.action_space, gym.spaces.Box): action_shape = list(env.action_space.shape)
         # Storage helpers for a single batch of data.
-        observations = np.empty([batch_sz]+list(env.observation_space.shape), dtype=env.observation_space.dtype)
-        actions = np.empty([batch_sz]+action_shape, dtype=env.action_space.dtype)
-        values = np.empty((batch_sz,), dtype=model.compute_dtype)
-        rewards = np.empty((batch_sz,), dtype=model.compute_dtype)
-        dones = np.empty((batch_sz,), dtype=np.bool)
+        actions = util.gym_action_get_mem(env.action_space, batch_sz)
+        observations = util.gym_obs_get_mem(env.observation_space, batch_sz)
+        values = np.zeros((batch_sz,), dtype=model.compute_dtype)
+        rewards = np.zeros((batch_sz,), dtype=model.compute_dtype)
+        dones = np.zeros((batch_sz,), dtype=np.bool)
 
         # Training loop: collect samples, send to optimizer, repeat updates times.
-        next_obs = env.reset()
+        next_obs = util.gym_obs_get(env.observation_space, env.reset())
         if render: env.render()
 
         loss_total, loss_action, loss_value, loss_total_cur, loss_action_cur, loss_value_cur = [], [], [], 0.0, 0.0, 0.0
-        epi_total_rewards, epi_steps, epi_avg_reward, epi_end_reward, epi_avg_rewards, epi_end_rewards, epi_sim_times = [0.0], 0, 0, 0, [], [], []
+        epi_total_rewards, epi_steps, epi_avg_reward, epi_end_reward, epi_avg_rewards, epi_end_rewards = [0.0], 0, 0, 0, [], []
         update, finished, early_quit = 0, False, False
-        t_real_start, t_sim_total, t_sim_epi_start  = time.time(), 0.0, np.mean(next_obs[0])
+        t_total, t_epi_times, t_epi_start = 0.0, [], time.time()
         steps_total, t_steps_total = 0, 0.0
 
         while update < updates or not finished:
             for step in range(batch_sz):
-                observations[step] = next_obs.copy()
-                actions[step], values[step] = self.model.action_value(next_obs)
+                util.update_mem(observations, step, next_obs)
+                action, values[step] = self.model.action_value(next_obs)
+                util.update_mem(actions, step, action)
                 
                 step_time_start = time.perf_counter_ns()
-                next_obs, rewards[step], dones[step], _ = env.step(np.squeeze(actions[step]))
+                next_obs, rewards[step], dones[step], _ = env.step(action)
+                next_obs = util.gym_obs_get(env.observation_space, next_obs)
                 t_steps_total += (time.perf_counter_ns() - step_time_start) / 1e9 # seconds
                 steps_total += 1
                 if render:
@@ -312,25 +256,26 @@ class AgentA2C:
                     epi_end_rewards.append(epi_end_reward)
                     epi_avg_reward = np.expm1(epi_total_rewards[-1] / epi_steps)
                     epi_avg_rewards.append(epi_avg_reward)
-                    t_sim_epi = np.mean(next_obs[0]) - t_sim_epi_start
-                    epi_sim_times.append(t_sim_epi / 60)
+                    t_epi = time.time() - t_epi_start
+                    t_epi_times.append(t_epi / 60)
                     loss_total.append(loss_total_cur); loss_action.append(loss_action_cur); loss_value.append(loss_value_cur)
-                    print("DONE episode #{:03d}  {} sim-epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, util.print_time(t_sim_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
+                    print("DONE episode #{:03d}  {} epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, util.print_time(t_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
                     # TODO train/update after every done
                     if update >= updates-1: finished = True; break
                     epi_total_rewards.append(0.0)
                     epi_steps = 0
-                    t_sim_total += t_sim_epi
+                    t_total += t_epi
 
-                    next_obs = env.reset()
+                    next_obs = util.gym_obs_get(env.observation_space, env.reset())
                     if render: env.render()
-                    t_sim_epi_start = np.mean(next_obs[0])
+                    t_epi_start = time.time()
             if early_quit: break
 
             self.model.reset_states() # needed because otherwise this next call unnormally advances the state, ineffecient!
             _, next_value = self.model.action_value(next_obs)
             # returns ~ [7,6,5,4,3,2,1,0] for reward = 1 per step, advantages = returns - values output
-            returns, advantages = self.model.calc_returns_advantages(rewards, dones, values, next_value)
+            # returns, advantages = self.model.calc_returns_advantages(rewards, dones, values, next_value)
+            returns = self.model.calc_returns_advantages(rewards, dones, values, next_value)
 
             # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns, advantages, dones)
             # loss_total_cur, loss_action_cur, loss_value_cur = self.model.train(observations, actions, returns, advantages)
@@ -341,58 +286,58 @@ class AgentA2C:
             update += 1
 
         epi_num = len(epi_end_rewards)
-        t_sim_total += np.mean(next_obs[0]) - t_sim_epi_start
-        t_avg_sim_epi = (t_sim_total / epi_num) if epi_num > 0 else 0
+        t_total += time.time() - t_epi_start
+        t_avg_epi = (t_total / epi_num) if epi_num > 0 else 0.0
+        t_avg_step = (t_steps_total / steps_total) if steps_total > 0 else 0.0
 
-        t_real_total = time.time() - t_real_start
-        t_avg_step = (t_steps_total / steps_total) if steps_total > 0 else 0
+        return epi_num, np.asarray(epi_total_rewards), np.asarray(epi_end_rewards), np.asarray(epi_avg_rewards), np.asarray(t_epi_times), t_total, t_avg_epi, t_avg_step, np.asarray(loss_total), np.asarray(loss_action), np.asarray(loss_value)
 
-        return epi_num, np.asarray(epi_total_rewards), np.asarray(epi_end_rewards), np.asarray(epi_avg_rewards), np.asarray(epi_sim_times), t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step, np.asarray(loss_total), np.asarray(loss_action), np.asarray(loss_value)
-
-    def test(self, env, render=False):
-        obs, done, ep_reward = env.reset(), False, 0
-        if render: env.render()
-        while not done:
-            action, _ = self.model.action_value(obs)
-            obs, reward, done, _ = env.step(action)
-            if render: env.render()
-            ep_reward += reward
-        return ep_reward
+    # def test(self, env, render=False):
+    #     obs, done, ep_reward = env.reset(), False, 0
+    #     if render: env.render()
+    #     while not done:
+    #         action, _ = self.model.action_value(obs)
+    #         obs, reward, done, _ = env.step(action)
+    #         if render: env.render()
+    #         ep_reward += reward
+    #     return ep_reward
 
 
 
 class Args(): pass
 args = Args()
-args.batch_size = 1024 # about 1.5 hrs @ 1000.0 speed
-args.num_updates = 10 # roughly batch_size * num_updates = total steps, unless last episode is long
+args.num_updates = 1000 # roughly batch_sz * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
-args.value_c = 0.9 # scaler for value loss contribution
-args.entropy_c = 1e-4 # scaler for entropy loss contribution
+args.entropy_c = 1e-8 # scaler for entropy loss contribution
+args.value_c = 1.0 # scaler for value loss contribution
 args.render = False
 args.plot_results = True
 
 machine, device = 'dev', 0
 
-import envs_local.bipedal_walker as env_bipedal_walker
-import envs_local.car_racing as env_car_racing
-
+# import envs_local.bipedal_walker as env_bipedal_walker
+# import envs_local.car_racing as env_car_racing
 if __name__ == '__main__':
-    # env, model_name = gym.make('CartPole-v0'), "gym-A2C-CartPole"                                   # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0 # obs return float64 even though specs say float32?!?
-    # env, model_name = gym.make('LunarLander-v2'), "gym-A2C-LunarLander"                             # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
-    env, model_name = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont"               # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
-    # env, model_name = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker"                         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker"                   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore"         # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = env_bipedal_walker.BipedalWalkerHardcore(), "gym-A2C-BipedalWalkerHardcore"   # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name = gym.make('CarRacing-v0'), "gym-A2C-CarRacing"                                 # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
-    # env, model_name = env_car_racing.CarRacing(), "gym-A2C-CarRacing"                               # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
-    # env, model_name = gym.make('QbertNoFrameskip-v4'), "gym-A2C-QbertNoFrameskip-v4"                # Box((210,160,3),0:255,uint8)      Discrete(6)                   400000 100  None
-    # env, model_name = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4"              # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4"        # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name = gym.make('PitfallNoFrameskip-v4'), "gym-A2C-PitfallNoFrameskip-v4"            # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevenge-v4"     # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name = gym.make('ReversedAddition3-v0'), "gym-A2C-ReversedAddition3"                 # Discrete(4)                       Tuple(Dis(4),Dis(2),Dis(3))
-    # env, model_name = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2"
+    trader = False
+    # env, model_name, batch_sz, maxt = gym.make('CartPole-v0'), "gym-A2C-CartPole", 256, 0.05                                       # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0 # obs return float64 even though specs say float32?!?
+    # env, model_name, batch_sz, maxt = gym.make('MountainCar-v0'), "gym-A2C-MountainCar", 1024, 0.05                                # Box((2),-1.2:0.6,float32)         Discrete(3)
+    # env, model_name, batch_sz, maxt = gym.make('MountainCarContinuous-v0'), "gym-A2C-MountainCarContinuous", 256, 0.05             # Box((2),-1.2:0.6,float32)         Box((1),-1.0:1.0,float32)
+    # env, model_name, batch_sz, maxt = gym.make('LunarLander-v2'), "gym-A2C-LunarLander", 1024, 0.2                                 # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
+    # env, model_name, batch_sz, maxt = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont", 1024, 0.2                   # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
+    # env, model_name, batch_sz, maxt = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker", 256, 1.0                              # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, maxt = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker", 256, 1.0                        # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, maxt = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore", 256, 1.0              # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, maxt = env_bipedal_walker.BipedalWalkerHardcore(), "gym-A2C-BipedalWalkerHardcore", 256, 1.0        # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, maxt = gym.make('CarRacing-v0'), "gym-A2C-CarRacing", 256, 1.0                                      # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
+    # env, model_name, batch_sz, maxt = env_car_racing.CarRacing(), "gym-A2C-CarRacing", 256, 1.0                                    # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
+    # env, model_name, batch_sz, maxt = gym.make('QbertNoFrameskip-v4'), "gym-A2C-QbertNoFrameskip-v4", 256, 1.0                     # Box((210,160,3),0:255,uint8)      Discrete(6)                   400000 100  None
+    # env, model_name, batch_sz, maxt = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4", 256, 1.0                   # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, maxt = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4", 256, 1.0             # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, maxt = gym.make('PitfallNoFrameskip-v4'), "gym-A2C-PitfallNoFrameskip-v4", 256, 1.0                 # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, maxt = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevenge-v4", 256, 1.0          # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    env, model_name, batch_sz, maxt = gym.make('Copy-v0'), "gym-A2C-Copy", 32, 0.01                                                # Discrete(6)                       Tuple(Dis(2),Dis(2),Dis(5))
+    # env, model_name, batch_sz, maxt = gym.make('ReversedAddition3-v0'), "gym-A2C-ReversedAddition3", 32, 0.01                      # Discrete(4)                       Tuple(Dis(4),Dis(2),Dis(3))
+    # env, model_name, batch_sz, maxt, trader = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2", 4096, 64.0, True
 
     # env.seed(0)
     with tf.device('/device:GPU:'+str(device)):
@@ -407,14 +352,14 @@ if __name__ == '__main__':
         # model.summary(); quit(0)
 
         agent = AgentA2C(model)
-        epi_num, epi_total_rewards, epi_end_rewards, epi_avg_rewards, epi_sim_times, t_sim_total, t_avg_sim_epi, t_real_total, t_avg_step, loss_total, loss_action, loss_value = agent.train(env, args.render, args.batch_size, args.num_updates)
+        epi_num, epi_total_rewards, epi_end_rewards, epi_avg_rewards, t_epi_times, t_total, t_avg_epi, t_avg_step, loss_total, loss_action, loss_value = agent.train(env, args.render, batch_sz, args.num_updates)
         print("\nFinished training")
         # reward_test = agent.test(env, args.render)
         # print("Test Total Episode Reward: {}".format(reward_test))
 
-        fmt = (util.print_time(t_real_total),util.print_time(t_sim_total),util.print_time(t_avg_sim_epi),t_avg_step,(t_sim_total/86400)/(t_real_total/3600),(t_sim_total/86400)/(t_real_total/86400))
-        info = "runtime: {} real {} sim    | avg-time: {} sim-episode {:12.8f} real-step    |   {:.3f} sim-days/hour  {:.3f} sim-days/day".format(*fmt); print(info)
-        argsinfo = "batch_size:{}   num_updates:{}   learning_rate:{}   loaded_model:{}".format(args.batch_size,args.num_updates,args.learning_rate, loaded_model); print(argsinfo)
+        fmt = (util.print_time(t_total),util.print_time(t_avg_epi),t_avg_step)
+        info = "total runtime: {}    | avg-episode: {}    avg-step: {:12.8f}".format(*fmt); print(info)
+        argsinfo = "batch_sz:{}   num_updates:{}   learning_rate:{}   entropy_c:{}   value_c:{}   loaded_model:{}".format(batch_sz,args.num_updates,args.learning_rate,args.entropy_c,args.value_c,loaded_model); print(argsinfo)
 
         if args.plot_results and epi_num > 1:
             name = model_name+time.strftime("-%Y_%m_%d-%H-%M")
@@ -422,8 +367,8 @@ if __name__ == '__main__':
             plt.figure(num=name, figsize=(24, 16), tight_layout=True); ax = []
 
             ax.insert(0, plt.subplot2grid((7, 1), (6, 0), rowspan=1))
-            plt.plot(xrng, epi_sim_times[::1], alpha=1.0, label='Sim Time')
-            ax[0].set_ylim(0,64)
+            plt.plot(xrng, t_epi_times[::1], alpha=1.0, label='Episode Time')
+            ax[0].set_ylim(0,maxt)
             plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
 
             ax.insert(0, plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax[-1]))
@@ -434,18 +379,17 @@ if __name__ == '__main__':
             plt.grid(axis='y',alpha=0.5)
             plt.xlabel('Episode'); plt.ylabel('Values'); plt.legend(loc='upper left')
 
-
             ax.insert(0, plt.subplot2grid((7, 1), (0, 0), rowspan=5, sharex=ax[-1]))
-
-            plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
-            epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
-            plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
-
-            # plt.plot(xrng, epi_avg_rewards[::1], alpha=0.2, label='Avg Reward')
-            # plt.plot(xrng, epi_end_rewards[::1], alpha=0.5, label='Final Reward')
-            # epi_end_rewards_ema = talib.EMA(epi_end_rewards, timeperiod=epi_num//10+2)
-            # plt.plot(xrng, epi_end_rewards_ema, alpha=0.8, label='Final Reward EMA')
-            # ax[0].set_ylim(0,30000)
+            if trader:
+                plt.plot(xrng, epi_avg_rewards[::1], alpha=0.2, label='Avg Reward')
+                plt.plot(xrng, epi_end_rewards[::1], alpha=0.5, label='Final Reward')
+                epi_end_rewards_ema = talib.EMA(epi_end_rewards, timeperiod=epi_num//10+2)
+                plt.plot(xrng, epi_end_rewards_ema, alpha=0.8, label='Final Reward EMA')
+                ax[0].set_ylim(0,30000)
+            else:
+                plt.plot(xrng, epi_total_rewards[::1], alpha=0.4, label='Total Reward')
+                epi_total_rewards_ema = talib.EMA(epi_total_rewards, timeperiod=epi_num//10+2)
+                plt.plot(xrng, epi_total_rewards_ema, alpha=0.7, label='Total Reward EMA')
             plt.grid(axis='y',alpha=0.5)
             plt.xlabel('Episode'); plt.ylabel('USD'); plt.legend(loc='upper left');
 
