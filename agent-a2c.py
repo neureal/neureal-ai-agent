@@ -36,8 +36,8 @@ class ActorCriticAI(tf.keras.Model):
 
         self.obs_is_vec, self.obs_sample = util.gym_obs_embed(env.observation_space, dtype=self.compute_dtype)
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 128, 64, 16
-        # self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 128, 64, 16
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 8, 1, 4096, 2048, 32
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
@@ -306,15 +306,15 @@ class AgentA2C:
 class Args(): pass
 args = Args()
 args.num_updates = 1000 # roughly batch_sz * num_updates = total steps, unless last episode is long
-args.learning_rate = 1e-4 # start with 4 for rough train, 5 for fine tune and 6 for when trained
+args.learning_rate = 1e-6 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.entropy_c = 1e-8 # scaler for entropy loss contribution
 args.value_c = 1.0 # scaler for value loss contribution
-args.render = False
+args.render = True
 args.plot_results = True
 
 machine, device = 'dev', 0
 
-trader, trader_env, trader_speed = False, 2, 200.0
+trader, trader_env, trader_speed = False, 2, 180.0
 # import envs_local.bipedal_walker as env_bipedal_walker
 # import envs_local.car_racing as env_car_racing
 if __name__ == '__main__':
@@ -337,7 +337,7 @@ if __name__ == '__main__':
     # env, model_name, batch_sz, glimt = gym.make('Copy-v0'), "gym-A2C-Copy", 32, 0.01                                                # Discrete(6)                       Tuple(Dis(2),Dis(2),Dis(5))
     # env, model_name, batch_sz, glimt = gym.make('RepeatCopy-v0'), "gym-A2C-RepeatCopy", 32, 0.01                                    # Discrete(6)                       Tuple(Dis(2),Dis(2),Dis(5))
     # env, model_name, batch_sz, glimt = gym.make('ReversedAddition3-v0'), "gym-A2C-ReversedAddition3", 32, 0.01                      # Discrete(4)                       Tuple(Dis(4),Dis(2),Dis(3)) # can't solve???
-    env, model_name, batch_sz, glimt, trader = gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed), "gym-A2C-Trader2", 128, 64.0, True
+    env, model_name, batch_sz, glimt, trader = gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed), "gym-A2C-Trader2", 2048, 64.0, True
 
     # env.seed(0)
     with tf.device('/device:GPU:'+str(device)):
