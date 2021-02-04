@@ -4,6 +4,7 @@ import tensorflow_probability as tfp
 import gym
 
 # TODO put this in "wilutil" library
+# TODO test to make sure looping constructs are working like I think, ie python loop only happens once on first trace and all refs are correct on subsequent runs
 
 def print_time(t):
     days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
@@ -16,63 +17,81 @@ def print_time(t):
 #         if isinstance(s, (dict,tuple)): gym_space_fill(s, fill)
 #         else: s.fill(fill)
 
-# def gym_flatten(space, x, dtype=np.float32):
-#     if isinstance(space, gym.spaces.Tuple): return np.concatenate([gym_flatten(s, x_part, dtype) for x_part, s in zip(x, space.spaces)])
-#     elif isinstance(space, gym.spaces.Dict): return np.concatenate([gym_flatten(s, x[key], dtype) for key, s in space.spaces.items()])
-#     elif isinstance(space, gym.spaces.Discrete):
-#         onehot = np.zeros(space.n, dtype=dtype); onehot[x] = 1.0; return onehot
-#     else: return np.asarray(x, dtype=dtype).flatten()
+def gym_flatten(space, x, dtype=np.float32): # works with numpy data type objects for x
+    if isinstance(space, gym.spaces.Tuple): return np.concatenate([gym_flatten(s, x_part, dtype) for x_part, s in zip(x, space.spaces)])
+    elif isinstance(space, gym.spaces.Dict): return np.concatenate([gym_flatten(s, x[key], dtype) for key, s in space.spaces.items()])
+    elif isinstance(space, gym.spaces.Discrete):
+        onehot = np.zeros(space.n, dtype=dtype); onehot[x] = 1.0; return onehot
+    else: return np.asarray(x, dtype=dtype).flatten()
 
 def gym_action_dist(action_space, dtype=tf.float32, cat_dtype=tf.int32, num_components=16):
-    params_size, is_discrete, dist = 0, True, {}
+    params_size, is_discrete, dists = 0, True, None
 
     if isinstance(action_space, gym.spaces.Discrete):
         params_size = action_space.n
-        if action_space.n < 2: dist = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
-        else: dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+        if action_space.n < 2: dists = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
+        else: dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
     elif isinstance(action_space, gym.spaces.Box):
         event_shape = list(action_space.shape)
         event_size = np.prod(event_shape).item()
         if action_space.dtype == np.uint8:
             params_size = event_size * 256
-            if event_size == 1: dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+            if event_size == 1: dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
             else:
                 params_shape = event_shape+[256]
-                dist = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
+                dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
                     tfp.distributions.Categorical(logits=tf.reshape(input, tf.concat([tf.shape(input)[:-1], params_shape], axis=0)), dtype=cat_dtype), reinterpreted_batch_ndims=len(event_shape)
                 ))
         elif action_space.dtype == np.float32 or action_space.dtype == np.float64:
             if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
                 # params_size = tfp.layers.MixtureSameFamily.params_size(num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
-                # dist = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(event_size))
+                # dists = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(event_size))
                 params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
-                dist = tfp.layers.MixtureLogistic(num_components, event_shape)
+                dists = tfp.layers.MixtureLogistic(num_components, event_shape)
             else:
                 params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
-                dist = tfp.layers.MixtureLogistic(num_components, event_shape)
+                dists = tfp.layers.MixtureLogistic(num_components, event_shape)
             # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
             is_discrete = False
     # TODO expand to handle Tuple+Dict, make so discrete and continuous can be output at the same time
     # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
     elif isinstance(action_space, gym.spaces.Tuple):
-        dist = [None]*len(action_space.spaces)
+        dists = [None]*len(action_space.spaces)
         for i,space in enumerate(action_space.spaces):
-            p, _, d = gym_action_dist(space, dtype=dtype, cat_dtype=cat_dtype, num_components=num_components)
-            dist[i] = (p,d)
-            params_size += p
+            dists[i] = gym_action_dist(space, dtype=dtype, cat_dtype=cat_dtype, num_components=num_components)
+            params_size += dists[i][0]
+            if not dists[i][1]: is_discrete = False
+    elif isinstance(action_space, gym.spaces.Dict):
+        dists = {}
+        for k,space in action_space.spaces.items():
+            dists[k] = gym_action_dist(space, dtype=dtype, cat_dtype=cat_dtype, num_components=num_components)
+            params_size += dists[k][0]
+            if not dists[k][1]: is_discrete = False
 
-    return params_size, is_discrete, dist
+    return params_size, is_discrete, dists # params_size = total size, is_discrete = False if any continuous
 
 def gym_obs_embed(obs_space, dtype):
-    is_vec, sample = True, {}
+    is_vec, sample = True, None
     # TODO expand the Dict of observation types (env.observation_space) to auto make input embedding networks
+    sample = obs_space.sample()
     if isinstance(obs_space, gym.spaces.Discrete):
-        sample = tf.convert_to_tensor([[obs_space.sample()]], dtype=dtype)
+        sample = tf.convert_to_tensor([[sample]], dtype=dtype)
     elif isinstance(obs_space, gym.spaces.Box):
         if len(obs_space.shape) > 1: is_vec = False
-        sample = tf.convert_to_tensor([obs_space.sample()], dtype=dtype)
+        sample = tf.convert_to_tensor([sample], dtype=dtype)
+    # elif isinstance(obs_space, gym.spaces.Tuple):
+    elif isinstance(obs_space, gym.spaces.Dict):
+        sample = gym_flatten(obs_space, sample, dtype=dtype)
+        sample = tf.convert_to_tensor([sample], dtype=dtype)
 
     return is_vec, sample
+
+def gym_obs_get(obs_space, x):
+    if isinstance(obs_space, gym.spaces.Discrete): return np.asarray([x], obs_space.dtype)
+    elif isinstance(obs_space, gym.spaces.Box): return x
+    elif isinstance(obs_space, gym.spaces.Dict):
+        rtn = gym_flatten(obs_space, x, dtype=obs_space.dtype)
+        return rtn
 
 
 def gym_action_get_mem(action_space, size):
@@ -82,34 +101,50 @@ def gym_action_get_mem(action_space, size):
         actions = [None]*len(action_space.spaces)
         for i,space in enumerate(action_space.spaces): actions[i] = gym_action_get_mem(space,size)
         return actions
-    # elif isinstance(action_space, gym.spaces.Dict):
+    elif isinstance(action_space, gym.spaces.Dict):
+        actions = {}
+        for k,space in action_space.spaces.items(): actions[k] = gym_action_get_mem(space,size)
+        return actions
 
 def gym_obs_get_mem(obs_space, size):
     if isinstance(obs_space, gym.spaces.Discrete): return np.zeros([size]+[1], dtype=obs_space.dtype)
     elif isinstance(obs_space, gym.spaces.Box): return np.zeros([size]+list(obs_space.shape), dtype=obs_space.dtype)
-
-def gym_obs_get(obs_space, x):
-    if isinstance(obs_space, gym.spaces.Discrete): return np.asarray([x], obs_space.dtype)
-    elif isinstance(obs_space, gym.spaces.Box): return x
+    elif isinstance(obs_space, gym.spaces.Dict):
+        sample = obs_space.sample()
+        sample = gym_flatten(obs_space, sample, dtype=obs_space.dtype)
+        return np.zeros([size]+list(sample.shape), dtype=obs_space.dtype)
 
 def update_mem(mem, index, item):
     if isinstance(mem, list):
         for i in range(len(mem)): mem[i][index] = item[i]
+    elif isinstance(mem, dict):
+        for k in mem.keys(): mem[k][index] = item[k]
     else: mem[index] = item
 
 
 
 def dist_loss_entropy(dists, logits, targets, discrete=True, num_samples=1):
+    # dists[0][0] = param size, dists[0][1] = is discrete, dists[0][2] = dists lambda
     if isinstance(dists, list):
         cnt, s, e = len(dists), 0, dists[0][0]
-        loss, entropy = dist_loss_entropy(dists[0][1],logits[:,s:e],targets[0],discrete,num_samples); s = e
+        loss, entropy = dist_loss_entropy(dists[0][2],logits[:,s:e],targets[0],dists[0][1],num_samples); s = e
         for i in range(1, cnt):
             e = s+dists[i][0]
-            ls, en = dist_loss_entropy(dists[i][1],logits[:,s:e],targets[i],discrete,num_samples); s = e
+            ls, en = dist_loss_entropy(dists[i][2],logits[:,s:e],targets[i],dists[i][1],num_samples); s = e
             loss += ls; entropy += en
-        # loss, entropy = loss/cnt, entropy/cnt
+        loss, entropy = loss/cnt, entropy/cnt # all loss from here is always in the same range cause it's based on the 0.0-1.0 probability
     elif isinstance(dists, dict):
-        pass
+        keys = list(dists.keys()); k0 = keys[0]
+        cnt, s, e = len(keys), 0, dists[k0][0]
+        loss, entropy = dist_loss_entropy(dists[k0][2],logits[:,s:e],targets[k0],dists[k0][1],num_samples)
+        s = e
+        for i in range(1, cnt):
+            k = keys[i]
+            e = s+dists[k][0]
+            ls, en = dist_loss_entropy(dists[k][2],logits[:,s:e],targets[k],dists[k][1],num_samples)
+            s = e
+            loss += ls; entropy += en
+        loss, entropy = loss/cnt, entropy/cnt
     else:
         dist = dists(logits)
         # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector)
@@ -131,14 +166,15 @@ def dist_loss_entropy(dists, logits, targets, discrete=True, num_samples=1):
     return loss, entropy
 
 def dist_sample(dists, logits):
+    # v[0] = param size, v[1] = is discrete, v[2] = dist lambda
     if isinstance(dists, list):
         s, action = 0, [None]*len(dists)
-        for i,v in enumerate(dists): # v[0] = param size, v[1] = dist lambda
-            e = s+v[0]; action[i] = dist_sample(v[1],logits[:,s:e]); s = e
+        for i,v in enumerate(dists):
+            e = s+v[0]; action[i] = dist_sample(v[2],logits[:,s:e]); s = e
     elif isinstance(dists, dict):
         s, action = 0, {}
         for k,v in dists.items():
-            e = s+v[0]; action[k] = dist_sample(v[1],logits[:,s:e]); s = e
+            e = s+v[0]; action[k] = dist_sample(v[2],logits[:,s:e]); s = e
     else:
         dist = dists(logits)
         # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector) # doesn't sample with float64
@@ -165,7 +201,7 @@ def np_to_tf(data, dtype=None):
         data_tf = [None]*len(data)
         for i,v in enumerate(data): data_tf[i] = np_to_tf(v, dtype=dtype)
     elif isinstance(data, dict):
-        data_tf = [None]*len(data)
+        data_tf = {}
         for k,v in data.items(): data_tf[k] = np_to_tf(v, dtype=dtype)
     return data_tf
     

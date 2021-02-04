@@ -110,8 +110,7 @@ class ActorCriticAI(tf.keras.Model):
         print("tracing -> call")
         return action, value
 
-    # TODO convert to tf graph? or share this processing with CPU
-    # TODO use numba to make this faster on CPU
+    # TODO convert to tf graph? or share this processing with CPU, use test-tf2-keras-a2c.py and new generic agent.py
     # @tf.function
     def calc_returns_advantages(self, rewards, dones, values, next_value):
         # `next_value` is the bootstrap value estimate of the future state (critic).
@@ -260,7 +259,7 @@ class AgentA2C:
                     t_epi_times.append(t_epi / 60)
                     loss_total.append(loss_total_cur); loss_action.append(loss_action_cur); loss_value.append(loss_value_cur)
                     print("DONE episode #{:03d}  {} epi-time {:10.2f} total-reward {:10.2f} avg-reward {:10.2f} end-reward".format(len(epi_total_rewards)-1, util.print_time(t_epi), epi_total_rewards[-1], epi_avg_reward, epi_end_reward))
-                    # TODO train/update after every done
+                    # TODO train/update after every done. wait till new generic agent.py
                     if update >= updates-1: finished = True; break
                     epi_total_rewards.append(0.0)
                     epi_steps = 0
@@ -315,29 +314,30 @@ args.plot_results = True
 
 machine, device = 'dev', 0
 
+trader, trader_env, trader_speed = False, 2, 200.0
 # import envs_local.bipedal_walker as env_bipedal_walker
 # import envs_local.car_racing as env_car_racing
 if __name__ == '__main__':
-    trader = False
-    # env, model_name, batch_sz, maxt = gym.make('CartPole-v0'), "gym-A2C-CartPole", 256, 0.05                                       # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0 # obs return float64 even though specs say float32?!?
-    # env, model_name, batch_sz, maxt = gym.make('MountainCar-v0'), "gym-A2C-MountainCar", 1024, 0.05                                # Box((2),-1.2:0.6,float32)         Discrete(3)
-    # env, model_name, batch_sz, maxt = gym.make('MountainCarContinuous-v0'), "gym-A2C-MountainCarContinuous", 256, 0.05             # Box((2),-1.2:0.6,float32)         Box((1),-1.0:1.0,float32)
-    # env, model_name, batch_sz, maxt = gym.make('LunarLander-v2'), "gym-A2C-LunarLander", 1024, 0.2                                 # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
-    # env, model_name, batch_sz, maxt = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont", 1024, 0.2                   # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
-    # env, model_name, batch_sz, maxt = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker", 256, 1.0                              # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name, batch_sz, maxt = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker", 256, 1.0                        # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name, batch_sz, maxt = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore", 256, 1.0              # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name, batch_sz, maxt = env_bipedal_walker.BipedalWalkerHardcore(), "gym-A2C-BipedalWalkerHardcore", 256, 1.0        # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
-    # env, model_name, batch_sz, maxt = gym.make('CarRacing-v0'), "gym-A2C-CarRacing", 256, 1.0                                      # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
-    # env, model_name, batch_sz, maxt = env_car_racing.CarRacing(), "gym-A2C-CarRacing", 256, 1.0                                    # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
-    # env, model_name, batch_sz, maxt = gym.make('QbertNoFrameskip-v4'), "gym-A2C-QbertNoFrameskip-v4", 256, 1.0                     # Box((210,160,3),0:255,uint8)      Discrete(6)                   400000 100  None
-    # env, model_name, batch_sz, maxt = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4", 256, 1.0                   # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name, batch_sz, maxt = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4", 256, 1.0             # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name, batch_sz, maxt = gym.make('PitfallNoFrameskip-v4'), "gym-A2C-PitfallNoFrameskip-v4", 256, 1.0                 # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    # env, model_name, batch_sz, maxt = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevenge-v4", 256, 1.0          # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
-    env, model_name, batch_sz, maxt = gym.make('Copy-v0'), "gym-A2C-Copy", 32, 0.01                                                # Discrete(6)                       Tuple(Dis(2),Dis(2),Dis(5))
-    # env, model_name, batch_sz, maxt = gym.make('ReversedAddition3-v0'), "gym-A2C-ReversedAddition3", 32, 0.01                      # Discrete(4)                       Tuple(Dis(4),Dis(2),Dis(3))
-    # env, model_name, batch_sz, maxt, trader = gym.make('Trader-v0', agent_id=device, env=2, speed=200.0), "gym-A2C-Trader2", 4096, 64.0, True
+    # env, model_name, batch_sz, glimt = gym.make('CartPole-v0'), "gym-A2C-CartPole", 256, 0.05                                       # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0 # obs return float64 even though specs say float32?!?
+    # env, model_name, batch_sz, glimt = gym.make('MountainCar-v0'), "gym-A2C-MountainCar", 1024, 0.05                                # Box((2),-1.2:0.6,float32)         Discrete(3)
+    # env, model_name, batch_sz, glimt = gym.make('MountainCarContinuous-v0'), "gym-A2C-MountainCarContinuous", 256, 0.05             # Box((2),-1.2:0.6,float32)         Box((1),-1.0:1.0,float32)
+    # env, model_name, batch_sz, glimt = gym.make('LunarLander-v2'), "gym-A2C-LunarLander", 1024, 0.2                                 # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
+    # env, model_name, batch_sz, glimt = gym.make('LunarLanderContinuous-v2'), "gym-A2C-LunarLanderCont", 1024, 0.2                   # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
+    # env, model_name, batch_sz, glimt = gym.make('BipedalWalker-v3'), "gym-A2C-BipedalWalker", 256, 1.0                              # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, glimt = env_bipedal_walker.BipedalWalker(), "gym-A2C-BipedalWalker", 256, 1.0                        # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, glimt = gym.make('BipedalWalkerHardcore-v3'), "gym-A2C-BipedalWalkerHardcore", 256, 1.0              # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, glimt = env_bipedal_walker.BipedalWalkerHardcore(), "gym-A2C-BipedalWalkerHardcore", 256, 1.0        # Box((24),-inf:inf,float32)        Box((4),-1.0:1.0,float32)
+    # env, model_name, batch_sz, glimt = gym.make('CarRacing-v0'), "gym-A2C-CarRacing", 256, 1.0                                      # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
+    # env, model_name, batch_sz, glimt = env_car_racing.CarRacing(), "gym-A2C-CarRacing", 256, 1.0                                    # Box((96,96,3),0:255,uint8)        Box((3),-1.0:1.0,float32)     1000   100  900 # MEMORY LEAK!
+    # env, model_name, batch_sz, glimt = gym.make('QbertNoFrameskip-v4'), "gym-A2C-QbertNoFrameskip-v4", 256, 1.0                     # Box((210,160,3),0:255,uint8)      Discrete(6)                   400000 100  None
+    # env, model_name, batch_sz, glimt = gym.make('BoxingNoFrameskip-v4'), "gym-A2C-BoxingNoFrameskip-v4", 256, 1.0                   # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, glimt = gym.make('CentipedeNoFrameskip-v4'), "gym-A2C-CentipedeNoFrameskip-v4", 256, 1.0             # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, glimt = gym.make('PitfallNoFrameskip-v4'), "gym-A2C-PitfallNoFrameskip-v4", 256, 1.0                 # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, glimt = gym.make('MontezumaRevengeNoFrameskip-v4'), "gym-A2C-MontezumaRevenge-v4", 256, 1.0          # Box((210,160,3),0:255,uint8)      Discrete(18)                  400000 100  None
+    # env, model_name, batch_sz, glimt = gym.make('Copy-v0'), "gym-A2C-Copy", 32, 0.01                                                # Discrete(6)                       Tuple(Dis(2),Dis(2),Dis(5))
+    # env, model_name, batch_sz, glimt = gym.make('RepeatCopy-v0'), "gym-A2C-RepeatCopy", 32, 0.01                                    # Discrete(6)                       Tuple(Dis(2),Dis(2),Dis(5))
+    # env, model_name, batch_sz, glimt = gym.make('ReversedAddition3-v0'), "gym-A2C-ReversedAddition3", 32, 0.01                      # Discrete(4)                       Tuple(Dis(4),Dis(2),Dis(3)) # can't solve???
+    env, model_name, batch_sz, glimt, trader = gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed), "gym-A2C-Trader2", 128, 64.0, True
 
     # env.seed(0)
     with tf.device('/device:GPU:'+str(device)):
@@ -367,8 +367,8 @@ if __name__ == '__main__':
             plt.figure(num=name, figsize=(24, 16), tight_layout=True); ax = []
 
             ax.insert(0, plt.subplot2grid((7, 1), (6, 0), rowspan=1))
-            plt.plot(xrng, t_epi_times[::1], alpha=1.0, label='Episode Time')
-            ax[0].set_ylim(0,maxt)
+            plt.plot(xrng, t_epi_times[::1]*(trader_speed if trader else 1.0), alpha=1.0, label='Episode Time')
+            ax[0].set_ylim(0,glimt)
             plt.xlabel('Episode'); plt.ylabel('Minutes'); plt.legend(loc='upper left')
 
             ax.insert(0, plt.subplot2grid((7, 1), (5, 0), rowspan=1, sharex=ax[-1]))

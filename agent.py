@@ -12,11 +12,12 @@ import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
 import talib
 import gym, gym_trader
+import util
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
-# include print_time, fixinfnan, EvoNormS0 from "wilutil" library
+# TODO use numba to make things faster on CPU
 
 class ActorCriticAI(tf.keras.Model):
     def __init__(self, env):
