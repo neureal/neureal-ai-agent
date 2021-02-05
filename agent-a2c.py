@@ -31,15 +31,15 @@ class ActorCriticAI(tf.keras.Model):
         self._optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self._optimizer)
 
 
-        self.action_num_components = 16
+        self.action_num_components = 32
         self.action_params_size, self.action_is_discrete, self.action_dist = util.gym_action_dist(env.action_space, dtype=self.compute_dtype, num_components=self.action_num_components)
 
         self.obs_is_vec, self.obs_sample = util.gym_obs_embed(env.observation_space, dtype=self.compute_dtype)
 
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 128, 64, 16
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
+        # self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 2048, 1024, 32
-        # self.net_DNN, self.net_LSTM, inp, mid, evo = 8, 1, 4096, 2048, 32
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 8, 1, 4096, 2048, 64
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 128, 64, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 2, 256, 128, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 4, 1024, 512, 32
@@ -305,7 +305,7 @@ class AgentA2C:
 
 class Args(): pass
 args = Args()
-args.num_updates = 1000 # roughly batch_sz * num_updates = total steps, unless last episode is long
+args.num_updates = 500 # roughly batch_sz * num_updates = total steps, unless last episode is long
 args.learning_rate = 1e-6 # start with 4 for rough train, 5 for fine tune and 6 for when trained
 args.entropy_c = 1e-8 # scaler for entropy loss contribution
 args.value_c = 1.0 # scaler for value loss contribution
@@ -314,7 +314,7 @@ args.plot_results = True
 
 machine, device = 'dev', 0
 
-trader, trader_env, trader_speed = False, 2, 180.0
+trader, trader_env, trader_speed = False, 3, 180.0
 # import envs_local.bipedal_walker as env_bipedal_walker
 # import envs_local.car_racing as env_car_racing
 if __name__ == '__main__':
