@@ -1,4 +1,4 @@
-import time, os
+import time, os, talib
 curdir = os.path.expanduser("~")
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
@@ -10,9 +10,8 @@ tf.keras.backend.set_floatx('float64')
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
-import talib
 import gym, gym_trader
-import util
+import model_util as util
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)

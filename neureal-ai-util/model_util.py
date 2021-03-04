@@ -3,7 +3,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import gym
 
-# TODO put this in "wilutil" library
+# TODO put this in seperate repo
 # TODO test to make sure looping constructs are working like I think, ie python loop only happens once on first trace and all refs are correct on subsequent runs
 
 def print_time(t):
@@ -204,19 +204,108 @@ def np_to_tf(data, dtype=None):
         data_tf = {}
         for k,v in data.items(): data_tf[k] = np_to_tf(v, dtype=dtype)
     return data_tf
-    
+
+
 
 
 def replace_infnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
     return tf.where(isinfnan, replace, inputs)
+    
+def interleave_logits(logits_cats, logits_loc, logits_scale, batch_size, num_components, event_size, loc_scale_size):
+    logits_loc = tf.reshape(logits_loc, (batch_size, num_components, event_size))
+    logits_scale = tf.reshape(logits_scale, (batch_size, num_components, event_size))
+    out = tf.stack((logits_loc, logits_scale), axis=-2)
+    out = tf.reshape(out, (batch_size, loc_scale_size))
+    out = tf.concat([logits_cats, out], axis=1)
+    return out
+
+
+
+class Categorical(tfp.layers.DistributionLambda):
+    def __init__(self, num_components, event_shape=(), validate_args=False, dtype_cat=tf.int32, **kwargs):
+        params_shape = list(event_shape)+[num_components]
+        reinterpreted_batch_ndims = len(event_shape)
+        
+        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        super(Categorical, self).__init__(
+            lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, validate_args, dtype_cat),
+            **kwargs)
+        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+
+    @staticmethod # this doesn't change anything, just keeps the variables seperate
+    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, dtype_cat=tf.int32, name=None):
+        print("tracing -> Categorical new")
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        params = tf.reshape(params, output_shape)
+
+        dist = tfp.distributions.Categorical(logits=params, dtype=dtype_cat)
+        dist = tfp.distributions.Independent(
+            dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims
+        )
+        return dist
+
+    @staticmethod
+    def params_size(num_components, event_shape=(), name=None):
+        event_size = np.prod(event_shape).item()
+        params_size = event_size * num_components
+        return params_size
+
+
+
+class MixtureLogistic(tfp.layers.DistributionLambda):
+    def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
+        params_shape = [num_components]+list(event_shape)
+        reinterpreted_batch_ndims = len(event_shape)
+        
+        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        super(MixtureLogistic, self).__init__(
+            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, validate_args),
+            **kwargs)
+        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+
+    @staticmethod # this doesn't change anything, just keeps the variables seperate
+    def new(params, num_components, params_shape, reinterpreted_batch_ndims, validate_args=False, name=None):
+        print("tracing -> MixtureLogistic new")
+
+        mixture_params = params[..., :num_components]
+
+        components_params = params[..., num_components:]
+        loc_params, scale_params = tf.split(components_params, 2, axis=-1)
+
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        loc_params = tf.reshape(loc_params, output_shape)
+        scale_params = tf.math.softplus(tf.reshape(scale_params, output_shape))
+
+        dist = tfp.distributions.MixtureSameFamily(
+                mixture_distribution = tfp.distributions.Categorical(
+                    logits=mixture_params
+                ),
+                components_distribution = tfp.distributions.Independent(
+                    tfp.distributions.Logistic(
+                        loc=loc_params,
+                        scale=scale_params
+                    ),
+                    reinterpreted_batch_ndims=reinterpreted_batch_ndims
+                ),
+            # reparameterize=True, # better spread of loc and scale params, rep net works better
+        )
+        return dist
+
+    @staticmethod
+    def params_size(num_components, event_shape=(), name=None):
+        event_size = np.prod(event_shape).item()
+        params_size = num_components + event_size * num_components * 2
+        return params_size
+
+
 
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=None, axis=-1, name=None):
         super(EvoNormS0, self).__init__(name=name)
         self.groups, self.axis = groups, axis
         if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
-        self.eps = tf.constant(eps, dtype=self.compute_dtype)
+        self.eps = tf.identity(tf.constant(eps, dtype=self.compute_dtype))
 
     def build(self, input_shape):
         inlen = len(input_shape)
@@ -227,14 +316,14 @@ class EvoNormS0(tf.keras.layers.Layer):
         self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.keras.initializers.Ones())
 
         groups = min(input_shape[self.axis], self.groups)
-        self.group_shape = input_shape.as_list()
-        self.group_shape[self.axis] = input_shape[self.axis] // groups
-        self.group_shape.insert(self.axis, groups)
-        self.group_shape = tf.Variable(self.group_shape, trainable=False)
+        group_shape = input_shape.as_list()
+        group_shape[self.axis] = input_shape[self.axis] // groups
+        group_shape.insert(self.axis, groups)
+        self.group_shape = tf.Variable(group_shape, trainable=False)
 
         std_shape = list(range(1, inlen+self.axis))
         std_shape.append(inlen)
-        self.std_shape = tf.constant(std_shape)
+        self.std_shape = tf.identity(std_shape)
 
     @tf.function
     def call(self, inputs, training=True):
