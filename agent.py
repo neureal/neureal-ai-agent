@@ -1,4 +1,5 @@
-import time, os
+import time, os, talib
+import multiprocessing as mp
 curdir = os.path.expanduser("~")
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
@@ -10,48 +11,81 @@ tf.keras.backend.set_floatx('float64')
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
-import talib
+import model_util as util
 import gym, gym_trader
-import util
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 # TODO use numba to make things faster on CPU
 
-class ActorCriticAI(tf.keras.Model):
+class ActionNet(tf.keras.layers.Layer):
     def __init__(self, env):
-        super(ActorCriticAI, self).__init__()
+        super(ActionNet, self).__init__()
+        self.layer_dense_in = tf.keras.layers.Dense(1024, activation=util.EvoNormS0(16), use_bias=False, name='dense_in')
+        self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
     @tf.function
     def call(self, inputs, training=None):
-        pass
+        out = tf.cast(inputs['obs'], dtype=self.compute_dtype)
+        out = self.layer_dense_in(out)
+        out = self.layer_dense_out(out)
+        return out
+        
+class ValueNet(tf.keras.layers.Layer):
+    def __init__(self, env):
+        super(ValueNet, self).__init__()
+        self.layer_dense_in = tf.keras.layers.Dense(1024, activation=util.EvoNormS0(16), use_bias=False, name='dense_in')
+        self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+    @tf.function
+    def call(self, inputs, training=None):
+        out = tf.cast(inputs['obs'], dtype=self.compute_dtype)
+        out = self.layer_dense_in(out)
+        out = self.layer_dense_out(out)
+        return out
+
+class GeneralAI(tf.keras.Model):
+    def __init__(self, env, learn_rate):
+        super(GeneralAI, self).__init__()
+        
+        inputs = {} # must pre build to create variables outside @tf.function
+        inputs['obs'], inputs['reward'], inputs['done'] = tf.zeros([1]+list(env.observation_space.shape), dtype=self.obs_dtype), tf.constant([[0]], dtype=tf.float64), tf.constant([[False]], dtype=tf.bool)
+        self.action = ActionNet(env); outputs = self.action(inputs)
+        self.value = ValueNet(env); outputs = self.value(inputs)
+
+    @tf.function
+    def A2C_infer(self, inputs, training=None):
+        print("tracing -> GeneralAI A2C_infer")
 
 
-class Agent:
-    def __init__(self, model, env):
-        self.model, self.env = model, env
-    def vivify(self):
-        # (train_step)
-        pass
-
-# class AgentDreamer:
+env_name = 'CartPole-v0' # Box((4),-inf:inf,float32)         Discrete(2,int64)
+num_agents = 1
+learn_rate = 1e-4
 
 if __name__ == '__main__':
     ## manage multiprocessing
-    # load models
-    with tf.device("CPU:0"):
-        model = ActorCriticAI(env)
-        model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
-        model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name);
-        if tf.io.gfile.exists(model_file): model.load_weights(model_file, by_name=True, skip_mismatch=True)
-    # setup ctrl,data,param sharing
-    # start agents (real+dreamers)
-    agent = Agent(model)
-    # agent_process = mp.Process(target=agent.vivify, name='AGENT', args=(lock_print, process_ctrl, weights_shared))
-    # agent_process.start()
-    # quit on keyboard (space = save, esc = no save)
-    process_ctrl.value = 0
-    agent_process.join()
-    # plot results
-    # save models
-    model.save_weights(model_file)
+    with tf.device('/device:GPU:0'):
+        env = gym.make(env_name)
+        model = GeneralAI(env, learn_rate=learn_rate)
+
+        # load models, load each net seperately
+        # model_name += "-{}-{}-a{}".format(model.net_arch, machine, device)
+
+        # model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
+        # if tf.io.gfile.exists(model_file):
+        #     model.load_weights(model_file, by_name=True, skip_mismatch=True)
+        #     print("LOADED model weights from {}".format(model_file)); loaded_model = True
+        # # print(model.call.pretty_printed_concrete_signatures()); quit(0)
+        # # model.summary(); quit(0)
+
+
+        # # setup ctrl,data,param sharing
+        # # start agents (real+dreamers)
+        # agent = Agent(model)
+        # # agent_process = mp.Process(target=agent.vivify, name='AGENT', args=(lock_print, process_ctrl, weights_shared))
+        # # agent_process.start()
+        # # quit on keyboard (space = save, esc = no save)
+        # process_ctrl.value = 0
+        # agent_process.join()
+        # # plot results
+        # # save models
+        # model.save_weights(model_file)

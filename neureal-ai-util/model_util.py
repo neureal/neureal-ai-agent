@@ -211,40 +211,69 @@ def np_to_tf(data, dtype=None):
 def replace_infnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
     return tf.where(isinfnan, replace, inputs)
-    
-def interleave_logits(logits_cats, logits_loc, logits_scale, batch_size, num_components, event_size, loc_scale_size):
-    logits_loc = tf.reshape(logits_loc, (batch_size, num_components, event_size))
-    logits_scale = tf.reshape(logits_scale, (batch_size, num_components, event_size))
-    out = tf.stack((logits_loc, logits_scale), axis=-2)
-    out = tf.reshape(out, (batch_size, loc_scale_size))
-    out = tf.concat([logits_cats, out], axis=1)
-    return out
 
+def combine_logits(out, layer_cats, layer_loc, layer_scale, split_cats):
+    out_cats = out[:,:split_cats]
+    out_loc, out_scale = tf.split(out[:,split_cats:], 2, axis=-1)
+    out_logits_cats = layer_cats(out_cats)
+    out_logits_loc = layer_loc(out_loc)
+    out_logits_scale = layer_scale(out_scale)
+    out = tf.concat([out_logits_cats, out_logits_loc, out_logits_scale], axis=-1)
+    return out
 
 
 class Categorical(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), validate_args=False, dtype_cat=tf.int32, **kwargs):
         params_shape = list(event_shape)+[num_components]
         reinterpreted_batch_ndims = len(event_shape)
-        
         params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
         super(Categorical, self).__init__(
-            lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, validate_args, dtype_cat),
-            **kwargs)
+            lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, validate_args, dtype_cat), **kwargs)
         self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
-
     @staticmethod # this doesn't change anything, just keeps the variables seperate
     def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, dtype_cat=tf.int32, name=None):
         print("tracing -> Categorical new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
-
         dist = tfp.distributions.Categorical(logits=params, dtype=dtype_cat)
-        dist = tfp.distributions.Independent(
-            dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims
-        )
+        dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
         return dist
+    @staticmethod
+    def sample(dist, name=None):
+        return dist.sample()
+    @staticmethod
+    def params_size(num_components, event_shape=(), name=None):
+        event_size = np.prod(event_shape).item()
+        params_size = event_size * num_components
+        return params_size
 
+class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
+    def __init__(self, num_components, event_shape=(), validate_args=False, temperature=1e-5, **kwargs):
+        params_shape = list(event_shape)+[num_components]
+        reinterpreted_batch_ndims = len(event_shape)
+        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
+        super(CategoricalRP, self).__init__(
+            lambda input: CategoricalRP.new(input, params_shape, reinterpreted_batch_ndims, validate_args, temperature), **kwargs)
+        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+    @staticmethod
+    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, temperature=1e-5, name=None):
+        print("tracing -> CategoricalRP new")
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        params = tf.reshape(params, output_shape)
+        dist = tfp.distributions.ExpRelaxedOneHotCategorical(temperature=temperature, logits=params)
+        # dist = tfp.distributions.RelaxedOneHotCategorical(temperature=temperature, logits=params)
+        # dist = tfp.distributions.RelaxedBernoulli(temperature=temperature, logits=params)
+        dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
+        return dist
+    @staticmethod
+    def sample(dist, name=None):
+        sample = dist.sample()
+        sample = tf.exp(sample)
+        # sample = tf.math.argmax(sample, axis=-1, output_type=tf.int64) # cant calculate gradients
+        # sample = tf.cast(sample, dtype=tf.float64)
+        return sample
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
@@ -259,15 +288,14 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         reinterpreted_batch_ndims = len(event_shape)
         
         params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
         super(MixtureLogistic, self).__init__(
-            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, validate_args),
-            **kwargs)
+            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, validate_args), **kwargs)
         self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
 
     @staticmethod # this doesn't change anything, just keeps the variables seperate
     def new(params, num_components, params_shape, reinterpreted_batch_ndims, validate_args=False, name=None):
         print("tracing -> MixtureLogistic new")
-
         mixture_params = params[..., :num_components]
 
         components_params = params[..., num_components:]
@@ -291,6 +319,10 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
             # reparameterize=True, # better spread of loc and scale params, rep net works better
         )
         return dist
+
+    @staticmethod
+    def sample(dist, name=None):
+        return dist.sample()
 
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
