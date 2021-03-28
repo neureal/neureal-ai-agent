@@ -12,12 +12,11 @@ tf.keras.backend.set_floatx('float64')
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
 import model_util as util
-import gym, gym_trader
+import gym
 
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
-# TODO take out dtype=
 # TODO use numba to make things faster on CPU
 
 
@@ -42,7 +41,7 @@ class TransNet(tf.keras.layers.Layer):
         # self.layer_dense_01 = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_01')
         self.layer_lstm_in = tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True)
         
-        self.split_cats, loc_scale_size_each = tf.constant(num_components, dtype=tf.int32), int((params_size-num_components)/2)
+        self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
         self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
 
     def _net_cond(self, inputs):
@@ -62,11 +61,11 @@ class TransNet(tf.keras.layers.Layer):
         out_accu = []
         for k,v in inputs.items():
             if k == 'action':
-                out = tf.cast(v, dtype=self.compute_dtype)
+                out = tf.cast(v, self.compute_dtype)
                 out = self._net_cond(out)
                 out_accu.append(out)
             if k == 'state':
-                out = tf.cast(v, dtype=self.compute_dtype)
+                out = tf.cast(v, self.compute_dtype)
                 out_accu.append(out)
         out = tf.math.accumulate_n(out_accu)
         out = self._net(out)
@@ -76,7 +75,7 @@ class TransNet(tf.keras.layers.Layer):
         return out
 
     def loss(self, dist, targets):
-        targets = tf.cast(targets, dtype=dist.dtype)
+        targets = tf.cast(targets, dist.dtype)
         loss = -dist.log_prob(targets)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
@@ -87,7 +86,7 @@ class TransNet(tf.keras.layers.Layer):
 class ActionNet(tf.keras.layers.Layer):
     def __init__(self, env, categorical, entropy_contrib):
         super(ActionNet, self).__init__()
-        self.entropy_contrib, self.categorical, self.is_discrete = tf.constant(entropy_contrib, dtype=self.compute_dtype), categorical, False
+        self.entropy_contrib, self.categorical, self.is_discrete = tf.constant(entropy_contrib, self.compute_dtype), categorical, False
 
         if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, [1,], True
         elif isinstance(env.action_space, gym.spaces.Box): event_shape = list(env.action_space.shape); num_components = np.prod(event_shape).item()
@@ -108,12 +107,12 @@ class ActionNet(tf.keras.layers.Layer):
         if self.categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
         else:
             self.layer_dense_out = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_out')
-            self.split_cats, loc_scale_size_each = tf.constant(num_components, dtype=tf.int32), int((params_size-num_components)/2)
+            self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
             self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
 
     @tf.function
     def call(self, inputs, training=None):
-        out = tf.cast(inputs['obs'], dtype=self.compute_dtype)
+        out = tf.cast(inputs['obs'], self.compute_dtype)
         out = self.layer_flatten(out)
         out = self.layer_dense_in(out)
         out = self.layer_dense_01(out)
@@ -126,7 +125,7 @@ class ActionNet(tf.keras.layers.Layer):
         return out
 
     def loss(self, dist, targets, advantages):
-        targets = tf.cast(targets, dtype=dist.dtype)
+        targets = tf.cast(targets, dist.dtype)
         loss = -dist.log_prob(targets)
         loss = tf.math.multiply(loss, advantages)
         if self.categorical:
@@ -154,7 +153,7 @@ class ValueNet(tf.keras.layers.Layer):
     @tf.function
     def call(self, inputs, training=None):
     # def call(self:tf.keras.Model, inputs:Dict[str, tf.Tensor], training:bool=None) -> tf.Tensor:
-        out = tf.cast(inputs['obs'], dtype=self.compute_dtype)
+        out = tf.cast(inputs['obs'], self.compute_dtype)
         out = self.layer_flatten(out)
         out = self.layer_dense_in(out)
         out = self.layer_dense_01(out)
@@ -170,26 +169,26 @@ class ValueNet(tf.keras.layers.Layer):
 class GeneralAI(tf.keras.Model):
     def __init__(self, env, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, returns_std, categorical, latent_size):
         super(GeneralAI, self).__init__()
-        self.max_episodes, self.max_steps, self.returns_disc, self.returns_std = tf.constant(max_episodes, dtype=tf.int32), tf.constant(max_steps, dtype=tf.int32), tf.constant(returns_disc, dtype=tf.float64), returns_std
-        self.float_maxroot = tf.constant(tf.math.sqrt(tf.dtypes.as_dtype(self.compute_dtype).max), dtype=self.compute_dtype)
-        self.float_eps = tf.constant(tf.experimental.numpy.finfo(self.compute_dtype).eps, dtype=self.compute_dtype)
+        self.max_episodes, self.max_steps, self.returns_disc, self.returns_std = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(returns_disc, tf.float64), returns_std
+        self.float_maxroot = tf.constant(tf.math.sqrt(tf.dtypes.as_dtype(self.compute_dtype).max), self.compute_dtype)
+        self.float_eps = tf.constant(tf.experimental.numpy.finfo(self.compute_dtype).eps, self.compute_dtype)
 
         self.env = env
         self.obs_dtype = tf.dtypes.as_dtype(env.observation_space.dtype)
         self.action_dtype = tf.dtypes.as_dtype(env.action_space.dtype)
         if isinstance(env.action_space, gym.spaces.Discrete):
             action_shape = [1,]
-            self.action_min = tf.constant(0, dtype=self.action_dtype)
-            self.action_max = tf.constant(env.action_space.n-1, dtype=self.action_dtype)
+            self.action_min = tf.constant(0, self.action_dtype)
+            self.action_max = tf.constant(env.action_space.n-1, self.action_dtype)
         elif isinstance(env.action_space, gym.spaces.Box):
             action_shape = list(env.action_space.shape)
-            self.action_min = tf.constant(env.action_space.low[...,0], dtype=self.action_dtype)
-            self.action_max = tf.constant(env.action_space.high[...,0], dtype=self.action_dtype)
+            self.action_min = tf.constant(env.action_space.low[...,0], self.action_dtype)
+            self.action_max = tf.constant(env.action_space.high[...,0], self.action_dtype)
 
-        inputs = {'action':tf.zeros([1]+action_shape,dtype=self.action_dtype), 'state':tf.fill((1,latent_size),self.float_eps)}
+        inputs = {'action':tf.zeros([1]+action_shape,self.action_dtype), 'state':tf.fill((1,latent_size),self.float_eps)}
         self.trans = TransNet(latent_size, categorical); outputs = self.trans(inputs)
 
-        inputs = {'obs':tf.zeros([1]+list(env.observation_space.shape),dtype=self.obs_dtype), 'reward':tf.constant([[0]],dtype=tf.float64), 'done':tf.constant([[False]],dtype=tf.bool)}
+        inputs = {'obs':tf.zeros([1]+list(env.observation_space.shape),self.obs_dtype), 'reward':tf.constant([[0]],tf.float64), 'done':tf.constant([[False]],tf.bool)}
         self.action = ActionNet(env, categorical, entropy_contrib); outputs = self.action(inputs)
         self.value = ValueNet(env); outputs = self.value(inputs)
         
@@ -209,7 +208,7 @@ class GeneralAI(tf.keras.Model):
 
     def action_discretize(self, action):
         action = tf.math.round(action)
-        action = tf.cast(action, dtype=self.action_dtype)
+        action = tf.cast(action, self.action_dtype)
         action = tf.clip_by_value(action, self.action_min, self.action_max)
         return action
 
@@ -217,7 +216,7 @@ class GeneralAI(tf.keras.Model):
         self.discounted_sum.assign(0)
         n = tf.shape(rewards)[0]
         rewards = rewards[::-1]
-        returns = tf.TensorArray(dtype=tf.float64, size=n)
+        returns = tf.TensorArray(tf.float64, size=n)
         for i in tf.range(n):
             reward = rewards[i]
             discounted_sum = self.discounted_sum.value() * self.returns_disc + reward
@@ -234,9 +233,9 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI DREAM_actor")
         inputs, outputs = {}, {}
 
-        obs = tf.TensorArray(dtype=self.obs_dtype, size=0, dynamic_size=True)
-        actions = tf.TensorArray(dtype=self.action_storage_dtype, size=0, dynamic_size=True)
-        rewards = tf.TensorArray(dtype=tf.float64, size=0, dynamic_size=True)
+        obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_storage_dtype, size=0, dynamic_size=True)
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         
         inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
 
@@ -283,7 +282,7 @@ class GeneralAI(tf.keras.Model):
     def DREAM_run(self):
         print("tracing -> GeneralAI DREAM_run")
         metrics = {'rewards_total':tf.float64,'steps':tf.int32,'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype}
-        for k in metrics.keys(): metrics[k] = tf.TensorArray(dtype=metrics[k], size=0, dynamic_size=True)
+        for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
 
         for episode in tf.range(self.max_episodes):
             outputs = self.DREAM_actor()
@@ -308,10 +307,6 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
-env_name, env_gym_id, max_steps = 'CartPole', 'CartPole-v0', 201 # Box((4),-inf:inf,float32)         Discrete(2,int64)             200    100  195.0
-# env_name, env_gym_id, max_steps = 'LunarLand', 'LunarLander-v2', 1001 # Box((8),-inf:inf,float32)         Discrete(4,int64)             1000   100  200
-# env_name, env_gym_id, max_steps = 'LunarLandCont', 'LunarLanderContinuous-v2', 1001 # Box((8),-inf:inf,float32)         Box((2),-1.0:1.0,float32)     1000   100  200
-
 max_episodes = 100
 learn_rate = 1e-5
 entropy_contrib = 1e-8
@@ -319,8 +314,15 @@ returns_disc = 0.99
 returns_std = False
 categorical = True
 latent_size = 1
+trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
+
+env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
+# env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
+# import envs_local.bipedal_walker as env_bipedal_walker; env_name, max_steps, env = 'BipedalWalker', 100, env_bipedal_walker.BipedalWalker()
+# import gym_trader; env_name, max_steps, trader, env = 'Trader2', 100, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
 
 if __name__ == '__main__':
     # TODO add keyboard control so can stop
@@ -335,9 +337,6 @@ if __name__ == '__main__':
     # process_ctrl.value = 0
     # agent_process.join()
 
-
-    env = gym.make(env_gym_id)
-    if env_gym_id == 'CartPole-v0': env.observation_space.dtype = np.dtype('float64')
 
     with tf.device('/device:CPU:0'):
         model = GeneralAI(env, max_episodes=max_episodes, max_steps=max_steps, learn_rate=learn_rate, entropy_contrib=entropy_contrib, returns_disc=returns_disc, returns_std=returns_std, categorical=categorical, latent_size=latent_size)
@@ -374,25 +373,25 @@ if __name__ == '__main__':
         xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 7
 
         rows = 2; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        metric_name = 'rewards_total'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'rewards_total'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left'); plt.title(title)
 
         rows = 4; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        metric_name = 'loss_total'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'loss_total'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        metric_name = 'loss_action'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'loss_action'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        metric_name = 'loss_value'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'loss_value'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        metric_name = 'returns'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'returns'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        metric_name = 'advantages'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'advantages'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
         
         rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        metric_name = 'steps'; metric = np.asarray(metrics[metric_name], dtype=np.float64)
+        metric_name = 'steps'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
 
