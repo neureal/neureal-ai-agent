@@ -21,6 +21,69 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 # TODO use numba to make things faster on CPU
 
 
+# transition dynamics within latent space
+class TransNet(tf.keras.layers.Layer):
+    def __init__(self, latent_size, categorical):
+        super(TransNet, self).__init__()
+        event_shape = (latent_size,)
+
+        # num_components = 256
+        # params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        num_components = 8 * latent_size
+        params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 0, 256, 256, 32
+        self.net_arch = "TN[inD{}-{:02d}D{}-{:02d}LS{}-cmp{}-lat{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid, num_components, latent_size)
+
+        self.layer_cond_dense_in = tf.keras.layers.Dense(64, activation=util.EvoNormS0(8), use_bias=False, name='cond_dense_in')
+        self.layer_cond_dense_latent_out = tf.keras.layers.Dense(latent_size, name='cond_dense_latent_out')
+
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        # self.layer_dense_01 = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_01')
+        self.layer_lstm_in = tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True)
+        
+        self.split_cats, loc_scale_size_each = tf.constant(num_components, dtype=tf.int32), int((params_size-num_components)/2)
+        self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
+
+    def _net_cond(self, inputs):
+        out = self.layer_cond_dense_in(inputs)
+        out = self.layer_cond_dense_latent_out(out)
+        return out
+    def _net(self, inputs):
+        out = self.layer_dense_in(inputs)
+        # out = self.layer_dense_01(out)
+        out = tf.squeeze(self.layer_lstm_in(tf.expand_dims(out, axis=0)), axis=0)
+        out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
+        return out
+
+    def call(self, inputs, training=None):
+        if self.layer_lstm_in.built: self.layer_lstm_in.reset_states()
+
+        out_accu = []
+        for k,v in inputs.items():
+            if k == 'action':
+                out = tf.cast(v, dtype=self.compute_dtype)
+                out = self._net_cond(out)
+                out_accu.append(out)
+            if k == 'state':
+                out = tf.cast(v, dtype=self.compute_dtype)
+                out_accu.append(out)
+        out = tf.math.accumulate_n(out_accu)
+        out = self._net(out)
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
+        if isinfnan > 0: tf.print('trans net out:', out)
+        return out
+
+    def loss(self, dist, targets):
+        targets = tf.cast(targets, dtype=dist.dtype)
+        loss = -dist.log_prob(targets)
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+        if isinfnan > 0: tf.print('trans net loss:', loss)
+        return loss
+
+
 class ActionNet(tf.keras.layers.Layer):
     def __init__(self, env, categorical, entropy_contrib):
         super(ActionNet, self).__init__()
