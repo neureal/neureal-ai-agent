@@ -233,7 +233,7 @@ class Categorical(tfp.layers.DistributionLambda):
         self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
     @staticmethod # this doesn't change anything, just keeps the variables seperate
     def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, dtype_cat=tf.int32, name=None):
-        print("tracing -> Categorical new")
+        # print("tracing -> Categorical new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
         dist = tfp.distributions.Categorical(logits=params, dtype=dtype_cat)
@@ -259,7 +259,7 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
         self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
     @staticmethod
     def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, temperature=1e-5, name=None):
-        print("tracing -> CategoricalRP new")
+        # print("tracing -> CategoricalRP new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
         dist = tfp.distributions.ExpRelaxedOneHotCategorical(temperature=temperature, logits=params)
@@ -284,26 +284,43 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
 
 class MixtureLogistic(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
+        dtype = tf.keras.backend.floatx()
+        eps = tf.experimental.numpy.finfo(dtype).eps
+        maxroot = np.log10(tf.math.sqrt(tf.dtypes.as_dtype(dtype).max))
+
         params_shape = [num_components]+list(event_shape)
         reinterpreted_batch_ndims = len(event_shape)
         
-        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(eps), tf.identity(maxroot)
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
         super(MixtureLogistic, self).__init__(
-            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, validate_args), **kwargs)
+            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args), **kwargs)
         self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
 
     @staticmethod # this doesn't change anything, just keeps the variables seperate
-    def new(params, num_components, params_shape, reinterpreted_batch_ndims, validate_args=False, name=None):
-        print("tracing -> MixtureLogistic new")
+    def new(params, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args=False, name=None):
+        # print("tracing -> MixtureLogistic new")
         mixture_params = params[..., :num_components]
 
         components_params = params[..., num_components:]
         loc_params, scale_params = tf.split(components_params, 2, axis=-1)
 
+        # scale_params_orig = scale_params
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
-        scale_params = tf.math.softplus(tf.reshape(scale_params, output_shape))
+        # scale_params = tf.math.softplus(scale_params)
+        # scale_params = tf.where(tf.math.less(scale_params, 0.0), tf.math.negative(scale_params), scale_params)
+        # scale_params = tf.math.abs(scale_params)
+        scale_params = tf.where(tf.math.less(scale_params, maxroot), tf.math.softplus(scale_params), scale_params)
+        # issafe = tf.math.logical_and(tf.math.less(scale_params, 20.0), tf.math.greater(scale_params, -20.0))
+        # scale_params = tf.where(issafe, tf.math.softplus(scale_params), scale_params)
+
+        # isinf = tf.math.count_nonzero(tf.math.is_inf(scale_params))
+        # isnan = tf.math.count_nonzero(tf.math.is_nan(scale_params))
+        # iszero = tf.math.count_nonzero(tf.math.equal(scale_params, zero))
+        # scale_params = tf.where(tf.math.is_nan(scale_params), zero, scale_params)
+        scale_params = tf.where(tf.math.less(scale_params, eps), eps, scale_params)
+        scale_params = tf.reshape(scale_params, output_shape)
 
         dist = tfp.distributions.MixtureSameFamily(
                 mixture_distribution = tfp.distributions.Categorical(
