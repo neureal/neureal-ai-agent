@@ -318,9 +318,10 @@ trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
 
-env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
 # env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
+import envs_local.random as env_random; env_name, max_steps, env = 'TestRnd', 100, env_random.RandomEnv()
 # import envs_local.bipedal_walker as env_bipedal_walker; env_name, max_steps, env = 'BipedalWalker', 100, env_bipedal_walker.BipedalWalker()
 # import gym_trader; env_name, max_steps, trader, env = 'Trader2', 100, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
 
