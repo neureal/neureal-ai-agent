@@ -91,7 +91,7 @@ class ActionNet(tf.keras.layers.Layer):
         if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, [1,], True
         elif isinstance(env.action_space, gym.spaces.Box): event_shape = list(env.action_space.shape); num_components = np.prod(event_shape).item()
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 256, 256, 32
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 0, 256, 256, 32
         self.net_arch = "AN[inD{}-{:02d}D{}-{:02d}LS{}-cmp{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid, num_components)
 
         if self.categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
@@ -101,8 +101,9 @@ class ActionNet(tf.keras.layers.Layer):
 
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_01 = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_01')
-        # self.layer_lstm_in = tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True)
+        self.layer_dense, self.layer_lstm = [], []
+        for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
         
         if self.categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
         else:
@@ -112,11 +113,11 @@ class ActionNet(tf.keras.layers.Layer):
 
     @tf.function
     def call(self, inputs, training=None):
+        # if self.layer_lstm_in.built and training: self.layer_lstm_in.reset_states()
         out = tf.cast(inputs['obs'], self.compute_dtype)
         out = self.layer_flatten(out)
-        out = self.layer_dense_in(out)
-        out = self.layer_dense_01(out)
-        # out = tf.squeeze(self.layer_lstm_in(tf.expand_dims(out, axis=0)), axis=0)
+        for i in range(self.net_DNN): out = self.layer_dense[i](out)
+        for i in range(self.net_LSTM): out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
         if self.categorical: out = self.layer_dense_logits_out(out)
         else: out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
         
@@ -140,24 +141,24 @@ class ActionNet(tf.keras.layers.Layer):
 class ValueNet(tf.keras.layers.Layer):
     def __init__(self, env):
         super(ValueNet, self).__init__()
-
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 256, 256, 32
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 0, 128, 128, 32
         self.net_arch = "VN[inD{}-{:02d}D{}-{:02d}LS{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid)
 
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_01 = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_01')
-        # self.layer_lstm_in = tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True)
+        self.layer_dense, self.layer_lstm = [], []
+        for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
         self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
 
     @tf.function
     def call(self, inputs, training=None):
-    # def call(self:tf.keras.Model, inputs:Dict[str, tf.Tensor], training:bool=None) -> tf.Tensor:
+        # if self.layer_lstm_in.built: self.layer_lstm_in.reset_states()
         out = tf.cast(inputs['obs'], self.compute_dtype)
         out = self.layer_flatten(out)
         out = self.layer_dense_in(out)
-        out = self.layer_dense_01(out)
-        # out = tf.squeeze(self.layer_lstm_in(tf.expand_dims(out, axis=0)), axis=0)
+        for i in range(self.net_DNN): out = self.layer_dense[i](out)
+        for i in range(self.net_LSTM): out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
         out = self.layer_dense_out(out)
         return out
 
@@ -239,6 +240,7 @@ class GeneralAI(tf.keras.Model):
         
         inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
 
+        # if self.action.layer_lstm_in.built: self.action.layer_lstm_in.reset_states()
         for step in tf.range(self.max_steps):
             obs = obs.write(step, inputs['obs'][-1])
 
@@ -260,7 +262,7 @@ class GeneralAI(tf.keras.Model):
     def DREAM_learner(self, inputs, training=True):
         print("tracing -> GeneralAI DREAM_learner")
 
-        action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
+        action_logits = self.action(inputs, training=training); action_dist = self.action.dist(action_logits)
 
         values = self.value(inputs)
         values = tf.squeeze(values, axis=-1)
@@ -307,7 +309,7 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
-max_episodes = 100
+max_episodes = 10000
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 0.99
@@ -318,14 +320,16 @@ trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
 
-env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
 # env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
-# import envs_local.random as env_random; env_name, max_steps, env = 'TestRnd', 100, env_random.RandomEnv()
-# import envs_local.bipedal_walker as env_bipedal_walker; env_name, max_steps, env = 'BipedalWalker', 100, env_bipedal_walker.BipedalWalker()
+# import envs_local.random as env_; env_name, max_steps, env = 'TestRnd', 128, env_.RandomEnv()
+# import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, env_.DataEnv('shkspr')
+import envs_local.data as env_; env_name, max_steps, env = 'DataMnist', 128, env_.DataEnv('mnist')
+# import envs_local.bipedal_walker as env_; env_name, max_steps, env = 'BipedalWalker', 100, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, trader, env = 'Trader2', 100, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
 
-import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
+# import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
 if __name__ == '__main__':
     # TODO add keyboard control so can stop
