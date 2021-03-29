@@ -24,25 +24,26 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 class TransNet(tf.keras.layers.Layer):
     def __init__(self, latent_size, categorical):
         super(TransNet, self).__init__()
-        event_shape = (latent_size,)
+        self.categorical, event_shape = categorical, (latent_size,)
 
-        # num_components = 256
-        # params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
-        num_components = 8 * latent_size
-        params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        if categorical: num_components = 256; params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        else: num_components = latent_size * 8; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 0, 256, 256, 32
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 1, 256, 256, 32
         self.net_arch = "TN[inD{}-{:02d}D{}-{:02d}LS{}-cmp{}-lat{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid, num_components, latent_size)
 
         self.layer_cond_dense_in = tf.keras.layers.Dense(64, activation=util.EvoNormS0(8), use_bias=False, name='cond_dense_in')
         self.layer_cond_dense_latent_out = tf.keras.layers.Dense(latent_size, name='cond_dense_latent_out')
 
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        # self.layer_dense_01 = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_01')
-        self.layer_lstm_in = tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True)
-        
-        self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
-        self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
+        self.layer_dense, self.layer_lstm = [], []
+        for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
+
+        if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+        else:
+            self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
+            self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
 
     def _net_cond(self, inputs):
         out = self.layer_cond_dense_in(inputs)
@@ -50,14 +51,16 @@ class TransNet(tf.keras.layers.Layer):
         return out
     def _net(self, inputs):
         out = self.layer_dense_in(inputs)
-        # out = self.layer_dense_01(out)
-        out = tf.squeeze(self.layer_lstm_in(tf.expand_dims(out, axis=0)), axis=0)
-        out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
+        for i in range(self.net_DNN): out = self.layer_dense[i](out)
+        for i in range(self.net_LSTM): out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
+        if self.categorical: out = self.layer_dense_logits_out(out)
+        else: out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
         return out
 
+    def reset_states(self):
+        for i in range(self.net_LSTM): self.layer_lstm[i].reset_states()
+    @tf.function
     def call(self, inputs, training=None):
-        if self.layer_lstm_in.built: self.layer_lstm_in.reset_states()
-
         out_accu = []
         for k,v in inputs.items():
             if k == 'action':
@@ -91,13 +94,11 @@ class ActionNet(tf.keras.layers.Layer):
         if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, [1,], True
         elif isinstance(env.action_space, gym.spaces.Box): event_shape = list(env.action_space.shape); num_components = np.prod(event_shape).item()
 
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 0, 256, 256, 32
-        self.net_arch = "AN[inD{}-{:02d}D{}-{:02d}LS{}-cmp{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid, num_components)
+        if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        else: num_components *= 2; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        if self.categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
-        else:
-            num_components = num_components * 2
-            params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 4, 1, 256, 256, 32
+        self.net_arch = "AN[inD{}-{:02d}D{}-{:02d}LS{}-cmp{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid, num_components)
 
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
@@ -105,17 +106,18 @@ class ActionNet(tf.keras.layers.Layer):
         for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
         for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
         
-        if self.categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+        if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
         else:
-            self.layer_dense_out = tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_out')
             self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
             self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
 
+    def reset_states(self):
+        for i in range(self.net_LSTM): self.layer_lstm[i].reset_states()
     @tf.function
     def call(self, inputs, training=None):
-        # if self.layer_lstm_in.built and training: self.layer_lstm_in.reset_states()
         out = tf.cast(inputs['obs'], self.compute_dtype)
         out = self.layer_flatten(out)
+        out = self.layer_dense_in(out)
         for i in range(self.net_DNN): out = self.layer_dense[i](out)
         for i in range(self.net_LSTM): out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
         if self.categorical: out = self.layer_dense_logits_out(out)
@@ -151,9 +153,10 @@ class ValueNet(tf.keras.layers.Layer):
         for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
         self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
 
+    def reset_states(self):
+        for i in range(self.net_LSTM): self.layer_lstm[i].reset_states()
     @tf.function
     def call(self, inputs, training=None):
-        # if self.layer_lstm_in.built: self.layer_lstm_in.reset_states()
         out = tf.cast(inputs['obs'], self.compute_dtype)
         out = self.layer_flatten(out)
         out = self.layer_dense_in(out)
@@ -240,7 +243,7 @@ class GeneralAI(tf.keras.Model):
         
         inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
 
-        # if self.action.layer_lstm_in.built: self.action.layer_lstm_in.reset_states()
+        self.action.reset_states()
         for step in tf.range(self.max_steps):
             obs = obs.write(step, inputs['obs'][-1])
 
@@ -262,8 +265,10 @@ class GeneralAI(tf.keras.Model):
     def DREAM_learner(self, inputs, training=True):
         print("tracing -> GeneralAI DREAM_learner")
 
-        action_logits = self.action(inputs, training=training); action_dist = self.action.dist(action_logits)
+        self.action.reset_states()
+        action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
 
+        self.value.reset_states()
         values = self.value(inputs)
         values = tf.squeeze(values, axis=-1)
 
@@ -309,7 +314,7 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
-max_episodes = 10000
+max_episodes = 100
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 0.99
