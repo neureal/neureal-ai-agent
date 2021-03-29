@@ -38,7 +38,7 @@ class TransNet(tf.keras.layers.Layer):
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
         self.layer_dense, self.layer_lstm = [], []
         for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
-        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
+        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
 
         if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
         else:
@@ -104,7 +104,7 @@ class ActionNet(tf.keras.layers.Layer):
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
         self.layer_dense, self.layer_lstm = [], []
         for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
-        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
+        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
         
         if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
         else:
@@ -143,14 +143,14 @@ class ActionNet(tf.keras.layers.Layer):
 class ValueNet(tf.keras.layers.Layer):
     def __init__(self, env):
         super(ValueNet, self).__init__()
-        self.net_DNN, self.net_LSTM, inp, mid, evo = 2, 0, 128, 128, 32
+        self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 256, 256, 32
         self.net_arch = "VN[inD{}-{:02d}D{}-{:02d}LS{}]".format(inp, self.net_DNN, mid, self.net_LSTM, mid)
 
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
         self.layer_dense, self.layer_lstm = [], []
         for i in range(self.net_DNN): self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
-        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
+        for i in range(self.net_LSTM): self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
         self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
 
     def reset_states(self):
@@ -229,6 +229,7 @@ class GeneralAI(tf.keras.Model):
         returns = returns.stack()[::-1]
 
         if self.returns_std: returns = ((returns - tf.math.reduce_mean(returns)) / (tf.math.reduce_std(returns) + self.float_eps))
+        returns = tf.cast(returns, self.compute_dtype)
         return tf.stop_gradient(returns)
 
 
@@ -325,12 +326,12 @@ trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
 
-# env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
 # env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, env = 'TestRnd', 128, env_.RandomEnv()
 # import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, env_.DataEnv('shkspr')
-import envs_local.data as env_; env_name, max_steps, env = 'DataMnist', 128, env_.DataEnv('mnist')
+# import envs_local.data as env_; env_name, max_steps, env = 'DataMnist', 128, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env = 'BipedalWalker', 100, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, trader, env = 'Trader2', 100, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
 
@@ -350,7 +351,7 @@ if __name__ == '__main__':
     # agent_process.join()
 
 
-    with tf.device('/device:CPU:0'):
+    with tf.device('/device:GPU:0'):
         model = GeneralAI(env, max_episodes=max_episodes, max_steps=max_steps, learn_rate=learn_rate, entropy_contrib=entropy_contrib, returns_disc=returns_disc, returns_std=returns_std, categorical=categorical, latent_size=latent_size)
         name = "gym-DREAM-{}-{}".format(env_name, ('cat' if categorical else 'con'))
 
