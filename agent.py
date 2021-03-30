@@ -124,7 +124,7 @@ class ActionNet(tf.keras.layers.Layer):
     @tf.function
     def call(self, inputs, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
-        out = tf.concat((out, inputs['obs_pred']), 1)
+        if 'obs_pred' in inputs: out = tf.concat((out, inputs['obs_pred']), 1)
         out = self.layer_flatten(out)
         out = self.layer_dense_in(out)
         for i in range(self.net_blocks):
@@ -170,7 +170,7 @@ class ValueNet(tf.keras.layers.Layer):
     @tf.function
     def call(self, inputs, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
-        out = tf.concat((out, inputs['obs_pred']), 1)
+        if 'obs_pred' in inputs: out = tf.concat((out, inputs['obs_pred']), 1)
         out = self.layer_flatten(out)
         out = self.layer_dense_in(out)
         for i in range(self.net_blocks):
@@ -185,13 +185,11 @@ class ValueNet(tf.keras.layers.Layer):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, env, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, returns_std, categorical, latent_size):
+    def __init__(self, arch, env, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, returns_std, categorical, latent_size):
         super(GeneralAI, self).__init__()
         self.max_episodes, self.max_steps, self.returns_disc, self.returns_std = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(returns_disc, tf.float64), returns_std
         self.float_maxroot = tf.constant(tf.math.sqrt(tf.dtypes.as_dtype(self.compute_dtype).max), self.compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(self.compute_dtype).eps, self.compute_dtype)
-        latent_size = env.observation_space.shape[0] # TODO hack until using RepNet
-        self.latent_zero, self.latent_invar = tf.constant(tf.fill((1,latent_size), self.float_eps)), tf.TensorShape([None,latent_size])
 
         self.env = env
         self.obs_dtype = tf.dtypes.as_dtype(env.observation_space.dtype)
@@ -205,13 +203,16 @@ class GeneralAI(tf.keras.Model):
             self.action_min = tf.constant(env.action_space.low[...,0], self.action_dtype)
             self.action_max = tf.constant(env.action_space.high[...,0], self.action_dtype)
 
-        inputs = {'action':tf.zeros([1]+action_shape,self.action_dtype), 'obs':self.latent_zero}
-        self.trans = TransNet(latent_size, False); outputs = self.trans(inputs) # TODO test categorical
-
-        inputs = {'obs':tf.zeros([1]+list(env.observation_space.shape),self.obs_dtype), 'reward':tf.constant([[0]],tf.float64), 'done':tf.constant([[False]],tf.bool), 'obs_pred':self.latent_zero}
+        inputs = {'obs':tf.zeros([1]+list(env.observation_space.shape),self.obs_dtype), 'reward':tf.constant([[0]],tf.float64), 'done':tf.constant([[False]],tf.bool)}
+        if arch=='DREAM':
+            latent_size = env.observation_space.shape[0] # TODO hack until using RepNet
+            self.latent_zero, self.latent_invar = tf.constant(tf.fill((1,latent_size), self.float_eps)), tf.TensorShape([None,latent_size])
+            inputs_trans = {'action':tf.zeros([1]+action_shape,self.action_dtype), 'obs':self.latent_zero}
+            self.trans = TransNet(latent_size, False); outputs = self.trans(inputs_trans) # TODO test categorical
+            inputs['obs_pred'] = self.latent_zero
         self.action = ActionNet(env, categorical, entropy_contrib); outputs = self.action(inputs)
         self.value = ValueNet(env); outputs = self.value(inputs)
-        
+
         self.action_storage_dtype = tf.int32 if self.action.categorical else self.compute_dtype
         self.reward_episode = tf.Variable(0, dtype=tf.float64, trainable=False)
         self.discounted_sum = tf.Variable(0, dtype=tf.float64, trainable=False)
@@ -249,57 +250,83 @@ class GeneralAI(tf.keras.Model):
         return tf.stop_gradient(returns)
 
 
-    # @tf.function
-    # def A2C_actor(self):
-    #     print("tracing -> GeneralAI A2C_actor")
-    #     inputs, outputs = {}, {}
+    @tf.function
+    def AC_actor(self):
+        print("tracing -> GeneralAI AC_actor")
+        inputs, outputs = {}, {}
 
-    #     obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
-    #     actions = tf.TensorArray(self.action_storage_dtype, size=0, dynamic_size=True)
-    #     rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_storage_dtype, size=0, dynamic_size=True)
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         
-    #     inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+        inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
 
-    #     self.action.reset_states()
-    #     for step in tf.range(self.max_steps):
-    #         obs = obs.write(step, inputs['obs'][-1])
+        self.action.reset_states()
+        for step in tf.range(self.max_steps):
+            obs = obs.write(step, inputs['obs'][-1])
 
-    #         action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
-    #         action = action_dist.sample()
-    #         actions = actions.write(step, action[-1])
+            action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
+            action = action_dist.sample()
+            actions = actions.write(step, action[-1])
 
-    #         if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
-    #         action = tf.squeeze(action)
-    #         inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+            if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
+            action = tf.squeeze(action)
+            inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
-    #         rewards = rewards.write(step, inputs['reward'][-1][0])
-    #         if inputs['done'][-1][0]: break
+            rewards = rewards.write(step, inputs['reward'][-1][0])
+            if inputs['done'][-1][0]: break
         
-    #     outputs['obs'], outputs['actions'], outputs['rewards'] = obs.stack(), actions.stack(), rewards.stack()
-    #     return outputs
+        outputs['obs'], outputs['actions'], outputs['rewards'] = obs.stack(), actions.stack(), rewards.stack()
+        return outputs
+    @tf.function
+    def AC_learner(self, inputs, training=True):
+        print("tracing -> GeneralAI AC_learner")
 
-    # @tf.function
-    # def A2C_learner(self, inputs, training=True):
-    #     print("tracing -> GeneralAI A2C_learner")
+        self.action.reset_states()
+        action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
 
-    #     self.action.reset_states()
-    #     action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
+        self.value.reset_states()
+        values = self.value(inputs)
+        values = tf.squeeze(values, axis=-1)
 
-    #     self.value.reset_states()
-    #     values = self.value(inputs)
-    #     values = tf.squeeze(values, axis=-1)
-
-    #     returns = self.calc_returns(inputs['rewards'])
-    #     advantages = returns - values
+        returns = self.calc_returns(inputs['rewards'])
+        advantages = returns - values
         
-    #     loss = {}
-    #     loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
-    #     loss['value'] = self.value.loss(advantages)
-    #     loss['total'] = loss['action'] + loss['value']
+        loss = {}
+        loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
+        loss['value'] = self.value.loss(advantages)
+        loss['total'] = loss['action'] + loss['value']
 
-    #     loss['returns'] = returns
-    #     loss['advantages'] = advantages
-    #     return loss
+        loss['returns'] = returns
+        loss['advantages'] = advantages
+        return loss
+    @tf.function
+    def AC_run(self):
+        print("tracing -> GeneralAI AC_run")
+        metrics = {'rewards_total':tf.float64,'steps':tf.int32,'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype}
+        for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
+
+        for episode in tf.range(self.max_episodes):
+            outputs = self.AC_actor()
+            with tf.GradientTape() as tape:
+                loss = self.AC_learner(outputs)
+            gradients = tape.gradient(loss['total'], self.action.trainable_variables + self.value.trainable_variables)
+            # isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(gradients[0]), tf.math.is_inf(gradients[0])))
+            # if isinfnan > 0: tf.print('\ngradients', gradients[0]); break
+            self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables + self.value.trainable_variables))
+            
+
+            metrics['rewards_total'] = metrics['rewards_total'].write(episode,  tf.math.reduce_sum(outputs['rewards']))
+            metrics['steps'] = metrics['steps'].write(episode, tf.shape(outputs['rewards'])[0])
+            metrics['loss_total'] = metrics['loss_total'].write(episode, tf.math.reduce_mean(loss['total']))
+            metrics['loss_action'] = metrics['loss_action'].write(episode, tf.math.reduce_mean(loss['action']))
+            metrics['loss_value'] = metrics['loss_value'].write(episode, tf.math.reduce_mean(loss['value']))
+            metrics['returns'] = metrics['returns'].write(episode, tf.math.reduce_mean(loss['returns']))
+            metrics['advantages'] = metrics['advantages'].write(episode, tf.math.reduce_mean(loss['advantages']))
+            # for k in metrics.keys(): tf.print(k, metrics[k].read(episode), end=' ')
+        for k in metrics.keys(): metrics[k] = metrics[k].stack()
+        return metrics
+        
 
 
     @tf.function
@@ -437,6 +464,9 @@ env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observa
 
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
+# arch= 'AC'
+arch = 'DREAM'
+
 if __name__ == '__main__':
     # TODO add keyboard control so can stop
 
@@ -452,13 +482,13 @@ if __name__ == '__main__':
 
 
     with tf.device('/device:CPU:0'): # use GPU for large networks or big data
-        model = GeneralAI(env, max_episodes=max_episodes, max_steps=max_steps, learn_rate=learn_rate, entropy_contrib=entropy_contrib, returns_disc=returns_disc, returns_std=returns_std, categorical=categorical, latent_size=latent_size)
-        name = "gym-DREAM-{}-{}".format(env_name, ('cat' if categorical else 'con'))
+        model = GeneralAI(arch, env, max_episodes=max_episodes, max_steps=max_steps, learn_rate=learn_rate, entropy_contrib=entropy_contrib, returns_disc=returns_disc, returns_std=returns_std, categorical=categorical, latent_size=latent_size)
+        name = "gym-{}-{}-{}".format(arch, env_name, ('cat' if categorical else 'con'))
 
 
         # # TODO load models, load each net seperately
         # self.net_arch = "{}-{}-{}".format(self.trans.net_arch, self.action.net_arch, self.value.net_arch)
-        model_name = "{}-{}-{}-a{}".format(name, model.trans.net_arch, machine, device)
+        model_name = "{}-{}-{}-a{}".format(name, model.action.net_arch, machine, device)
         model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
         # if tf.io.gfile.exists(model_file):
         #     model.load_weights(model_file, by_name=True, skip_mismatch=True)
@@ -468,22 +498,25 @@ if __name__ == '__main__':
 
         ## run
         t1_start = time.perf_counter_ns()
-        metrics = model.DREAM_run()
+        if arch=='AC': metrics = model.AC_run()
+        if arch=='DREAM': metrics = model.DREAM_run()
         total_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
 
         # # TODO save models
         # model.save_weights(model_file)
         
         ## metrics
-        name, name_arch = "{}-{}-a{}-{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M")), "{}   {}   {}".format(model.trans.net_arch, model.action.net_arch, model.value.net_arch)
+        name, name_arch = "{}-{}-a{}-{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M")), ""
+        for net in model.layers: name_arch += "   "+net.net_arch
         total_steps = np.sum(metrics['steps'])
         step_time = total_time/total_steps
-        title = "{}    {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    en:{}    std:{}".format(name, name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, entropy_contrib, returns_std); print(title)
+        title = "{} {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    en:{}    std:{}".format(name, name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, entropy_contrib, returns_std); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
         plt.figure(num=name, figsize=(34, 16), tight_layout=True)
-        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 8
+        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 7
+        if arch=='DREAM': vplts = 8
 
         rows = 2; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
         metric_name = 'rewards_total'; metric = np.asarray(metrics[metric_name], np.float64)
@@ -503,10 +536,11 @@ if __name__ == '__main__':
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
         
-        rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        metric_name = 'trans'; metric = np.asarray(metrics[metric_name], np.float64)
-        plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
+        if arch=='DREAM':
+            rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
+            metric_name = 'trans'; metric = np.asarray(metrics[metric_name], np.float64)
+            plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
+            plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
         
         rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
         metric_name = 'steps'; metric = np.asarray(metrics[metric_name], np.float64)
