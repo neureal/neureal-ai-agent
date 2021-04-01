@@ -143,7 +143,7 @@ class ActionNet(tf.keras.layers.Layer):
     def loss(self, dist, targets, advantages):
         targets = tf.cast(targets, dist.dtype)
         loss = -dist.log_prob(targets)
-        loss = tf.math.multiply(loss, advantages)
+        loss = loss * advantages # * 1e-2
         if self.categorical:
             entropy = dist.entropy()
             loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
@@ -300,7 +300,8 @@ class GeneralAI(tf.keras.Model):
         advantages = returns - values
         
         loss = {}
-        loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
+        # loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
+        loss['action'] = self.action.loss(action_dist, inputs['actions'], inputs['rewards'])
         loss['value'] = self.value.loss(advantages)
         loss['total'] = loss['action'] + loss['value']
 
@@ -381,9 +382,9 @@ class GeneralAI(tf.keras.Model):
 
         inputs['obs'] = tf.cast(inputs['obs'], self.latent_dtype) # RepNet
 
-        self.trans.reset_states()
-        trans_logits = self.trans(inputs); trans_dist = self.trans.dist(trans_logits)
-        # inputs_pred['obs'] = trans_dist.sample()
+        # self.trans.reset_states()
+        # trans_logits = self.trans(inputs); trans_dist = self.trans.dist(trans_logits)
+        # # inputs_pred['obs'] = trans_dist.sample()
 
         self.action.reset_states()
         action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
@@ -398,7 +399,8 @@ class GeneralAI(tf.keras.Model):
         loss = {}
         # future = tf.roll(inputs['obs'], -1, axis=0) # GenNet
         # loss['trans'] = self.trans.loss(trans_dist, future)
-        loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
+        # loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
+        loss['action'] = self.action.loss(action_dist, inputs['actions'], inputs['rewards'])
         loss['value'] = self.value.loss(advantages)
         loss['total'] = loss['action'] + loss['value']
         # loss['total'] = loss['trans'] + loss['action'] + loss['value']
@@ -430,9 +432,6 @@ class GeneralAI(tf.keras.Model):
                 loss['trans'] = self.trans.loss(trans_dist, future)
             gradients = tape.gradient(loss['trans'], self.trans.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables))
-
-            # isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(gradients[0]), tf.math.is_inf(gradients[0])))
-            # if isinfnan > 0: tf.print('\ngradients', gradients[0]); break
 
             metrics['rewards_total'] = metrics['rewards_total'].write(episode,  tf.math.reduce_sum(outputs['rewards']))
             metrics['steps'] = metrics['steps'].write(episode, tf.shape(outputs['rewards'])[0])
@@ -472,8 +471,8 @@ import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, en
 
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
-# arch= 'AC'
-arch = 'DREAM'
+arch = 'AC'
+# arch = 'DREAM'
 
 if __name__ == '__main__':
     # TODO add keyboard control so can stop
@@ -489,7 +488,8 @@ if __name__ == '__main__':
     # agent_process.join()
 
 
-    with tf.device('/device:CPU:0'): # use GPU for large networks or big data
+    # with tf.device('/device:GPU:0'): # use GPU for large networks or big data
+    with tf.device('/device:CPU:0'):
         model = GeneralAI(arch, env, max_episodes=max_episodes, max_steps=max_steps, learn_rate=learn_rate, entropy_contrib=entropy_contrib, returns_disc=returns_disc, returns_std=returns_std, action_cat=action_cat, latent_size=latent_size, latent_cat=latent_cat)
         name = "gym-{}-{}-{}-{}".format(arch, env_name, ('Acat' if action_cat else 'Acon'), ('Lcat' if latent_cat else 'Lcon'))
 

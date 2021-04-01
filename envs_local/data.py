@@ -66,6 +66,7 @@ class DataEnv(gym.Env):
                 action_pred = np.asarray([action], self.dsl.dtype)
                 if action_pred == self.dsl[self.ds_idx-1]: reward = np.float64(1.0)
             if self.data_src == 'shkspr':
+                # obs_prev = self.ds[self.ds_idx-1]
                 action_pred = np.asarray([action], self.observation_space.dtype)
                 if action_pred == obs: reward = np.float64(1.0)
 
