@@ -17,9 +17,15 @@ import gym
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
-# TODO add imagination by looping through TransNet seperately from env.step
+# TODO add in generic gym stuff from model_util
+# TODO wrap env in seperate process and make run async with random NOOP skips to test latency learning/timing
 # TODO test conditioning with action
+# TODO add imagination by looping through TransNet seperately from looping through env.step
+# TODO put actor in seperate process so can run async
 # TODO add RepNet, GenNet and DisNet
+# TODO how exactly is this different than MuZero?
+# TODO use attention layer instead of LSTM
+# TODO try out the 'lottery ticket hypothosis' pruning during training
 # TODO use numba to make things faster on CPU
 
 
@@ -210,7 +216,7 @@ class GeneralAI(tf.keras.Model):
             self.action_max = tf.constant(env.action_space.high[...,0], self.compute_dtype)
 
         inputs = {'obs':tf.zeros([1]+list(env.observation_space.shape),self.obs_dtype), 'reward':tf.constant([[0]],tf.float64), 'done':tf.constant([[False]],tf.bool)}
-        if arch=='DREAM':
+        if arch=='TRANS':
             latent_size = env.observation_space.shape[0] # TODO hack until using RepNet
             self.latent_dtype = tf.int32 if latent_cat else self.compute_dtype
             self.latent_zero, self.latent_invar = tf.constant(tf.zeros((1,latent_size), self.latent_dtype)), tf.TensorShape([None,latent_size])
@@ -338,8 +344,8 @@ class GeneralAI(tf.keras.Model):
 
 
     @tf.function
-    def DREAM_actor(self):
-        print("tracing -> GeneralAI DREAM_actor")
+    def TRANS_actor(self):
+        print("tracing -> GeneralAI TRANS_actor")
         inputs, outputs = {}, {}
 
         obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
@@ -376,8 +382,8 @@ class GeneralAI(tf.keras.Model):
         return outputs
 
     @tf.function
-    def DREAM_learner(self, inputs_, training=True):
-        print("tracing -> GeneralAI DREAM_learner")
+    def TRANS_learner(self, inputs_, training=True):
+        print("tracing -> GeneralAI TRANS_learner")
         inputs = inputs_.copy()
 
         inputs['obs'] = tf.cast(inputs['obs'], self.latent_dtype) # RepNet
@@ -410,15 +416,15 @@ class GeneralAI(tf.keras.Model):
         return loss
 
     @tf.function
-    def DREAM_run(self):
-        print("tracing -> GeneralAI DREAM_run")
+    def TRANS_run(self):
+        print("tracing -> GeneralAI TRANS_run")
         metrics = {'rewards_total':tf.float64,'steps':tf.int32,'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype,'trans':self.compute_dtype}
         for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
 
         for episode in tf.range(self.max_episodes):
-            outputs = self.DREAM_actor()
+            outputs = self.TRANS_actor()
             with tf.GradientTape() as tape:
-                loss = self.DREAM_learner(outputs)
+                loss = self.TRANS_learner(outputs)
             gradients = tape.gradient(loss['total'], self.action.trainable_variables + self.value.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables + self.value.trainable_variables))
             # gradients = tape.gradient(loss['total'], self.trans.trainable_variables + self.action.trainable_variables + self.value.trainable_variables)
@@ -455,23 +461,24 @@ returns_disc = 0.99
 returns_std = False
 action_cat = True
 latent_size = 1
-latent_cat = True
+latent_cat = False
 trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
 
 # env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
-# env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
+env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
 # env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, env = 'TestRnd', 128, env_.RandomEnv()
-import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, env_.DataEnv('shkspr')
+# import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, env_.DataEnv('shkspr')
 # import envs_local.data as env_; env_name, max_steps, env = 'DataMnist', 128, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env = 'BipedalWalker', 100, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, trader, env = 'Trader2', 100, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
 
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
-arch = 'AC'
+# arch = 'AC'
+arch = 'TRANS'
 # arch = 'DREAM'
 
 if __name__ == '__main__':
@@ -507,7 +514,7 @@ if __name__ == '__main__':
         ## run
         t1_start = time.perf_counter_ns()
         if arch=='AC': metrics = model.AC_run()
-        if arch=='DREAM': metrics = model.DREAM_run()
+        if arch=='TRANS': metrics = model.TRANS_run()
         total_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
 
         # # TODO save models
@@ -524,7 +531,7 @@ if __name__ == '__main__':
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
         plt.figure(num=name, figsize=(34, 16), tight_layout=True)
         xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 7
-        if arch=='DREAM': vplts = 8
+        if arch=='TRANS': vplts = 8
 
         rows = 2; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
         metric_name = 'rewards_total'; metric = np.asarray(metrics[metric_name], np.float64)
@@ -544,7 +551,7 @@ if __name__ == '__main__':
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
         
-        if arch=='DREAM':
+        if arch=='TRANS':
             rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
             metric_name = 'trans'; metric = np.asarray(metrics[metric_name], np.float64)
             plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
