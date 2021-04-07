@@ -10,6 +10,187 @@ def print_time(t):
     days=int(t//86400);hours=int((t-days*86400)//3600);mins=int((t-days*86400-hours*3600)//60);secs=int((t-days*86400-hours*3600-mins*60))
     return "{:4d}:{:02d}:{:02d}:{:02d}".format(days,hours,mins,secs)
 
+def replace_infnan(inputs, replace):
+    isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
+    return tf.where(isinfnan, replace, inputs)
+
+
+
+class EvoNormS0(tf.keras.layers.Layer):
+    def __init__(self, groups, eps=None, axis=-1, name=None):
+        super(EvoNormS0, self).__init__(name=name)
+        self.groups, self.axis = groups, axis
+        if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
+        self.eps = tf.identity(tf.constant(eps, dtype=self.compute_dtype))
+
+    def build(self, input_shape):
+        inlen = len(input_shape)
+        shape = [1] * inlen
+        shape[self.axis] = input_shape[self.axis]
+        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.keras.initializers.Ones())
+        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.keras.initializers.Zeros())
+        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.keras.initializers.Ones())
+
+        groups = min(input_shape[self.axis], self.groups)
+        group_shape = input_shape.as_list()
+        group_shape[self.axis] = input_shape[self.axis] // groups
+        group_shape.insert(self.axis, groups)
+        self.group_shape = tf.Variable(group_shape, trainable=False)
+
+        std_shape = list(range(1, inlen+self.axis))
+        std_shape.append(inlen)
+        self.std_shape = tf.identity(std_shape)
+
+    @tf.function
+    def call(self, inputs, training=True):
+        input_shape = tf.shape(inputs)
+        self.group_shape[0].assign(input_shape[0]) # use same learned parameters with different batch size
+        grouped_inputs = tf.reshape(inputs, self.group_shape)
+        _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
+        std = tf.sqrt(var + self.eps)
+        std = tf.broadcast_to(std, self.group_shape)
+        group_std = tf.reshape(std, input_shape)
+
+        return (inputs * tf.math.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
+
+
+
+class Categorical(tfp.layers.DistributionLambda):
+    def __init__(self, num_components, event_shape=(), validate_args=False, dtype_cat=tf.int32, **kwargs):
+        params_shape = list(event_shape)+[num_components]
+        reinterpreted_batch_ndims = len(event_shape)
+        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
+        super(Categorical, self).__init__(
+            lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, validate_args, dtype_cat), **kwargs)
+        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+    @staticmethod # this doesn't change anything, just keeps the variables seperate
+    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, dtype_cat=tf.int32, name=None):
+        # print("tracing -> Categorical new")
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        params = tf.reshape(params, output_shape)
+        dist = tfp.distributions.Categorical(logits=params, dtype=dtype_cat)
+        dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
+        return dist
+    @staticmethod
+    def sample(dist, name=None):
+        return dist.sample()
+    @staticmethod
+    def params_size(num_components, event_shape=(), name=None):
+        event_size = np.prod(event_shape).item()
+        params_size = event_size * num_components
+        return params_size
+
+class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
+    def __init__(self, num_components, event_shape=(), validate_args=False, temperature=1e-5, **kwargs):
+        params_shape = list(event_shape)+[num_components]
+        reinterpreted_batch_ndims = len(event_shape)
+        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
+        super(CategoricalRP, self).__init__(
+            lambda input: CategoricalRP.new(input, params_shape, reinterpreted_batch_ndims, validate_args, temperature), **kwargs)
+        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+    @staticmethod
+    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, temperature=1e-5, name=None):
+        # print("tracing -> CategoricalRP new")
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        params = tf.reshape(params, output_shape)
+        dist = tfp.distributions.ExpRelaxedOneHotCategorical(temperature=temperature, logits=params)
+        # dist = tfp.distributions.RelaxedOneHotCategorical(temperature=temperature, logits=params)
+        # dist = tfp.distributions.RelaxedBernoulli(temperature=temperature, logits=params)
+        dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
+        return dist
+    @staticmethod
+    def sample(dist, name=None):
+        sample = dist.sample()
+        sample = tf.exp(sample)
+        # sample = tf.math.argmax(sample, axis=-1, output_type=tf.int64) # cant calculate gradients
+        # sample = tf.cast(sample, dtype=tf.float64)
+        return sample
+    @staticmethod
+    def params_size(num_components, event_shape=(), name=None):
+        event_size = np.prod(event_shape).item()
+        params_size = event_size * num_components
+        return params_size
+
+
+
+def combine_logits(out, layer_cats, layer_loc, layer_scale, split_cats):
+    out_cats = out[:,:split_cats]
+    out_loc, out_scale = tf.split(out[:,split_cats:], 2, axis=-1)
+    out_logits_cats = layer_cats(out_cats)
+    out_logits_loc = layer_loc(out_loc)
+    out_logits_scale = layer_scale(out_scale)
+    out = tf.concat([out_logits_cats, out_logits_loc, out_logits_scale], axis=-1)
+    return out
+
+class MixtureLogistic(tfp.layers.DistributionLambda):
+    def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
+        dtype = tf.keras.backend.floatx()
+        eps = tf.experimental.numpy.finfo(dtype).eps
+        maxroot = np.log10(tf.math.sqrt(tf.dtypes.as_dtype(dtype).max))
+
+        params_shape = [num_components]+list(event_shape)
+        reinterpreted_batch_ndims = len(event_shape)
+        
+        params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(eps), tf.identity(maxroot)
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
+        super(MixtureLogistic, self).__init__(
+            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args), **kwargs)
+        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+
+    @staticmethod # this doesn't change anything, just keeps the variables seperate
+    def new(params, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args=False, name=None):
+        # print("tracing -> MixtureLogistic new")
+        mixture_params = params[..., :num_components]
+
+        components_params = params[..., num_components:]
+        loc_params, scale_params = tf.split(components_params, 2, axis=-1)
+
+        # scale_params_orig = scale_params
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        loc_params = tf.reshape(loc_params, output_shape)
+        # scale_params = tf.math.softplus(scale_params)
+        # scale_params = tf.where(tf.math.less(scale_params, 0.0), tf.math.negative(scale_params), scale_params)
+        # scale_params = tf.math.abs(scale_params)
+        scale_params = tf.where(tf.math.less(scale_params, maxroot), tf.math.softplus(scale_params), scale_params)
+        # issafe = tf.math.logical_and(tf.math.less(scale_params, 20.0), tf.math.greater(scale_params, -20.0))
+        # scale_params = tf.where(issafe, tf.math.softplus(scale_params), scale_params)
+
+        # isinf = tf.math.count_nonzero(tf.math.is_inf(scale_params))
+        # isnan = tf.math.count_nonzero(tf.math.is_nan(scale_params))
+        # iszero = tf.math.count_nonzero(tf.math.equal(scale_params, zero))
+        # scale_params = tf.where(tf.math.is_nan(scale_params), zero, scale_params)
+        scale_params = tf.where(tf.math.less(scale_params, eps), eps, scale_params)
+        scale_params = tf.reshape(scale_params, output_shape)
+
+        dist = tfp.distributions.MixtureSameFamily(
+                mixture_distribution = tfp.distributions.Categorical(
+                    logits=mixture_params
+                ),
+                components_distribution = tfp.distributions.Independent(
+                    tfp.distributions.Logistic(
+                        loc=loc_params,
+                        scale=scale_params
+                    ),
+                    reinterpreted_batch_ndims=reinterpreted_batch_ndims
+                ),
+            # reparameterize=True, # better spread of loc and scale params, rep net works better
+        )
+        return dist
+
+    @staticmethod
+    def sample(dist, name=None):
+        return dist.sample()
+
+    @staticmethod
+    def params_size(num_components, event_shape=(), name=None):
+        event_size = np.prod(event_shape).item()
+        params_size = num_components + event_size * num_components * 2
+        return params_size
+
+
+
 
 # def gym_space_fill(spaces, fill):
 #     for space in spaces:
@@ -204,184 +385,4 @@ def np_to_tf(data, dtype=None):
         data_tf = {}
         for k,v in data.items(): data_tf[k] = np_to_tf(v, dtype=dtype)
     return data_tf
-
-
-
-
-def replace_infnan(inputs, replace):
-    isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
-    return tf.where(isinfnan, replace, inputs)
-
-def combine_logits(out, layer_cats, layer_loc, layer_scale, split_cats):
-    out_cats = out[:,:split_cats]
-    out_loc, out_scale = tf.split(out[:,split_cats:], 2, axis=-1)
-    out_logits_cats = layer_cats(out_cats)
-    out_logits_loc = layer_loc(out_loc)
-    out_logits_scale = layer_scale(out_scale)
-    out = tf.concat([out_logits_cats, out_logits_loc, out_logits_scale], axis=-1)
-    return out
-
-
-class Categorical(tfp.layers.DistributionLambda):
-    def __init__(self, num_components, event_shape=(), validate_args=False, dtype_cat=tf.int32, **kwargs):
-        params_shape = list(event_shape)+[num_components]
-        reinterpreted_batch_ndims = len(event_shape)
-        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
-        kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        super(Categorical, self).__init__(
-            lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, validate_args, dtype_cat), **kwargs)
-        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
-    @staticmethod # this doesn't change anything, just keeps the variables seperate
-    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, dtype_cat=tf.int32, name=None):
-        # print("tracing -> Categorical new")
-        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
-        params = tf.reshape(params, output_shape)
-        dist = tfp.distributions.Categorical(logits=params, dtype=dtype_cat)
-        dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
-        return dist
-    @staticmethod
-    def sample(dist, name=None):
-        return dist.sample()
-    @staticmethod
-    def params_size(num_components, event_shape=(), name=None):
-        event_size = np.prod(event_shape).item()
-        params_size = event_size * num_components
-        return params_size
-
-class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
-    def __init__(self, num_components, event_shape=(), validate_args=False, temperature=1e-5, **kwargs):
-        params_shape = list(event_shape)+[num_components]
-        reinterpreted_batch_ndims = len(event_shape)
-        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
-        kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        super(CategoricalRP, self).__init__(
-            lambda input: CategoricalRP.new(input, params_shape, reinterpreted_batch_ndims, validate_args, temperature), **kwargs)
-        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
-    @staticmethod
-    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, temperature=1e-5, name=None):
-        # print("tracing -> CategoricalRP new")
-        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
-        params = tf.reshape(params, output_shape)
-        dist = tfp.distributions.ExpRelaxedOneHotCategorical(temperature=temperature, logits=params)
-        # dist = tfp.distributions.RelaxedOneHotCategorical(temperature=temperature, logits=params)
-        # dist = tfp.distributions.RelaxedBernoulli(temperature=temperature, logits=params)
-        dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
-        return dist
-    @staticmethod
-    def sample(dist, name=None):
-        sample = dist.sample()
-        sample = tf.exp(sample)
-        # sample = tf.math.argmax(sample, axis=-1, output_type=tf.int64) # cant calculate gradients
-        # sample = tf.cast(sample, dtype=tf.float64)
-        return sample
-    @staticmethod
-    def params_size(num_components, event_shape=(), name=None):
-        event_size = np.prod(event_shape).item()
-        params_size = event_size * num_components
-        return params_size
-
-
-
-class MixtureLogistic(tfp.layers.DistributionLambda):
-    def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
-        dtype = tf.keras.backend.floatx()
-        eps = tf.experimental.numpy.finfo(dtype).eps
-        maxroot = np.log10(tf.math.sqrt(tf.dtypes.as_dtype(dtype).max))
-
-        params_shape = [num_components]+list(event_shape)
-        reinterpreted_batch_ndims = len(event_shape)
-        
-        params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(eps), tf.identity(maxroot)
-        kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        super(MixtureLogistic, self).__init__(
-            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args), **kwargs)
-        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
-
-    @staticmethod # this doesn't change anything, just keeps the variables seperate
-    def new(params, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args=False, name=None):
-        # print("tracing -> MixtureLogistic new")
-        mixture_params = params[..., :num_components]
-
-        components_params = params[..., num_components:]
-        loc_params, scale_params = tf.split(components_params, 2, axis=-1)
-
-        # scale_params_orig = scale_params
-        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
-        loc_params = tf.reshape(loc_params, output_shape)
-        # scale_params = tf.math.softplus(scale_params)
-        # scale_params = tf.where(tf.math.less(scale_params, 0.0), tf.math.negative(scale_params), scale_params)
-        # scale_params = tf.math.abs(scale_params)
-        scale_params = tf.where(tf.math.less(scale_params, maxroot), tf.math.softplus(scale_params), scale_params)
-        # issafe = tf.math.logical_and(tf.math.less(scale_params, 20.0), tf.math.greater(scale_params, -20.0))
-        # scale_params = tf.where(issafe, tf.math.softplus(scale_params), scale_params)
-
-        # isinf = tf.math.count_nonzero(tf.math.is_inf(scale_params))
-        # isnan = tf.math.count_nonzero(tf.math.is_nan(scale_params))
-        # iszero = tf.math.count_nonzero(tf.math.equal(scale_params, zero))
-        # scale_params = tf.where(tf.math.is_nan(scale_params), zero, scale_params)
-        scale_params = tf.where(tf.math.less(scale_params, eps), eps, scale_params)
-        scale_params = tf.reshape(scale_params, output_shape)
-
-        dist = tfp.distributions.MixtureSameFamily(
-                mixture_distribution = tfp.distributions.Categorical(
-                    logits=mixture_params
-                ),
-                components_distribution = tfp.distributions.Independent(
-                    tfp.distributions.Logistic(
-                        loc=loc_params,
-                        scale=scale_params
-                    ),
-                    reinterpreted_batch_ndims=reinterpreted_batch_ndims
-                ),
-            # reparameterize=True, # better spread of loc and scale params, rep net works better
-        )
-        return dist
-
-    @staticmethod
-    def sample(dist, name=None):
-        return dist.sample()
-
-    @staticmethod
-    def params_size(num_components, event_shape=(), name=None):
-        event_size = np.prod(event_shape).item()
-        params_size = num_components + event_size * num_components * 2
-        return params_size
-
-
-
-class EvoNormS0(tf.keras.layers.Layer):
-    def __init__(self, groups, eps=None, axis=-1, name=None):
-        super(EvoNormS0, self).__init__(name=name)
-        self.groups, self.axis = groups, axis
-        if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
-        self.eps = tf.identity(tf.constant(eps, dtype=self.compute_dtype))
-
-    def build(self, input_shape):
-        inlen = len(input_shape)
-        shape = [1] * inlen
-        shape[self.axis] = input_shape[self.axis]
-        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.keras.initializers.Ones())
-        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.keras.initializers.Zeros())
-        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.keras.initializers.Ones())
-
-        groups = min(input_shape[self.axis], self.groups)
-        group_shape = input_shape.as_list()
-        group_shape[self.axis] = input_shape[self.axis] // groups
-        group_shape.insert(self.axis, groups)
-        self.group_shape = tf.Variable(group_shape, trainable=False)
-
-        std_shape = list(range(1, inlen+self.axis))
-        std_shape.append(inlen)
-        self.std_shape = tf.identity(std_shape)
-
-    @tf.function
-    def call(self, inputs, training=True):
-        input_shape = tf.shape(inputs)
-        self.group_shape[0].assign(input_shape[0]) # use same learned parameters with different batch size
-        grouped_inputs = tf.reshape(inputs, self.group_shape)
-        _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
-        std = tf.sqrt(var + self.eps)
-        std = tf.broadcast_to(std, self.group_shape)
-        group_std = tf.reshape(std, input_shape)
-
-        return (inputs * tf.math.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
+    

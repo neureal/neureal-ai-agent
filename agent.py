@@ -18,13 +18,13 @@ physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 # TODO add in generic gym stuff from model_util
-# TODO wrap env in seperate process and make run async with random NOOP skips to test latency learning/timing
 # TODO test conditioning with action
+# TODO add RepNet and try out MuZero-ish architecture
+# TODO wrap env in seperate process and make run async with random NOOP skips to test latency learning/timing
 # TODO add imagination by looping through TransNet seperately from looping through env.step
 # TODO put actor in seperate process so can run async
-# TODO add RepNet, GenNet and DisNet
-# TODO how exactly is this different than MuZero?
-# TODO use attention layer instead of LSTM
+# TODO add GenNet and DisNet
+# TODO use attention (transformer decoder) layer instead of LSTM
 # TODO try out the 'lottery ticket hypothosis' pruning during training
 # TODO use numba to make things faster on CPU
 
