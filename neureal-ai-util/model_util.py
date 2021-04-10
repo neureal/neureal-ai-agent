@@ -190,6 +190,21 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         return params_size
 
 
+# def gym_get_spec(space):
+#     is_vec, sample = True, None
+#     # TODO expand the Dict of observation types (env.observation_space) to auto make input embedding networks
+#     sample = obs_space.sample()
+#     if isinstance(obs_space, gym.spaces.Discrete):
+#         sample = tf.convert_to_tensor([[sample]], dtype=dtype)
+#     elif isinstance(obs_space, gym.spaces.Box):
+#         if len(obs_space.shape) > 1: is_vec = False
+#         sample = tf.convert_to_tensor([sample], dtype=dtype)
+#     # elif isinstance(obs_space, gym.spaces.Tuple):
+#     elif isinstance(obs_space, gym.spaces.Dict):
+#         sample = gym_flatten(obs_space, sample, dtype=dtype)
+#         sample = tf.convert_to_tensor([sample], dtype=dtype)
+
+#     return dtypes, spec, sample
 
 
 # def gym_space_fill(spaces, fill):
@@ -385,4 +400,3 @@ def np_to_tf(data, dtype=None):
         data_tf = {}
         for k,v in data.items(): data_tf[k] = np_to_tf(v, dtype=dtype)
     return data_tf
-    
