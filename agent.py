@@ -96,7 +96,8 @@ class RepNet(tf.keras.layers.Layer):
 
     def loss(self, dist, targets):
         targets = tf.cast(targets, dist.dtype)
-        loss = dist.log_prob(targets) - self.dist_prior.log_prob(targets)
+        loss = dist.log_prob(targets)
+        if not self.categorical: loss = loss - self.dist_prior.log_prob(targets)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('rep net loss:', loss)
@@ -115,8 +116,8 @@ class TransNet(tf.keras.layers.Layer):
         self.net_blocks, self.net_LSTM, inp, mid, evo = 1, True, 256, 256, 32
         self.net_arch = "TN[inD{}-{:02d}{}D{}-cmp{}-lat{}]".format(inp, self.net_blocks, ('LS+' if self.net_LSTM else ''), mid, num_components, latent_size)
 
-        # self.layer_cond_dense_in = tf.keras.layers.Dense(64, activation=util.EvoNormS0(8), use_bias=False, name='cond_dense_in')
-        # self.layer_cond_dense_latent_out = tf.keras.layers.Dense(latent_size, name='cond_dense_latent_out')
+        self.layer_cond_dense_in = tf.keras.layers.Dense(64, activation=util.EvoNormS0(8), use_bias=False, name='cond_dense_in')
+        self.layer_cond_dense_latent_out = tf.keras.layers.Dense(latent_size, name='cond_dense_latent_out')
 
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
@@ -130,10 +131,6 @@ class TransNet(tf.keras.layers.Layer):
             self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
             self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
 
-    # def _net_cond(self, inputs):
-    #     out = self.layer_cond_dense_in(inputs)
-    #     out = self.layer_cond_dense_latent_out(out)
-    #     return out
     def _net(self, inputs):
         out = self.layer_dense_in(inputs)
         for i in range(self.net_blocks):
@@ -152,14 +149,15 @@ class TransNet(tf.keras.layers.Layer):
         for k,v in inputs.items():
             if k == 'actions':
                 out = tf.cast(v, self.compute_dtype)
-                # out = self._net_cond(out)
+                out = self.layer_cond_dense_in(out)
+                out = self.layer_cond_dense_latent_out(out)
                 out_accu.append(out)
             if k == 'obs':
                 out = tf.cast(v, self.compute_dtype)
                 out = self.layer_flatten(out)
                 out_accu.append(out)
-        # out = tf.math.accumulate_n(out_accu)
-        out = tf.concat(out_accu, 1)
+        out = tf.math.accumulate_n(out_accu)
+        # out = tf.concat(out_accu, 1)
         out = self._net(out)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
@@ -172,6 +170,43 @@ class TransNet(tf.keras.layers.Layer):
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('trans net loss:', loss)
+        return loss
+
+
+class RewardNet(tf.keras.layers.Layer):
+    def __init__(self):
+        super(RewardNet, self).__init__()
+        num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        inp, evo = 256, 32; self.net_arch = "RWD[inD{}-cmp{}]".format(inp, num_components)
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+    @tf.function
+    def call(self, inputs, training=None):
+        out = self.layer_dense_in(inputs['obs'])
+        out = self.layer_dense_logits_out(out)
+        return out
+    def loss(self, dist, targets):
+        targets = tf.cast(targets, dist.dtype)
+        loss = -dist.log_prob(targets)
+        return loss
+
+class DoneNet(tf.keras.layers.Layer):
+    def __init__(self):
+        super(DoneNet, self).__init__()
+        num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        inp, evo = 256, 32; self.net_arch = "DON[inD{}-cmp{}]".format(inp, num_components)
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+    @tf.function
+    def call(self, inputs, training=None):
+        out = self.layer_dense_in(inputs['obs'])
+        out = self.layer_dense_logits_out(out)
+        return out
+    def loss(self, dist, targets):
+        targets = tf.cast(targets, dist.dtype)
+        loss = -dist.log_prob(targets)
         return loss
 
 
@@ -341,7 +376,7 @@ class GeneralAI(tf.keras.Model):
         # self.obs_dtypes, self.obs_spec, self.obs_sample = util.gym_get_spec(env.observation_space)
         # self.action_dtypes, self.action_spec, self.action_sample = util.gym_get_spec(env.action_space)
         self.obs_dtype = tf.dtypes.as_dtype(env.observation_space.dtype)
-        self.obs_zero = tf.constant(tf.zeros([1]+list(env.observation_space.shape), self.obs_dtype))
+        self.obs_zero = tf.constant(0, self.obs_dtype, shape=[1]+list(env.observation_space.shape))
 
         self.action_dtype = tf.dtypes.as_dtype(env.action_space.dtype)
         if isinstance(env.action_space, gym.spaces.Discrete):
@@ -352,12 +387,12 @@ class GeneralAI(tf.keras.Model):
             action_shape = list(env.action_space.shape)
             self.action_min = tf.constant(env.action_space.low[...,0], self.compute_dtype)
             self.action_max = tf.constant(env.action_space.high[...,0], self.compute_dtype)
-        self.action_zero = tf.constant(tf.zeros([1]+action_shape, self.action_dtype))
+        self.action_zero = tf.constant(0, self.action_dtype, shape=[1]+action_shape)
         self.action_out_dtype = tf.int32 if action_cat else tf.dtypes.as_dtype(self.compute_dtype)
 
         if arch in ('TRANS'): latent_size = env.observation_space.shape[0]
         self.latent_dtype = tf.int32 if latent_cat else tf.dtypes.as_dtype(self.compute_dtype)
-        self.latent_zero, self.latent_invar = tf.constant(tf.zeros((1,latent_size), self.latent_dtype)), tf.TensorShape([None,latent_size])
+        self.latent_zero, self.latent_invar = tf.constant(0, self.latent_dtype, shape=(1,latent_size)), tf.TensorShape([None,latent_size])
 
 
         inputs = {'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
@@ -368,7 +403,10 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('AC'): inputs['actions'] = self.action_zero
         if arch in ('TRANS'): inputs['obs_pred'] = self.latent_zero
-        if arch in ('DREAM'): inputs['obs'] = self.latent_zero
+        if arch in ('DREAM'):
+            # inputs['obs'] = self.latent_zero
+            self.rwd = RewardNet(); outputs = self.rwd(inputs)
+            self.done = DoneNet(); outputs = self.done(inputs)
         self.action = ActionNet(env, action_cat, entropy_contrib); outputs = self.action(inputs)
         self.value = ValueNet(env); outputs = self.value(inputs)
         # self.rtn = ReturnsNet(env); outputs = self.rtn(inputs)
@@ -425,11 +463,11 @@ class GeneralAI(tf.keras.Model):
         actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         
-        inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+        inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
 
         self.action.reset_states()
         for step in tf.range(self.max_steps):
-            # inputs['obs'] = tf.concat([inputs['obs'], tf.cast(inputs['reward'],self.obs_dtype), tf.cast(inputs['done'],self.obs_dtype)], axis=1)
+            # inputs['obs'] = tf.concat([inputs['obs'], tf.cast(inputs['rewards'],self.obs_dtype), tf.cast(inputs['dones'],self.obs_dtype)], axis=1)
             obs = obs.write(step, inputs['obs'][-1])
 
             action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
@@ -439,10 +477,10 @@ class GeneralAI(tf.keras.Model):
             if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
             action = tf.cast(action, self.action_dtype)
             action = tf.squeeze(action)
-            inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
-            rewards = rewards.write(step, inputs['reward'][-1])
-            if inputs['done'][-1][0]: break
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            if inputs['dones'][-1][0]: break
         
         outputs['obs'], outputs['actions'], outputs['rewards'] = obs.stack(), actions.stack(), rewards.stack()
         return outputs
@@ -482,10 +520,11 @@ class GeneralAI(tf.keras.Model):
     @tf.function
     def AC_run(self):
         print("tracing -> GeneralAI AC_run")
-        metrics = {'rewards_total':tf.float64,'steps':tf.int32}; metrics_loss = {'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype}
-        # metrics = {'rewards_total':tf.float64,'steps':tf.int32,'trans':self.compute_dtype}; metrics_loss = {'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype}
+        metrics = {'rewards_total':tf.float64,'steps':tf.int32}
+        metrics_loss = [{'loss_total':self.compute_dtype},{'loss_action':self.compute_dtype,'loss_value':self.compute_dtype},{'returns':self.compute_dtype,'advantages':self.compute_dtype}]
         for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
-        for k in metrics_loss.keys(): metrics_loss[k] = tf.TensorArray(metrics_loss[k], size=0, dynamic_size=True)
+        for loss_group in metrics_loss:
+            for k in loss_group.keys(): loss_group[k] = tf.TensorArray(loss_group[k], size=0, dynamic_size=True)
 
         for episode in tf.range(self.max_episodes):
             outputs = self.AC_actor()
@@ -500,17 +539,18 @@ class GeneralAI(tf.keras.Model):
 
             metrics['rewards_total'] = metrics['rewards_total'].write(episode,  tf.math.reduce_sum(outputs['rewards']))
             metrics['steps'] = metrics['steps'].write(episode, tf.shape(outputs['rewards'])[0])
-            metrics_loss['loss_total'] = metrics_loss['loss_total'].write(episode, tf.math.reduce_mean(loss['total']))
-            metrics_loss['loss_action'] = metrics_loss['loss_action'].write(episode, tf.math.reduce_mean(loss['action']))
-            metrics_loss['loss_value'] = metrics_loss['loss_value'].write(episode, tf.math.reduce_mean(loss['value']))
-            metrics_loss['returns'] = metrics_loss['returns'].write(episode, tf.math.reduce_mean(loss['returns']))
-            metrics_loss['advantages'] = metrics_loss['advantages'].write(episode, tf.math.reduce_mean(loss['advantages']))
-            # metrics['trans'] = metrics['trans'].write(episode, tf.math.reduce_mean(loss['trans']))
+            metrics_loss[0]['loss_total'] = metrics_loss[0]['loss_total'].write(episode, tf.math.reduce_mean(loss['total']))
+            metrics_loss[1]['loss_action'] = metrics_loss[1]['loss_action'].write(episode, tf.math.reduce_mean(loss['action']))
+            metrics_loss[1]['loss_value'] = metrics_loss[1]['loss_value'].write(episode, tf.math.reduce_mean(loss['value']))
+            metrics_loss[2]['returns'] = metrics_loss[2]['returns'].write(episode, tf.math.reduce_mean(loss['returns']))
+            metrics_loss[2]['advantages'] = metrics_loss[2]['advantages'].write(episode, tf.math.reduce_mean(loss['advantages']))
+            # metrics_loss[3]['loss_trans'] = metrics_loss[3]['loss_trans'].write(episode, tf.math.reduce_mean(loss['trans']))
             # for k in metrics.keys(): tf.print(k, metrics[k].read(episode), end=' ')
         for k in metrics.keys(): metrics[k] = metrics[k].stack()
-        for k in metrics_loss.keys(): metrics_loss[k] = metrics_loss[k].stack()
+        for loss_group in metrics_loss:
+            for k in loss_group.keys(): loss_group[k] = loss_group[k].stack()
         return metrics, metrics_loss
-        
+
 
 
     @tf.function
@@ -523,7 +563,7 @@ class GeneralAI(tf.keras.Model):
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         obs_pred = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
         
-        inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+        inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
         inputs['actions'], inputs['obs_pred'] = self.action_zero, self.latent_zero
 
         self.trans.reset_states(); self.action.reset_states()
@@ -545,10 +585,10 @@ class GeneralAI(tf.keras.Model):
             action = tf.cast(action, self.action_dtype)
             inputs['actions'] = action
             action = tf.squeeze(action)
-            inputs['obs'], inputs['reward'], inputs['done'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
-            rewards = rewards.write(step, inputs['reward'][-1])
-            if inputs['done'][-1][0]: break
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            if inputs['dones'][-1][0]: break
         
         outputs['obs'], outputs['actions'], outputs['rewards'] = obs.stack(), actions.stack(), rewards.stack()
         outputs['obs_pred'] = obs_pred.stack()
@@ -597,9 +637,11 @@ class GeneralAI(tf.keras.Model):
     @tf.function
     def TRANS_run(self):
         print("tracing -> GeneralAI TRANS_run")
-        metrics = {'rewards_total':tf.float64,'steps':tf.int32,'trans':self.compute_dtype}; metrics_loss = {'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype}
+        metrics = {'rewards_total':tf.float64,'steps':tf.int32}
+        metrics_loss = [{'loss_total':self.compute_dtype},{'loss_action':self.compute_dtype,'loss_value':self.compute_dtype},{'returns':self.compute_dtype,'advantages':self.compute_dtype},{'loss_trans':self.compute_dtype}]
         for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
-        for k in metrics_loss.keys(): metrics_loss[k] = tf.TensorArray(metrics_loss[k], size=0, dynamic_size=True)
+        for loss_group in metrics_loss:
+            for k in loss_group.keys(): loss_group[k] = tf.TensorArray(loss_group[k], size=0, dynamic_size=True)
 
         for episode in tf.range(self.max_episodes):
             outputs = self.TRANS_actor()
@@ -623,15 +665,161 @@ class GeneralAI(tf.keras.Model):
 
             metrics['rewards_total'] = metrics['rewards_total'].write(episode,  tf.math.reduce_sum(outputs['rewards']))
             metrics['steps'] = metrics['steps'].write(episode, tf.shape(outputs['rewards'])[0])
-            metrics_loss['loss_total'] = metrics_loss['loss_total'].write(episode, tf.math.reduce_mean(loss['total']))
-            metrics_loss['loss_action'] = metrics_loss['loss_action'].write(episode, tf.math.reduce_mean(loss['action']))
-            metrics_loss['loss_value'] = metrics_loss['loss_value'].write(episode, tf.math.reduce_mean(loss['value']))
-            metrics_loss['returns'] = metrics_loss['returns'].write(episode, tf.math.reduce_mean(loss['returns']))
-            metrics_loss['advantages'] = metrics_loss['advantages'].write(episode, tf.math.reduce_mean(loss['advantages']))
-            metrics['trans'] = metrics['trans'].write(episode, tf.math.reduce_mean(loss['trans']))
-            # for k in metrics.keys(): tf.print(k, metrics[k].read(episode), end=' ')
+            metrics_loss[0]['loss_total'] = metrics_loss[0]['loss_total'].write(episode, tf.math.reduce_mean(loss['total']))
+            metrics_loss[1]['loss_action'] = metrics_loss[1]['loss_action'].write(episode, tf.math.reduce_mean(loss['action']))
+            metrics_loss[1]['loss_value'] = metrics_loss[1]['loss_value'].write(episode, tf.math.reduce_mean(loss['value']))
+            metrics_loss[2]['returns'] = metrics_loss[2]['returns'].write(episode, tf.math.reduce_mean(loss['returns']))
+            metrics_loss[2]['advantages'] = metrics_loss[2]['advantages'].write(episode, tf.math.reduce_mean(loss['advantages']))
+            metrics_loss[3]['loss_trans'] = metrics_loss[3]['loss_trans'].write(episode, tf.math.reduce_mean(loss['trans']))
         for k in metrics.keys(): metrics[k] = metrics[k].stack()
-        for k in metrics_loss.keys(): metrics_loss[k] = metrics_loss[k].stack()
+        for loss_group in metrics_loss:
+            for k in loss_group.keys(): loss_group[k] = loss_group[k].stack()
+        return metrics, metrics_loss
+
+
+
+    @tf.function
+    def DREAM_actor(self):
+        print("tracing -> GeneralAI DREAM_actor")
+        inputs, outputs = {}, {}
+
+        obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
+        states = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
+
+        inputs_rep = {'obs':self.latent_zero}
+        # inputs_rep = {'obs':self.latent_zero, 'obs_pred':self.latent_zero}
+        
+        inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+
+        # self.trans.reset_states()
+        self.rep.reset_states(); self.action.reset_states()
+        for step in tf.range(self.max_steps):
+            tf.autograph.experimental.set_loop_options(shape_invariants=[(inputs_rep['obs'], self.latent_invar)])
+            # tf.autograph.experimental.set_loop_options(shape_invariants=[(inputs_rep['obs'], self.latent_invar), (inputs_rep['obs_pred'], self.latent_invar)])
+            obs = obs.write(step, inputs['obs'][-1])
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            dones = dones.write(step, inputs['dones'][-1])
+
+            rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+            inputs_rep['obs'] = rep_dist.sample()
+            states = states.write(step, inputs_rep['obs'][-1])
+
+            # trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
+            # inputs_rep['obs_pred'] = trans_dist.sample()
+
+            action_logits = self.action(inputs_rep); action_dist = self.action.dist(action_logits)
+            action = action_dist.sample()
+            actions = actions.write(step, action[-1])
+            
+            if inputs['dones'][-1][0]: break
+
+            if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
+            action = tf.cast(action, self.action_dtype)
+            action = tf.squeeze(action)
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+        
+        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['states'] = obs.stack(), actions.stack(), rewards.stack(), dones.stack(), states.stack()
+        # outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'] = obs.stack(), actions.stack(), rewards.stack(), dones.stack()
+        return outputs
+    
+    @tf.function
+    def DREAM_learner(self, inputs_, training=True):
+        print("tracing -> GeneralAI DREAM_learner")
+        inputs = inputs_.copy()
+        rewards_next = tf.roll(inputs['rewards'], -1, axis=0)
+        dones_next = tf.roll(inputs['dones'], -1, axis=0)
+
+        self.rep.reset_states()
+        rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+        inputs['obs'] = inputs['states']
+        # inputs['obs'] = rep_dist.sample()
+        # # inputs['obs'] = tf.roll(inputs['states'], -1, axis=0)
+
+        # self.trans.reset_states()
+        # trans_logits = self.trans(inputs); trans_dist = self.trans.dist(trans_logits)
+        # inputs['obs_pred'] = trans_dist.sample()
+        # # obs_next = tf.roll(inputs['obs'], -1, axis=0)
+
+        # rwd_logits = self.rwd(inputs); rwd_dist = self.rwd.dist(rwd_logits) # TODO should it be predicting the rewards_next, dones_next instead?
+        # rewards_next = rwd_dist.sample()
+        # done_logits = self.done(inputs); done_dist = self.done.dist(done_logits)
+
+        self.action.reset_states()
+        action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
+        # actions_next = tf.roll(inputs['actions'], -1, axis=0)
+        # inputs['actions'] = action_dist.sample()
+
+        self.value.reset_states()
+        values = self.value(inputs)
+        values = tf.squeeze(values, axis=-1)
+
+        returns = self.calc_returns(rewards_next)
+        advantages = returns - values
+
+        loss = {}
+        loss['rep'] = self.rep.loss(rep_dist, inputs['obs'])
+        loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
+        # loss['action'] = self.action.loss(action_dist, actions_next, advantages)
+        loss['value'] = self.value.loss(advantages)
+        # loss['trans'] = self.trans.loss(trans_dist, obs_next)
+        # loss['rwd'] = self.rwd.loss(rwd_dist, rewards_next)
+        # loss['done'] = self.done.loss(done_dist, dones_next)
+        # loss['total'] = loss['rep'] + loss['action'] + loss['value'] + loss['trans'] + loss['rwd'] + loss['done']
+        # loss['total'] = loss['action'] + loss['value'] + loss['rwd'] + loss['done']
+        loss['total'] = loss['rep'] + loss['action'] + loss['value']
+
+        loss['returns'] = returns
+        loss['advantages'] = advantages
+        return loss
+
+    @tf.function
+    def DREAM_imagine_actor(self):
+        print("tracing -> GeneralAI DREAM_imagine_actor")
+
+    @tf.function
+    def DREAM_imagine_learner(self, inputs_, training=True):
+        print("tracing -> GeneralAI DREAM_imagine_learner")
+
+    @tf.function
+    def DREAM_run(self):
+        print("tracing -> GeneralAI DREAM_run")
+        metrics = {'rewards_total':tf.float64,'steps':tf.int32}
+        metrics_loss = [
+            {'loss_total':self.compute_dtype},{'loss_action':self.compute_dtype,'loss_value':self.compute_dtype},{'returns':self.compute_dtype,'advantages':self.compute_dtype}
+            ,{'loss_rep':self.compute_dtype}
+            #,{'loss_rwd':self.compute_dtype,'loss_done':self.compute_dtype}
+            #,{'loss_rep':self.compute_dtype,'loss_trans':self.compute_dtype}, {'loss_rwd':self.compute_dtype,'loss_done':self.compute_dtype}
+        ]
+        for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
+        for loss_group in metrics_loss:
+            for k in loss_group.keys(): loss_group[k] = tf.TensorArray(loss_group[k], size=0, dynamic_size=True)
+
+        for episode in tf.range(self.max_episodes):
+            outputs = self.DREAM_actor()
+            with tf.GradientTape() as tape:
+                loss = self.DREAM_learner(outputs)
+            # gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables)
+            # self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables))
+            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables))
+
+            metrics['rewards_total'] = metrics['rewards_total'].write(episode,  tf.math.reduce_sum(outputs['rewards']))
+            metrics['steps'] = metrics['steps'].write(episode, tf.shape(outputs['rewards'])[0])
+            metrics_loss[0]['loss_total'] = metrics_loss[0]['loss_total'].write(episode, tf.math.reduce_mean(loss['total']))
+            metrics_loss[1]['loss_action'] = metrics_loss[1]['loss_action'].write(episode, tf.math.reduce_mean(loss['action']))
+            metrics_loss[1]['loss_value'] = metrics_loss[1]['loss_value'].write(episode, tf.math.reduce_mean(loss['value']))
+            metrics_loss[2]['returns'] = metrics_loss[2]['returns'].write(episode, tf.math.reduce_mean(loss['returns']))
+            metrics_loss[2]['advantages'] = metrics_loss[2]['advantages'].write(episode, tf.math.reduce_mean(loss['advantages']))
+            metrics_loss[3]['loss_rep'] = metrics_loss[3]['loss_rep'].write(episode, tf.math.reduce_mean(loss['rep']))
+            # metrics_loss[3]['loss_trans'] = metrics_loss[3]['loss_trans'].write(episode, tf.math.reduce_mean(loss['trans']))
+            # metrics_loss[3]['loss_rwd'] = metrics_loss[3]['loss_rwd'].write(episode, tf.math.reduce_mean(loss['rwd']))
+            # metrics_loss[3]['loss_done'] = metrics_loss[3]['loss_done'].write(episode, tf.math.reduce_mean(loss['done']))
+        for k in metrics.keys(): metrics[k] = metrics[k].stack()
+        for loss_group in metrics_loss:
+            for k in loss_group.keys(): loss_group[k] = loss_group[k].stack()
         return metrics, metrics_loss
 
 
@@ -644,14 +832,14 @@ entropy_contrib = 1e-8
 returns_disc = 0.99
 returns_std = False
 action_cat = True
-latent_size = 1
+latent_size = 4
 latent_cat = False
 trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
 
-# env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
-env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
+env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
 # env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, env = 'TestRnd', 128, env_.RandomEnv()
 # import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, env_.DataEnv('shkspr')
@@ -661,9 +849,9 @@ env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
 
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
-arch = 'AC' # basic Actor Critic
+# arch = 'AC' # basic Actor Critic
 # arch = 'TRANS' # model based learned Transition dynamics
-# arch = 'DREAM' # Dreamer/planner w/imagination (DeepMind MuZero)
+arch = 'DREAM' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'WM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
@@ -716,22 +904,17 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
         plt.figure(num=name, figsize=(34, 16), tight_layout=True)
-        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, len(metrics) + 5
+        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 3 + len(metrics_loss)
 
         rows = 2; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
         metric_name = 'rewards_total'; metric = np.asarray(metrics[metric_name], np.float64)
         plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left'); plt.title(title)
 
-        rows = 4; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        for metric_name, metric in metrics_loss.items():
-            metric = np.asarray(metric, np.float64); plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
-        
-        if 'trans' in metrics:
+        for loss_group in metrics_loss:
             rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-            metric_name = 'trans'; metric = np.asarray(metrics[metric_name], np.float64)
-            plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
+            for metric_name, metric in loss_group.items():
+                metric = np.asarray(metric, np.float64); plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
             plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
         
         rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
