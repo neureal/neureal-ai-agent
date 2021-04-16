@@ -128,7 +128,8 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
         dtype = tf.keras.backend.floatx()
         eps = tf.experimental.numpy.finfo(dtype).eps
-        maxroot = np.log10(tf.math.sqrt(tf.dtypes.as_dtype(dtype).max))
+        # maxroot = np.log10(tf.math.sqrt(tf.dtypes.as_dtype(dtype).max))
+        maxroot = tf.math.sqrt(tf.dtypes.as_dtype(dtype).max)
 
         params_shape = [num_components]+list(event_shape)
         reinterpreted_batch_ndims = len(event_shape)
@@ -150,18 +151,24 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         # scale_params_orig = scale_params
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
+        
+        scale_params = tf.math.abs(scale_params)
+        # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
+
         # scale_params = tf.math.softplus(scale_params)
         # scale_params = tf.where(tf.math.less(scale_params, 0.0), tf.math.negative(scale_params), scale_params)
-        # scale_params = tf.math.abs(scale_params)
-        scale_params = tf.where(tf.math.less(scale_params, maxroot), tf.math.softplus(scale_params), scale_params)
+        # scale_params = tf.where(tf.math.less(scale_params, maxroot), tf.math.softplus(scale_params), scale_params)
         # issafe = tf.math.logical_and(tf.math.less(scale_params, 20.0), tf.math.greater(scale_params, -20.0))
         # scale_params = tf.where(issafe, tf.math.softplus(scale_params), scale_params)
+        # scale_params = tf.where(tf.math.less(scale_params, maxroot), scale_params, maxroot)
 
         # isinf = tf.math.count_nonzero(tf.math.is_inf(scale_params))
         # isnan = tf.math.count_nonzero(tf.math.is_nan(scale_params))
         # iszero = tf.math.count_nonzero(tf.math.equal(scale_params, zero))
         # scale_params = tf.where(tf.math.is_nan(scale_params), zero, scale_params)
-        scale_params = tf.where(tf.math.less(scale_params, eps), eps, scale_params)
+        # scale_params = tf.where(tf.math.less(scale_params, eps), eps, scale_params)
+
         scale_params = tf.reshape(scale_params, output_shape)
 
         dist = tfp.distributions.MixtureSameFamily(
@@ -169,6 +176,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
                     logits=mixture_params
                 ),
                 components_distribution = tfp.distributions.Independent(
+                    # tfp.distributions.Normal(
                     tfp.distributions.Logistic(
                         loc=loc_params,
                         scale=scale_params
