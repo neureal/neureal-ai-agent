@@ -115,26 +115,25 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
 
 
 
-def combine_logits(out, layer_cats, layer_loc, layer_scale, split_cats):
-    out_cats = out[:,:split_cats]
-    out_loc, out_scale = tf.split(out[:,split_cats:], 2, axis=-1)
-    out_logits_cats = layer_cats(out_cats)
-    out_logits_loc = layer_loc(out_loc)
-    out_logits_scale = layer_scale(out_scale)
-    out = tf.concat([out_logits_cats, out_logits_loc, out_logits_scale], axis=-1)
-    return out
+# def combine_logits(out, layer_cats, layer_loc, layer_scale, split_cats):
+#     out_cats = out[:,:split_cats]
+#     out_loc, out_scale = tf.split(out[:,split_cats:], 2, axis=-1)
+#     out_logits_cats = layer_cats(out_cats)
+#     out_logits_loc = layer_loc(out_loc)
+#     out_logits_scale = layer_scale(out_scale)
+#     out = tf.concat([out_logits_cats, out_logits_loc, out_logits_scale], axis=-1)
+#     return out
 
 class MixtureLogistic(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
         dtype = tf.keras.backend.floatx()
         eps = tf.experimental.numpy.finfo(dtype).eps
-        # maxroot = np.log10(tf.math.sqrt(tf.dtypes.as_dtype(dtype).max))
         maxroot = tf.math.sqrt(tf.dtypes.as_dtype(dtype).max)
 
         params_shape = [num_components]+list(event_shape)
         reinterpreted_batch_ndims = len(event_shape)
         
-        params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(eps), tf.identity(maxroot)
+        params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(tf.constant(params_shape)), tf.identity(tf.constant(reinterpreted_batch_ndims)), tf.identity(tf.constant(eps, dtype)), tf.identity(tf.constant(maxroot, dtype))
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
         super(MixtureLogistic, self).__init__(
             lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args), **kwargs)
@@ -148,27 +147,12 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         components_params = params[..., num_components:]
         loc_params, scale_params = tf.split(components_params, 2, axis=-1)
 
-        # scale_params_orig = scale_params
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
         
         scale_params = tf.math.abs(scale_params)
         # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
         scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
-
-        # scale_params = tf.math.softplus(scale_params)
-        # scale_params = tf.where(tf.math.less(scale_params, 0.0), tf.math.negative(scale_params), scale_params)
-        # scale_params = tf.where(tf.math.less(scale_params, maxroot), tf.math.softplus(scale_params), scale_params)
-        # issafe = tf.math.logical_and(tf.math.less(scale_params, 20.0), tf.math.greater(scale_params, -20.0))
-        # scale_params = tf.where(issafe, tf.math.softplus(scale_params), scale_params)
-        # scale_params = tf.where(tf.math.less(scale_params, maxroot), scale_params, maxroot)
-
-        # isinf = tf.math.count_nonzero(tf.math.is_inf(scale_params))
-        # isnan = tf.math.count_nonzero(tf.math.is_nan(scale_params))
-        # iszero = tf.math.count_nonzero(tf.math.equal(scale_params, zero))
-        # scale_params = tf.where(tf.math.is_nan(scale_params), zero, scale_params)
-        # scale_params = tf.where(tf.math.less(scale_params, eps), eps, scale_params)
-
         scale_params = tf.reshape(scale_params, output_shape)
 
         dist = tfp.distributions.MixtureSameFamily(

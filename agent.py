@@ -56,18 +56,14 @@ class RepNet(tf.keras.layers.Layer):
             if self.net_LSTM: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
             self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
 
-        if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        else:
-            self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
-            self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
 
     def _net(self, inputs):
         out = self.layer_dense_in(inputs)
         for i in range(self.net_blocks):
             if self.net_LSTM: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
             out = self.layer_dense[i](out)
-        if self.categorical: out = self.layer_dense_logits_out(out)
-        else: out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
+        out = self.layer_dense_logits_out(out)
         return out
 
     def reset_states(self):
@@ -117,7 +113,7 @@ class TransNet(tf.keras.layers.Layer):
         self.net_arch = "TN[inD{}-{:02d}{}D{}-cmp{}-lat{}]".format(inp, self.net_blocks, ('LS+' if self.net_LSTM else ''), mid, num_components, latent_size)
 
         self.layer_cond_dense_in = tf.keras.layers.Dense(64, activation=util.EvoNormS0(8), use_bias=False, name='cond_dense_in')
-        self.layer_cond_dense_latent_out = tf.keras.layers.Dense(latent_size, name='cond_dense_latent_out')
+        self.layer_cond_dense_latent = tf.keras.layers.Dense(latent_size, name='cond_dense_latent')
 
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
@@ -126,18 +122,14 @@ class TransNet(tf.keras.layers.Layer):
             if self.net_LSTM: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
             self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
 
-        if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        else:
-            self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
-            self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
 
     def _net(self, inputs):
         out = self.layer_dense_in(inputs)
         for i in range(self.net_blocks):
             if self.net_LSTM: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
             out = self.layer_dense[i](out)
-        if self.categorical: out = self.layer_dense_logits_out(out)
-        else: out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
+        out = self.layer_dense_logits_out(out)
         return out
 
     def reset_states(self):
@@ -150,7 +142,7 @@ class TransNet(tf.keras.layers.Layer):
             if k == 'actions':
                 out = tf.cast(v, self.compute_dtype)
                 out = self.layer_cond_dense_in(out)
-                out = self.layer_cond_dense_latent_out(out)
+                out = self.layer_cond_dense_latent(out)
                 out_accu.append(out)
             if k == 'obs':
                 out = tf.cast(v, self.compute_dtype)
@@ -215,11 +207,11 @@ class ActionNet(tf.keras.layers.Layer):
         super(ActionNet, self).__init__()
         self.entropy_contrib, self.categorical, self.is_discrete = tf.constant(entropy_contrib, self.compute_dtype), categorical, False
 
-        if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, [1,], True
+        if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, (1,), True
         elif isinstance(env.action_space, gym.spaces.Box): event_shape = list(env.action_space.shape); num_components = np.prod(event_shape).item()
 
         if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
-        else: num_components *= 2; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        else: num_components *= 4; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
         self.net_blocks, self.net_LSTM, inp, mid, evo = 1, False, 256, 256, 32
         self.net_arch = "AN[inD{}-{:02d}{}D{}-cmp{}]".format(inp, self.net_blocks, ('LS+' if self.net_LSTM else ''), mid, num_components)
@@ -231,10 +223,7 @@ class ActionNet(tf.keras.layers.Layer):
             if self.net_LSTM: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
             self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
         
-        if categorical: self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        else:
-            self.split_cats, loc_scale_size_each = tf.constant(num_components, tf.int32), int((params_size-num_components)/2)
-            self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale = tf.keras.layers.Dense(num_components), tf.keras.layers.Dense(loc_scale_size_each), tf.keras.layers.Dense(loc_scale_size_each)
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
 
     def reset_states(self):
         if self.net_LSTM:
@@ -256,8 +245,7 @@ class ActionNet(tf.keras.layers.Layer):
         for i in range(self.net_blocks):
             if self.net_LSTM: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
             out = self.layer_dense[i](out)
-        if self.categorical: out = self.layer_dense_logits_out(out)
-        else: out = util.combine_logits(out, self.layer_cont_cats, self.layer_cont_loc, self.layer_cont_scale, self.split_cats)
+        out = self.layer_dense_logits_out(out)
         
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('action net out:', out)
@@ -451,6 +439,7 @@ class GeneralAI(tf.keras.Model):
         return tf.stop_gradient(returns)
 
 
+
     @tf.function
     def AC_actor(self):
         print("tracing -> GeneralAI AC_actor")
@@ -469,24 +458,25 @@ class GeneralAI(tf.keras.Model):
         for step in tf.range(self.max_steps):
             # inputs['obs'] = tf.concat([inputs['obs'], tf.cast(inputs['rewards'],self.obs_dtype), tf.cast(inputs['dones'],self.obs_dtype)], axis=1)
             obs = obs.write(step, inputs['obs'][-1])
+            rewards = rewards.write(step, inputs['rewards'][-1])
 
             action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
             action = action_dist.sample()
             actions = actions.write(step, action[-1])
+
+            if inputs['dones'][-1][0]: break
 
             if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
             action = tf.cast(action, self.action_dtype)
             action = tf.squeeze(action)
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            if inputs['dones'][-1][0]: break
-        
         outputs['obs'], outputs['actions'], outputs['rewards'] = obs.stack(), actions.stack(), rewards.stack()
         return outputs
     @tf.function
     def AC_learner(self, inputs, training=True):
         print("tracing -> GeneralAI AC_learner")
+        rewards_next = tf.roll(inputs['rewards'], -1, axis=0)
 
         self.action.reset_states()
         action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
@@ -495,7 +485,7 @@ class GeneralAI(tf.keras.Model):
         values = self.value(inputs)
         values = tf.squeeze(values, axis=-1)
 
-        returns = self.calc_returns(inputs['rewards'])
+        returns = self.calc_returns(rewards_next)
         # self.rtn.reset_states()
         # rtn = self.rtn(inputs)
         # rtn = tf.squeeze(rtn, axis=-1)
@@ -838,20 +828,20 @@ trader, trader_env, trader_speed = False, 3, 180.0
 
 machine, device = 'dev', 0
 
-env_name, max_steps, env = 'CartPole', 201, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
-# env_name, max_steps, env = 'LunarLand', 1001, gym.make('LunarLander-v2')
-# env_name, max_steps, env = 'LunarLandCont', 1001, gym.make('LunarLanderContinuous-v2')
+env_name, max_steps, env = 'CartPole', 256, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env = 'LunarLand', 1024, gym.make('LunarLander-v2')
+# env_name, max_steps, env = 'LunarLandCont', 1024, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, env = 'TestRnd', 128, env_.RandomEnv()
 # import envs_local.data as env_; env_name, max_steps, env = 'DataShkspr', 128, env_.DataEnv('shkspr')
 # import envs_local.data as env_; env_name, max_steps, env = 'DataMnist', 128, env_.DataEnv('mnist')
-# import envs_local.bipedal_walker as env_; env_name, max_steps, env = 'BipedalWalker', 100, env_.BipedalWalker()
-# import gym_trader; env_name, max_steps, trader, env = 'Trader2', 100, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
+# import envs_local.bipedal_walker as env_; env_name, max_steps, env = 'BipedalWalker', 128, env_.BipedalWalker()
+# import gym_trader; env_name, max_steps, trader, env = 'Trader2', 128, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
 
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
-# arch = 'AC' # basic Actor Critic
+arch = 'AC' # basic Actor Critic
 # arch = 'TRANS' # model based learned Transition dynamics
-arch = 'DREAM' # Dreamer/planner w/imagination (DeepMind MuZero)
+# arch = 'DREAM' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'WM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
