@@ -56,16 +56,15 @@ class EvoNormS0(tf.keras.layers.Layer):
 
 
 class Categorical(tfp.layers.DistributionLambda):
-    def __init__(self, num_components, event_shape=(), validate_args=False, dtype_cat=tf.int32, **kwargs):
+    def __init__(self, num_components, event_shape=(), dtype_cat=tf.int32, **kwargs):
         params_shape = list(event_shape)+[num_components]
         reinterpreted_batch_ndims = len(event_shape)
-        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        super(Categorical, self).__init__(
-            lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, validate_args, dtype_cat), **kwargs)
-        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
+        super(Categorical, self).__init__(lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, dtype_cat), **kwargs)
+        self._num_components, self._event_shape = num_components, event_shape
     @staticmethod # this doesn't change anything, just keeps the variables seperate
-    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, dtype_cat=tf.int32, name=None):
+    def new(params, params_shape, reinterpreted_batch_ndims, dtype_cat=tf.int32):
         # print("tracing -> Categorical new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
@@ -82,16 +81,15 @@ class Categorical(tfp.layers.DistributionLambda):
         return params_size
 
 class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
-    def __init__(self, num_components, event_shape=(), validate_args=False, temperature=1e-5, **kwargs):
+    def __init__(self, num_components, event_shape=(), temperature=1e-5, **kwargs):
         params_shape = list(event_shape)+[num_components]
         reinterpreted_batch_ndims = len(event_shape)
-        params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        super(CategoricalRP, self).__init__(
-            lambda input: CategoricalRP.new(input, params_shape, reinterpreted_batch_ndims, validate_args, temperature), **kwargs)
-        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+        params_shape, reinterpreted_batch_ndims, temperature = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(temperature)
+        super(CategoricalRP, self).__init__(lambda input: CategoricalRP.new(input, params_shape, reinterpreted_batch_ndims, temperature), **kwargs)
+        self._num_components, self._event_shape = num_components, event_shape
     @staticmethod
-    def new(params, params_shape, reinterpreted_batch_ndims, validate_args=False, temperature=1e-5, name=None):
+    def new(params, params_shape, reinterpreted_batch_ndims, temperature=1e-5):
         # print("tracing -> CategoricalRP new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
@@ -125,22 +123,21 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
 #     return out
 
 class MixtureLogistic(tfp.layers.DistributionLambda):
-    def __init__(self, num_components, event_shape=(), validate_args=False, **kwargs):
-        dtype = tf.keras.backend.floatx()
-        eps = tf.experimental.numpy.finfo(dtype).eps
-        maxroot = tf.math.sqrt(tf.dtypes.as_dtype(dtype).max)
+    def __init__(self, num_components, event_shape=(), **kwargs):
+        compute_dtype = tf.keras.backend.floatx()
+        eps = tf.experimental.numpy.finfo(compute_dtype).eps
+        maxroot = tf.math.sqrt(tf.dtypes.as_dtype(compute_dtype).max)
 
         params_shape = [num_components]+list(event_shape)
         reinterpreted_batch_ndims = len(event_shape)
         
-        params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(tf.constant(params_shape)), tf.identity(tf.constant(reinterpreted_batch_ndims)), tf.identity(tf.constant(eps, dtype)), tf.identity(tf.constant(maxroot, dtype))
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        super(MixtureLogistic, self).__init__(
-            lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args), **kwargs)
-        self._num_components, self._event_shape, self._validate_args = num_components, event_shape, validate_args
+        num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(num_components), tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(tf.constant(eps, compute_dtype)), tf.identity(tf.constant(maxroot, compute_dtype))
+        super(MixtureLogistic, self).__init__(lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot), **kwargs)
+        self._num_components, self._event_shape = num_components, event_shape
 
     @staticmethod # this doesn't change anything, just keeps the variables seperate
-    def new(params, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot, validate_args=False, name=None):
+    def new(params, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot):
         # print("tracing -> MixtureLogistic new")
         mixture_params = params[..., :num_components]
 
