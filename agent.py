@@ -42,11 +42,8 @@ class RepNet(tf.keras.layers.Layer):
 
         if categorical: num_components = 256; params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
         else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-        
-        self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
-        # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
 
-        self.net_blocks, self.net_LSTM, inp, mid, evo = 1, False, 256, 256, 32
+        self.net_blocks, self.net_LSTM, inp, mid, evo = 1, False, latent_size*4, latent_size*4, latent_size
         self.net_arch = "RN[inD{}-{:02d}{}D{}-cmp{}-lat{}]".format(inp, self.net_blocks, ('LS+' if self.net_LSTM else ''), mid, num_components, latent_size)
 
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -89,15 +86,6 @@ class RepNet(tf.keras.layers.Layer):
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('rep net out:', out)
         return out
-
-    def loss(self, dist, targets):
-        targets = tf.cast(targets, dist.dtype)
-        loss = dist.log_prob(targets)
-        if not self.categorical: loss = loss - self.dist_prior.log_prob(targets)
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('rep net loss:', loss)
-        return loss
 
 
 # transition dynamics within latent space
@@ -156,14 +144,6 @@ class TransNet(tf.keras.layers.Layer):
         if isinfnan > 0: tf.print('trans net out:', out)
         return out
 
-    def loss(self, dist, targets):
-        targets = tf.cast(targets, dist.dtype)
-        loss = -dist.log_prob(targets)
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('trans net loss:', loss)
-        return loss
-
 
 class RewardNet(tf.keras.layers.Layer):
     def __init__(self):
@@ -178,10 +158,6 @@ class RewardNet(tf.keras.layers.Layer):
         out = self.layer_dense_in(inputs['obs'])
         out = self.layer_dense_logits_out(out)
         return out
-    def loss(self, dist, targets):
-        targets = tf.cast(targets, dist.dtype)
-        loss = -dist.log_prob(targets)
-        return loss
 
 class DoneNet(tf.keras.layers.Layer):
     def __init__(self):
@@ -196,14 +172,10 @@ class DoneNet(tf.keras.layers.Layer):
         out = self.layer_dense_in(inputs['obs'])
         out = self.layer_dense_logits_out(out)
         return out
-    def loss(self, dist, targets):
-        targets = tf.cast(targets, dist.dtype)
-        loss = -dist.log_prob(targets)
-        return loss
 
 
 class ActionNet(tf.keras.layers.Layer):
-    def __init__(self, env, categorical, entropy_contrib):
+    def __init__(self, env, latent_size, categorical, entropy_contrib):
         super(ActionNet, self).__init__()
         self.entropy_contrib, self.categorical, self.is_discrete = tf.constant(entropy_contrib, self.compute_dtype), categorical, False
 
@@ -213,7 +185,7 @@ class ActionNet(tf.keras.layers.Layer):
         if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
         else: num_components *= 4; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        self.net_blocks, self.net_LSTM, inp, mid, evo = 1, False, 256, 256, 32
+        self.net_blocks, self.net_LSTM, inp, mid, evo = 1, False, latent_size*4, latent_size*4, int(latent_size/2)
         self.net_arch = "AN[inD{}-{:02d}{}D{}-cmp{}]".format(inp, self.net_blocks, ('LS+' if self.net_LSTM else ''), mid, num_components)
 
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -236,10 +208,10 @@ class ActionNet(tf.keras.layers.Layer):
                 out = tf.cast(v, self.compute_dtype)
                 out = self.layer_flatten(out)
                 out_accu.append(out)
-            if k == 'obs_pred':
-                out = tf.cast(v, self.compute_dtype)
-                out = self.layer_flatten(out)
-                out_accu.append(out)
+            # if k == 'obs_pred':
+            #     out = tf.cast(v, self.compute_dtype)
+            #     out = self.layer_flatten(out)
+            #     out_accu.append(out)
         out = tf.concat(out_accu, 1)
         out = self.layer_dense_in(out)
         for i in range(self.net_blocks):
@@ -250,18 +222,6 @@ class ActionNet(tf.keras.layers.Layer):
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('action net out:', out)
         return out
-
-    def loss(self, dist, targets, advantages):
-        targets = tf.cast(targets, dist.dtype)
-        loss = -dist.log_prob(targets)
-        loss = loss * advantages # * 1e-2
-        # if self.categorical:
-        #     entropy = dist.entropy()
-        #     loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('action net loss:', loss)
-        return loss
 
 
 class ValueNet(tf.keras.layers.Layer):
@@ -289,10 +249,10 @@ class ValueNet(tf.keras.layers.Layer):
                 out = tf.cast(v, self.compute_dtype)
                 out = self.layer_flatten(out)
                 out_accu.append(out)
-            if k == 'obs_pred':
-                out = tf.cast(v, self.compute_dtype)
-                out = self.layer_flatten(out)
-                out_accu.append(out)
+            # if k == 'obs_pred':
+            #     out = tf.cast(v, self.compute_dtype)
+            #     out = self.layer_flatten(out)
+            #     out_accu.append(out)
             # if k == 'actions':
             #     out = tf.cast(v, self.compute_dtype)
             #     out_accu.append(out)
@@ -304,10 +264,6 @@ class ValueNet(tf.keras.layers.Layer):
         out = self.layer_dense_out(out)
         return out
 
-    def loss(self, advantages):
-        loss = tf.where(tf.math.less(advantages, 0.0), tf.math.negative(advantages), advantages) # MAE
-        return loss
-
 
 class GeneralAI(tf.keras.Model):
     def __init__(self, arch, env, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, action_cat, latent_size, latent_cat, memory_size):
@@ -316,6 +272,9 @@ class GeneralAI(tf.keras.Model):
         self.arch, self.env, self.max_episodes, self.max_steps, self.returns_disc = arch, env, tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(returns_disc, tf.float64)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
+
+        self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
+        # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
 
         # TODO add generic env specs here
         # self.obs_dtypes, self.obs_spec, self.obs_sample = util.gym_get_spec(env.observation_space)
@@ -343,18 +302,18 @@ class GeneralAI(tf.keras.Model):
         inputs = {'actions':self.action_zero, 'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
         # self.obs_zero = tf.concat([inputs['obs'], tf.cast(inputs['rewards'],self.obs_dtype), tf.cast(inputs['dones'],self.obs_dtype)], axis=1)
         # inputs = {'obs':self.obs_zero}
-        if arch in ('DREAM'):
+        if arch in ('TRANS','DREAM'):
             self.rep = RepNet(latent_size, latent_cat); outputs = self.rep(inputs)
-
-        # if arch in ('TRANS'): inputs['obs_pred'] = self.latent_zero
-        if arch in ('DREAM'):
             inputs['obs'] = self.latent_zero
+        # if arch in ('TRANS'): inputs['obs_pred'] = self.latent_zero
+
+        if arch in ('DREAM'):
             self.rwd = RewardNet(); outputs = self.rwd(inputs)
             self.done = DoneNet(); outputs = self.done(inputs)
-        self.action = ActionNet(env, action_cat, entropy_contrib); outputs = self.action(inputs)
+        self.action = ActionNet(env, latent_size, action_cat, entropy_contrib); outputs = self.action(inputs)
         self.value = ValueNet(env); outputs = self.value(inputs)
 
-        if arch in ('DREAM'):
+        if arch in ('TRANS','DREAM'):
             self.trans = TransNet(latent_size, latent_cat); outputs = self.trans(inputs)
 
         self.reset_states()
@@ -393,6 +352,43 @@ class GeneralAI(tf.keras.Model):
         if loss_trans is not False: self.metrics_loss[3]['loss_trans'][episode].append(loss_trans)
         if loss_rwd is not False: self.metrics_loss[4]['loss_rwd'][episode].append(loss_rwd)
         if loss_done is not False: self.metrics_loss[4]['loss_done'][episode].append(loss_done)
+
+
+    def loss_likelihood(self, dist, targets):
+        targets = tf.cast(targets, dist.dtype)
+        loss = -dist.log_prob(targets)
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+        if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
+        return loss
+        
+    def loss_bound(self, dist, targets):
+        targets = tf.cast(targets, dist.dtype)
+        loss = dist.log_prob(targets)
+        # if not self.categorical:
+        # loss = loss - self.dist_prior.log_prob(targets)
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+        if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
+        return loss
+        
+    def loss_AC(self, dist, targets, advantages): # actor/critic
+        targets = tf.cast(targets, dist.dtype)
+        loss = -dist.log_prob(targets)
+        loss = loss * advantages # * 1e-2
+        # if self.categorical:
+        #     entropy = dist.entropy()
+        #     loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+        if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
+        return loss
+        
+    def loss_diff(self, diff): # deterministic difference
+        # loss = tf.where(tf.math.less(advantages, 0.0), tf.math.negative(advantages), advantages) # MAE
+        loss = tf.math.abs(diff) # MAE
+        return loss
+
 
     def env_reset(self):
         obs, reward, done = self.env.reset(), 0.0, False
@@ -487,10 +483,10 @@ class GeneralAI(tf.keras.Model):
         # advantages = inputs['rewards'] - values
         
         loss = {}
-        loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
-        # loss['action'] = self.action.loss(action_dist, inputs['actions'], inputs['rewards'])
-        # loss['action'] = self.action.loss(action_dist, inputs['actions'], returns)
-        loss['value'] = self.value.loss(advantages)
+        loss['action'] = self.loss_AC(action_dist, inputs['actions'], advantages)
+        # loss['action'] = self.loss_AC(action_dist, inputs['actions'], inputs['rewards'])
+        # loss['action'] = self.loss_AC(action_dist, inputs['actions'], returns)
+        loss['value'] = self.loss_diff(advantages)
         loss['total'] = loss['action'] + loss['value']
 
         loss['advantages'] = advantages
@@ -600,13 +596,13 @@ class GeneralAI(tf.keras.Model):
         advantages = returns - values
 
         loss = {}
-        loss['rep'] = self.rep.loss(rep_dist, inputs['obs'])
-        loss['action'] = self.action.loss(action_dist, inputs['actions'], advantages)
-        # loss['action'] = self.action.loss(action_dist, actions_next, advantages)
-        loss['value'] = self.value.loss(advantages)
-        # loss['trans'] = self.trans.loss(trans_dist, obs_next)
-        # loss['rwd'] = self.rwd.loss(rwd_dist, rewards_next)
-        # loss['done'] = self.done.loss(done_dist, dones_next)
+        loss['rep'] = self.loss_bound(rep_dist, inputs['obs'])
+        loss['action'] = self.loss_AC(action_dist, inputs['actions'], advantages)
+        # loss['action'] = self.loss_AC(action_dist, actions_next, advantages)
+        loss['value'] = self.loss_diff(advantages)
+        # loss['trans'] = self.loss_likelihood(trans_dist, obs_next)
+        # loss['rwd'] = self.loss_likelihood(rwd_dist, rewards_next)
+        # loss['done'] = self.loss_likelihood(done_dist, dones_next)
         # loss['total'] = loss['rep'] + loss['action'] + loss['value'] + loss['trans'] + loss['rwd'] + loss['done']
         # loss['total'] = loss['action'] + loss['value'] + loss['rwd'] + loss['done']
         loss['total'] = loss['rep'] + loss['action'] + loss['value']
@@ -627,8 +623,7 @@ class GeneralAI(tf.keras.Model):
     def DREAM_run(self):
         print("tracing -> GeneralAI DREAM_run")
         for episode in tf.range(self.max_episodes):
-            # self.trans.reset_states()
-            self.rep.reset_states(); self.action.reset_states(); self.value.reset_states()
+            # self.rep.reset_states(); self.trans.reset_states(); self.action.reset_states(); self.value.reset_states()
             inputs = {}
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
             while not inputs['dones'][-1][0]:
@@ -645,8 +640,8 @@ class GeneralAI(tf.keras.Model):
                     tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
                     tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
                     tf.math.reduce_mean(loss['rep']),
-                    # tf.math.reduce_mean(loss['rep']), tf.math.reduce_mean(loss['trans'])
-                    # tf.math.reduce_mean(loss['rwd']), tf.math.reduce_mean(loss['done'])
+                    # tf.math.reduce_mean(loss['rep']), tf.math.reduce_mean(loss['trans']),
+                    # tf.math.reduce_mean(loss['rwd']), tf.math.reduce_mean(loss['done']),
                     False, False, False
                 ]
                 tf.numpy_function(self.metrics_update, metrics, ())
@@ -655,19 +650,19 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
-max_episodes = 1000
+max_episodes = 100
 learn_rate = 1e-5
 entropy_contrib = 1e-8
-returns_disc = 0.99
+returns_disc = 1.0
 action_cat = True
-latent_size = 8
-latent_cat = False
+latent_size = 64
+latent_cat = True
 
 mem_size_multi = 2
 
 machine, device = 'dev', 0
 
-env_name, max_steps, env = 'CartPole', 16, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, env = 'CartPole', 256, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env = 'LunarLand', 1024, gym.make('LunarLander-v2')
 # env_name, max_steps, env = 'LunarLandCont', 1024, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, env = 'TestRnd', 128, env_.RandomEnv()
@@ -681,9 +676,9 @@ env_name, max_steps, env = 'CartPole', 16, gym.make('CartPole-v0'); env.observat
 
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
-# arch = 'AC' # basic Actor Critic, actor/critic loss
+arch = 'AC' # basic Actor Critic, actor/critic loss
+# arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
-arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
     # TODO add keyboard control so can stop
