@@ -35,7 +35,7 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 # TODO use numba to make things faster on CPU
 
 
-class RepNet(tf.keras.layers.Layer):
+class RepNet(tf.keras.Model):
     def __init__(self, latent_size, categorical):
         super(RepNet, self).__init__()
         self.categorical, event_shape = categorical, (latent_size,)
@@ -89,7 +89,7 @@ class RepNet(tf.keras.layers.Layer):
 
 
 # transition dynamics within latent space
-class TransNet(tf.keras.layers.Layer):
+class TransNet(tf.keras.Model):
     def __init__(self, latent_size, categorical):
         super(TransNet, self).__init__()
         self.categorical, event_shape = categorical, (latent_size,)
@@ -145,7 +145,7 @@ class TransNet(tf.keras.layers.Layer):
         return out
 
 
-class RewardNet(tf.keras.layers.Layer):
+class RewardNet(tf.keras.Model):
     def __init__(self):
         super(RewardNet, self).__init__()
         num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
@@ -159,7 +159,7 @@ class RewardNet(tf.keras.layers.Layer):
         out = self.layer_dense_logits_out(out)
         return out
 
-class DoneNet(tf.keras.layers.Layer):
+class DoneNet(tf.keras.Model):
     def __init__(self):
         super(DoneNet, self).__init__()
         num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
@@ -174,7 +174,7 @@ class DoneNet(tf.keras.layers.Layer):
         return out
 
 
-class ActionNet(tf.keras.layers.Layer):
+class ActionNet(tf.keras.Model):
     def __init__(self, env, latent_size, categorical, entropy_contrib):
         super(ActionNet, self).__init__()
         self.entropy_contrib, self.categorical, self.is_discrete = tf.constant(entropy_contrib, self.compute_dtype), categorical, False
@@ -224,7 +224,7 @@ class ActionNet(tf.keras.layers.Layer):
         return out
 
 
-class ValueNet(tf.keras.layers.Layer):
+class ValueNet(tf.keras.Model):
     def __init__(self, env):
         super(ValueNet, self).__init__()
         self.net_blocks, self.net_LSTM, inp, mid, evo = 1, False, 128, 128, 32
@@ -650,6 +650,7 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
+load_model = False
 max_episodes = 100
 learn_rate = 1e-5
 entropy_contrib = 1e-8
@@ -694,21 +695,25 @@ if __name__ == '__main__':
     # agent_process.join()
 
 
-    # with tf.device('/device:GPU:0'): # use GPU for large networks or big data
-    with tf.device('/device:CPU:0'):
+    # with tf.device('/device:GPU:'+str(device)): # use GPU for large networks or big data
+    with tf.device('/device:CPU:'+str(device)):
         model = GeneralAI(arch, env, max_episodes=max_episodes, max_steps=max_steps, learn_rate=learn_rate, entropy_contrib=entropy_contrib, returns_disc=returns_disc, action_cat=action_cat, latent_size=latent_size, latent_cat=latent_cat, memory_size=max_steps*mem_size_multi)
         name = "gym-{}-{}-{}-{}".format(arch, env_name, ('Acat' if action_cat else 'Acon'), ('Lcat' if latent_cat else 'Lcon'))
 
 
-        # # TODO load models, load each net seperately
-        # self.net_arch = "{}-{}-{}".format(self.trans.net_arch, self.action.net_arch, self.value.net_arch)
-        model_name = "{}-{}-{}-a{}".format(name, model.action.net_arch, machine, device)
-        model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
-        # if tf.io.gfile.exists(model_file):
-        #     model.load_weights(model_file, by_name=True, skip_mismatch=True)
-        #     print("LOADED model weights from {}".format(model_file)); loaded_model = True
-        # # print(model.call.pretty_printed_concrete_signatures()); quit(0)
-        # # model.summary(); quit(0)
+        ## load models
+        model_files, name_arch = {}, ""
+        for net in model.layers:
+            model_name = "{}-{}-a{}".format(net.net_arch, machine, device)
+            model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
+            model_files[net.name] = model_file
+            if load_model and tf.io.gfile.exists(model_file):
+                net.load_weights(model_file, by_name=True, skip_mismatch=True)
+                print("LOADED {} weights from {}".format(net.name, model_file)); loaded_model = True
+            name_arch += "   {}{}".format(net.net_arch, 'load' if loaded_model else 'new')
+        # print(model.call.pretty_printed_concrete_signatures()); quit(0)
+        # model.summary(); quit(0)
+
 
         ## run
         t1_start = time.perf_counter_ns()
@@ -717,18 +722,15 @@ if __name__ == '__main__':
         if arch=='DREAM': model.DREAM_run()
         total_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
 
+
+        ## metrics
         metrics, metrics_loss = model.metrics_main, model.metrics_loss
         for loss_group in metrics_loss:
             for k in loss_group.keys():
                 for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 100,000-200,000 episodes
 
-        # # TODO save models
-        # model.save_weights(model_file)
-        
-        ## metrics
-        name, name_arch = "{}-{}-a{}-{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M")), ""
-        for net in model.layers: name_arch += "   "+net.net_arch
+        name = "{}-{}-a{}-{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M"))
         total_steps = np.sum(metrics['steps'])
         step_time = total_time/total_steps
         title = "{} {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    dis:{}    en:{}".format(name, name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, returns_disc, entropy_contrib); print(title)
@@ -757,3 +759,10 @@ if __name__ == '__main__':
         plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
 
         plt.show()
+
+
+        ## save models
+        for net in model.layers:
+            model_file = model_files[net.name]
+            net.save_weights(model_file)
+            print("SAVED {} weights to {}".format(net.name, model_file))
