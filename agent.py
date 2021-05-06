@@ -6,7 +6,7 @@ np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
-tf.keras.backend.set_floatx('float64')
+# tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
@@ -333,7 +333,7 @@ class GeneralAI(tf.keras.Model):
 
         metrics = {'rewards_total':np.float64,'rewards_final':np.float64,'steps':np.int64}
         metrics_loss = [{'loss_total':np.float64}]
-        if arch in ('TEST','AC'):
+        if arch in ('AC'):
             metrics_loss.append({'loss_action':np.float64,'loss_value':np.float64})
             metrics_loss.append({'returns':np.float64,'advantages':np.float64})
         # if arch in ('TEST'):
@@ -541,6 +541,7 @@ class GeneralAI(tf.keras.Model):
         values = tf.squeeze(values, axis=-1)
         
         returns = tf.squeeze(inputs['returns'], axis=-1)
+        returns = tf.cast(returns, self.compute_dtype)
 
         advantages = returns - values
         # advantages = inputs['rewards'] - values
@@ -658,6 +659,7 @@ class GeneralAI(tf.keras.Model):
         # values = tf.squeeze(values, axis=-1)
 
         # returns = tf.squeeze(inputs['returns'], axis=-1)
+        # returns = tf.cast(returns, self.compute_dtype)
         # advantages = returns - values
 
         loss = {}
@@ -729,16 +731,16 @@ latent_size = 64
 latent_cat = True
 mem_size_multi = 2
 
-device_type = 'GPU' # use GPU for large networks or big data
-# device_type = 'CPU'
+# device_type = 'GPU' # use GPU for large networks or big data
+device_type = 'CPU'
 
 machine, device = 'dev', 0
 
-# env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, render, env = 'TestRnd', 128, False, env_.RandomEnv()
-import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 128, False, env_.DataEnv('shkspr')
+# import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 128, False, env_.DataEnv('shkspr')
 # import envs_local.data as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # trader, trader_env, trader_speed = False, 3, 180.0
@@ -748,8 +750,8 @@ import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr',
 
 # arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
-arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
-# arch = 'AC' # basic Actor Critic, actor/critic loss
+# arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
+arch = 'AC' # basic Actor Critic, actor/critic loss
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 
