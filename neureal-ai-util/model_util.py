@@ -35,7 +35,7 @@ class EvoNormS0(tf.keras.layers.Layer):
         group_shape = input_shape.as_list()
         group_shape[self.axis] = input_shape[self.axis] // groups
         group_shape.insert(self.axis, groups)
-        self.group_shape = tf.Variable(group_shape, trainable=False)
+        self.group_shape = tf.Variable(group_shape, trainable=False, name='group_shape')
 
         std_shape = list(range(1, inlen+self.axis))
         std_shape.append(inlen)
@@ -72,9 +72,6 @@ class Categorical(tfp.layers.DistributionLambda):
         dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
         return dist
     @staticmethod
-    def sample(dist, name=None):
-        return dist.sample()
-    @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
         params_size = event_size * num_components
@@ -82,10 +79,11 @@ class Categorical(tfp.layers.DistributionLambda):
 
 class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
     def __init__(self, num_components, event_shape=(), temperature=1e-5, **kwargs):
+        compute_dtype = tf.keras.backend.floatx()
         params_shape = list(event_shape)+[num_components]
         reinterpreted_batch_ndims = len(event_shape)
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
-        params_shape, reinterpreted_batch_ndims, temperature = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(temperature)
+        params_shape, reinterpreted_batch_ndims, temperature = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(tf.constant(temperature, compute_dtype))
         super(CategoricalRP, self).__init__(lambda input: CategoricalRP.new(input, params_shape, reinterpreted_batch_ndims, temperature), **kwargs)
         self._num_components, self._event_shape = num_components, event_shape
     @staticmethod
@@ -98,13 +96,14 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
         # dist = tfp.distributions.RelaxedBernoulli(temperature=temperature, logits=params)
         dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
         return dist
-    @staticmethod
-    def sample(dist, name=None):
-        sample = dist.sample()
-        sample = tf.exp(sample)
-        # sample = tf.math.argmax(sample, axis=-1, output_type=tf.int64) # cant calculate gradients
-        # sample = tf.cast(sample, dtype=tf.float64)
-        return sample
+    # @staticmethod
+    # def sample(dist, name=None):
+    #     sample = dist.sample()
+    #     sample = tf.exp(sample)
+    #     sample = tf.math.argmax(sample, axis=-1)
+    #     # sample = tf.math.argmax(sample, axis=-1, output_type=tf.int64) # cant calculate gradients
+    #     # sample = tf.cast(sample, dtype=tf.float64)
+    #     return sample
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
@@ -112,15 +111,6 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
         return params_size
 
 
-
-# def combine_logits(out, layer_cats, layer_loc, layer_scale, split_cats):
-#     out_cats = out[:,:split_cats]
-#     out_loc, out_scale = tf.split(out[:,split_cats:], 2, axis=-1)
-#     out_logits_cats = layer_cats(out_cats)
-#     out_logits_loc = layer_loc(out_loc)
-#     out_logits_scale = layer_scale(out_scale)
-#     out = tf.concat([out_logits_cats, out_logits_loc, out_logits_scale], axis=-1)
-#     return out
 
 class MixtureLogistic(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), **kwargs):
@@ -177,6 +167,67 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         event_size = np.prod(event_shape).item()
         params_size = num_components + event_size * num_components * 2
         return params_size
+
+
+
+from tensorflow.python.ops import special_math_ops
+class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
+    def __init__(self, num_heads, latent_size, memory_size, **kwargs):
+        compute_dtype = tf.keras.backend.floatx()
+        key_dim = int(latent_size/num_heads)
+        super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), **kwargs)
+
+        mem_zero = tf.constant(np.full((1, memory_size, latent_size), 0), compute_dtype)
+        self._mem_size, self._mem_zero = tf.identity(memory_size), tf.identity(mem_zero)
+    
+    def build(self, input_shape):
+        self._mem_idx = tf.Variable(self._mem_size, trainable=False, name='mem_idx')
+        self._memory = tf.Variable(self._mem_zero, trainable=False, name='memory')
+
+    def _compute_attention(self, query, key, value, attention_mask=None, training=None):
+        attention_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
+        attention_scores = self._masked_softmax(attention_scores, attention_mask)
+        attention_output = special_math_ops.einsum(self._combine_equation, attention_scores, value)
+        return attention_output, attention_scores
+
+    def call(self, query, attention_mask=None, training=None):
+        if not self._built_from_signature: self._build_from_signature(query=query, value=query, key=None)
+
+        time_size = tf.shape(query)[1]
+
+        drop_off = tf.roll(self._memory, shift=-time_size, axis=1)
+        self._memory.assign(drop_off)
+        self._memory[:,-time_size:].assign(query)
+
+        if self._mem_idx > 0:
+            mem_idx_next = self._mem_idx - time_size
+            if mem_idx_next < 0: mem_idx_next = 0
+            self._mem_idx.assign(mem_idx_next)
+
+        value = self._memory[:,self._mem_idx:]
+        seq_size = tf.shape(value)[1]
+
+        query = self._query_dense(query)
+        key = self._key_dense(value)
+        value = self._value_dense(value)
+
+        if training: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
+
+        attention_output, attention_scores = self._compute_attention(query, key, value, attention_mask)
+        
+        scores = tf.math.reduce_sum(attention_scores, axis=(1,2))[0]
+        scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
+        scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+        self._memory[:,self._mem_idx:].assign(scores)
+
+        attention_output = self._output_dense(attention_output)
+        return attention_output
+
+    def reset_states(self):
+        self._mem_idx.assign(self._mem_size)
+        self._memory.assign(self._mem_zero)
+
+
 
 
 # def gym_get_spec(space):
