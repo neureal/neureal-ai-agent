@@ -14,13 +14,18 @@ class DataEnv(gym.Env):
         # TODO split (reshape into batch) image into blocks or pixels to test for spatial autoregression
         if data_src == 'mnist':
             ds = tfds.as_numpy(tfds.load('mnist', batch_size=-1))
-            self.dsl = ds['train']['label'][:,None]
+            # self.dsl = ds['train']['label'][:,None]
             ds = ds['train']['image']
-            # train_obs, test_obs = tf.image.resize(train_obs, (16,16), method='nearest').numpy(), tf.image.resize(test_obs, (16,16), method='nearest').numpy()
 
-            self.observation_space = gym.spaces.Box(low=0, high=255, shape=list(ds.shape)[1:], dtype=np.uint8)
-            self.action_space = gym.spaces.Discrete(10)
+            # train_obs, test_obs = tf.image.resize(train_obs, (16,16), method='nearest').numpy(), tf.image.resize(test_obs, (16,16), method='nearest').numpy()
+            # self.observation_space = gym.spaces.Box(low=0, high=255, shape=list(ds.shape)[1:], dtype=np.uint8)
+            # self.action_space = gym.spaces.Discrete(10)
+
+            self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            self.action_space = gym.spaces.Discrete(256)
             self.reward_range = (0.0,1.0)
+
+            self.pxl_x, self.pxl_y, self.x_max, self.y_max = 0, 0, ds.shape[1], ds.shape[2]
         # if data_src == 'mnist-mv':
         #     ds = tfds.as_numpy(tfds.load('moving_mnist', batch_size=-1))
         #     ds = ds['test']['image_sequence'].reshape((200000,64,64,1))
@@ -38,8 +43,8 @@ class DataEnv(gym.Env):
             self.action_space = gym.spaces.Discrete(256)
             self.reward_range = (0.0,1.0)
 
-        ds = ds[:128]
-        self.ds, self.ds_idx = ds, 0
+        # ds = ds[:16]
+        self.ds, self.ds_idx, self.ds_max = ds, 0, 128
 
         self.action_noop = 0
         self.obs_space_zero = self.observation_space.sample()
@@ -68,31 +73,36 @@ class DataEnv(gym.Env):
 
     def _request(self, action):
         reward, done, info = np.float64(0.0), False, {}
-
         # obs = self.observation_space.sample()
         # reward = np.float64(np.random.standard_normal())
 
         obs = self.ds[self.ds_idx]
-        if action is not None:
-            if self.data_src == 'mnist':
-                action_pred = np.asarray([action], self.dsl.dtype)
-                if action_pred == self.dsl[self.ds_idx-1]: reward = np.float64(1.0)
-            if self.data_src == 'shkspr':
+        if self.data_src == 'mnist':
+            obs = obs[self.pxl_x, self.pxl_y]
+            if action is not None:
+                # action_pred = np.asarray([action], self.dsl.dtype)
+                # if action_pred == self.dsl[self.ds_idx-1]: reward = np.float64(1.0)
+                action_pred = np.asarray([action], self.observation_space.dtype)
+                if action_pred == obs: reward = np.float64(1.0)
+            # TODO add ds_idx, pxl_x, pxl_y to obs
+            self.pxl_x += 1
+            if self.pxl_x >= self.x_max:
+                self.pxl_x = 0; self.pxl_y += 1
+                if self.pxl_y >= self.y_max:
+                    self.pxl_y = 0; self.ds_idx += 1; done = True
+        if self.data_src == 'shkspr':
+            if action is not None:
                 # obs_prev = self.ds[self.ds_idx-1]
                 action_pred = np.asarray([action], self.observation_space.dtype)
                 if action_pred == obs: reward = np.float64(1.0)
+            # TODO add ds_idx to obs
+            self.ds_idx += 1
+            if self.ds_idx >= self.ds_max:
+                done = True
 
-        self.ds_idx += 1
-        if self.ds_idx >= len(self.ds) - 1:
-            self.ds_idx = 0; done = True 
-        
-        # dsl = np.split(ds, split) # split on period into sentances
-        # for obs in dsl:
-        #     inputs['obs'] = tf.convert_to_tensor(obs[:,None])
-        #     loss, outputs = model.TRANS_train(inputs)
+        if self.ds_idx >= self.ds_max:
+            self.ds_idx = 0
 
-        # dsrt = tf.RaggedTensor.from_row_limits(ds, row_limits=split)
-        # dsrt = tf.expand_dims(dsrt, axis=2)
 
         self.state = (action, obs, reward, done, info)
         return obs, reward, done, info
