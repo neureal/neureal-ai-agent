@@ -426,14 +426,12 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI TRANS_actor")
         inputs, outputs = inputs_.copy(), {}
 
-        obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
-        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         latents_next = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        targets = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
 
         inputs_rep = {'obs':self.latent_zero, 'actions':self.action_out_zero}
         for step in tf.range(self.max_steps):
-            obs = obs.write(step, inputs['obs'][-1])
-            rewards = rewards.write(step, inputs['rewards'][-1])
 
             rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
             inputs_rep['obs'] = rep_dist.sample()
@@ -445,29 +443,27 @@ class GeneralAI(tf.keras.Model):
             action_logits = self.action(inputs_rep); action_dist = self.action.dist(action_logits)
             action = action_dist.sample()
             inputs_rep['actions'] = action
-            
-            if inputs['dones'][-1][0]: break
 
             if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
             action = tf.cast(action, self.action_dtype)
             action = tf.squeeze(action)
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
-        outputs['obs'], outputs['rewards'], outputs['latents_next'] = obs.stack(), rewards.stack(), latents_next.stack()
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            targets = targets.write(step, inputs['obs'][-1])
+            if inputs['dones'][-1][0]: break
+
+        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), targets.stack()
         return outputs, inputs
 
     @tf.function
-    def TRANS_learner(self, inputs_, training=True):
+    def TRANS_learner(self, inputs, training=True):
         print("tracing -> GeneralAI TRANS_learner")
-        # inputs = inputs_.copy()
-        inputs = {}
-        obs_next = tf.roll(inputs_['obs'], -1, axis=0)
 
-        inputs['obs'] = inputs_['latents_next']
         action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
 
         loss = {}
-        loss['action'] = self.loss_likelihood(action_dist, obs_next)
+        loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
         loss['total'] = loss['action']
         return loss
 
@@ -500,35 +496,33 @@ class GeneralAI(tf.keras.Model):
         # metrics = {'rewards_total':tf.float64,'steps':tf.int32,'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype,'trans':self.compute_dtype}
         # for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
         obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
-        actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
 
         for step in tf.range(self.max_steps):
             # inputs['obs'] = tf.concat([inputs['obs'], tf.cast(inputs['rewards'],self.obs_dtype), tf.cast(inputs['dones'],self.obs_dtype)], axis=1)
             obs = obs.write(step, inputs['obs'][-1])
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            dones = dones.write(step, inputs['dones'][-1])
             returns = returns.write(step, [0.0])
 
             action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
             action = action_dist.sample()
             actions = actions.write(step, action[-1])
 
-            if inputs['dones'][-1][0]: break
-
             if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
             action = tf.cast(action, self.action_dtype)
             action = tf.squeeze(action)
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            dones = dones.write(step, inputs['dones'][-1])
             returns_updt = returns.stack()
             returns_updt = returns_updt + inputs['rewards'][-1]
             returns = returns.unstack(returns_updt)
+            if inputs['dones'][-1][0]: break
 
-
-        outputs['obs'], outputs['rewards'], outputs['dones'], outputs['actions'], outputs['returns'] = obs.stack(), rewards.stack(), dones.stack(), actions.stack(), returns.stack()
+        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = obs.stack(), actions.stack(), rewards.stack(), dones.stack(), returns.stack()
         return outputs, inputs
 
     @tf.function
@@ -566,7 +560,6 @@ class GeneralAI(tf.keras.Model):
             # TODO how unlimited length episodes without sacrificing returns signal?
             while not inputs['dones'][-1][0]:
                 outputs, inputs = self.AC_actor(inputs)
-
                 with tf.GradientTape() as tape:
                     loss = self.AC_learner(outputs)
                 gradients = tape.gradient(loss['total'], self.action.trainable_variables + self.value.trainable_variables)
@@ -586,19 +579,18 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI TEST_actor")
         inputs, outputs = inputs_.copy(), {}
 
-        obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
-        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
-        # dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
-        # actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
-        # returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        # obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
         # latents = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
         latents_next = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
+        # actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        # dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
+        # returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        targets = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
 
         inputs_rep = {'obs':self.latent_zero, 'actions':self.action_out_zero}
         for step in tf.range(self.max_steps):
-            obs = obs.write(step, inputs['obs'][-1])
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            # dones = dones.write(step, inputs['dones'][-1])
+            # obs = obs.write(step, inputs['obs'][-1])
             # returns = returns.write(step, [0.0])
 
             rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
@@ -613,28 +605,31 @@ class GeneralAI(tf.keras.Model):
             action = action_dist.sample()
             inputs_rep['actions'] = action
             # actions = actions.write(step, action[-1])
-            
-            if inputs['dones'][-1][0]: break
 
             if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
             action = tf.cast(action, self.action_dtype)
             action = tf.squeeze(action)
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
 
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            # dones = dones.write(step, inputs['dones'][-1])
+            targets = targets.write(step, inputs['obs'][-1])
             # returns_updt = returns.stack()
             # returns_updt = returns_updt + inputs['rewards'][-1]
             # returns = returns.unstack(returns_updt)
+            if inputs['dones'][-1][0]: break
         
-        # outputs['obs'], outputs['rewards'], outputs['dones'], outputs['actions'], outputs['returns'], outputs['latents'], outputs['latents_next'] = obs.stack(), rewards.stack(), dones.stack(), actions.stack(), returns.stack(), latents.stack(), latents_next.stack()
-        outputs['obs'], outputs['rewards'], outputs['latents_next'] = obs.stack(), rewards.stack(), latents_next.stack()
+        # outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = obs.stack(), actions.stack(), rewards.stack(), dones.stack(), returns.stack()
+        # outputs['latents'], outputs['latents_next'] = latents.stack(), latents_next.stack()
+        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), targets.stack()
         return outputs, inputs
 
     @tf.function
     def TEST_learner(self, inputs_, training=True):
         print("tracing -> GeneralAI TEST_learner")
-        # inputs = inputs_.copy()
-        inputs = {}
-        obs_next = tf.roll(inputs_['obs'], -1, axis=0)
+        inputs = inputs_.copy()
+        # inputs = {}
+        # obs_next = tf.roll(inputs_['obs'], -1, axis=0)
         # rewards_next = tf.roll(inputs_['rewards'], -1, axis=0)
         # dones_next = tf.roll(inputs_['dones'], -1, axis=0)
 
@@ -644,7 +639,7 @@ class GeneralAI(tf.keras.Model):
         # # # inputs['obs'] = tf.roll(inputs['latents'], -1, axis=0)
 
         # trans_logits = self.trans(inputs); trans_dist = self.trans.dist(trans_logits)
-        inputs['obs'] = inputs_['latents_next']
+        # inputs['obs'] = inputs_['latents_next']
         # inputs['obs'] = trans_dist.sample()
 
         # rwd_logits = self.rwd(inputs); rwd_dist = self.rwd.dist(rwd_logits) # TODO should it be predicting the rewards_next, dones_next instead?
@@ -669,7 +664,7 @@ class GeneralAI(tf.keras.Model):
 
         # loss['rep'] = self.loss_bound(rep_dist, inputs_['obs'])
         # loss['trans'] = self.loss_likelihood(trans_dist, obs_next)
-        loss['action'] = self.loss_likelihood(action_dist, obs_next)
+        loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
         # loss['total'] = loss['rep'] + loss['trans'] + loss['action']
         loss['total'] = loss['action']
 
@@ -736,11 +731,11 @@ device_type = 'GPU' # use GPU for large networks or big data
 
 machine, device = 'dev', 0
 
-# env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, render, env = 'CartPole', 64, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, render, env = 'TestRnd', 128, False, env_.RandomEnv()
-import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 128, True, env_.DataEnv('shkspr')
+# import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
 # import envs_local.data as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # trader, trader_env, trader_speed = False, 3, 180.0
@@ -748,10 +743,11 @@ import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr',
 
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
+# TODO try TD error with batch one
 # arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
-arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
-# arch = 'AC' # basic Actor Critic, actor/critic loss
+# arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
+arch = 'AC' # basic Actor Critic, actor/critic loss
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 
