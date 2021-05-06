@@ -105,7 +105,7 @@ class TransNet(tf.keras.Model):
         if categorical: num_components = 256; params_size, self.dist = util.CategoricalRP.params_size(num_components, event_shape), util.CategoricalRP(num_components, event_shape)
         else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 2, True, False, latent_size*4, latent_size*4, latent_size, 2
+        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 8, True, False, latent_size*4, latent_size*4, latent_size, 2
         self.net_arch = "TN[inD{}-{:02d}{}{}D{}-cmp{}-lat{}-hds{}]".format(inp, self.net_blocks, ('AT' if self.net_attn else ''), ('LS' if self.net_lstm else ''), mid, num_components, latent_size, num_heads)
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -319,7 +319,7 @@ class GeneralAI(tf.keras.Model):
         #     self.rwd = RewardNet(); outputs = self.rwd(inputs)
         #     self.done = DoneNet(); outputs = self.done(inputs)
         self.action = ActionNet(env, latent_size, action_cat, entropy_contrib); outputs = self.action(inputs)
-        self.value = ValueNet(env); outputs = self.value(inputs)
+        if arch in ('AC'): self.value = ValueNet(env); outputs = self.value(inputs)
 
         if arch in ('TEST','TRANS'):
             inputs['actions'] = self.action_out_zero
@@ -727,20 +727,20 @@ learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
 action_cat = True
-latent_size = 64
+latent_size = 256
 latent_cat = True
-mem_size_multi = 2
+mem_size_multi = 16
 
-# device_type = 'GPU' # use GPU for large networks or big data
-device_type = 'CPU'
+device_type = 'GPU' # use GPU for large networks or big data
+# device_type = 'CPU'
 
 machine, device = 'dev', 0
 
-env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, render, env = 'TestRnd', 128, False, env_.RandomEnv()
-# import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 128, False, env_.DataEnv('shkspr')
+import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 128, True, env_.DataEnv('shkspr')
 # import envs_local.data as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # trader, trader_env, trader_speed = False, 3, 180.0
@@ -750,8 +750,8 @@ env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v1
 
 # arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
-arch = 'AC' # basic Actor Critic, actor/critic loss
+arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
+# arch = 'AC' # basic Actor Critic, actor/critic loss
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 

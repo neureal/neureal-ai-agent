@@ -45,14 +45,26 @@ class DataEnv(gym.Env):
         self.obs_space_zero = self.observation_space.sample()
         self.obs_space_zero.fill(0)
         self.state = self.action_noop, self.obs_space_zero, np.float64(0.0), False, {}
+        self.item_accu = []
         
 
     def step(self, action): return self._request(action)
     def reset(self): return self._request(None)[0]
     def render(self, mode='human', close=False):
         action, obs, reward, done, info = self.state
-        if action == None: print("{}\n".format(obs))
-        else: print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
+        # if action == None: print("{}\n".format(obs))
+        # else: print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
+        if action == None:
+            if self.data_src == 'shkspr':
+                text = np.asarray(self.item_accu, dtype=np.uint8)
+                text = text.tobytes()
+                try: text = text.decode('utf-8')
+                except: pass
+                print("\n\n-----------------------------------------------------------------------------------------------------------------")
+                print(text)
+            self.item_accu = []
+        else:
+            self.item_accu.append(action.item())
 
     def _request(self, action):
         reward, done, info = np.float64(0.0), False, {}
