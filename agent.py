@@ -7,7 +7,7 @@ np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 # tf.keras.backend.set_floatx('float64')
-# tf.config.run_functions_eagerly(True)
+tf.config.run_functions_eagerly(True)
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -105,7 +105,7 @@ class TransNet(tf.keras.Model):
         if categorical: num_components = 256; params_size, self.dist = util.CategoricalRP.params_size(num_components, event_shape), util.CategoricalRP(num_components, event_shape)
         else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 8, True, False, latent_size*4, latent_size*4, latent_size, 2
+        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 2, True, False, latent_size*4, latent_size*4, latent_size, 2
         self.net_arch = "TN[inD{}-{:02d}{}{}D{}-cmp{}-lat{}-hds{}]".format(inp, self.net_blocks, ('AT' if self.net_attn else ''), ('LS' if self.net_lstm else ''), mid, num_components, latent_size, num_heads)
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -160,33 +160,83 @@ class TransNet(tf.keras.Model):
         return out
 
 
-# class RewardNet(tf.keras.Model):
-#     def __init__(self):
-#         super(RewardNet, self).__init__()
-#         num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-#         inp, evo = 256, 32; self.net_arch = "RWD[inD{}-cmp{}]".format(inp, num_components)
-#         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-#         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-#         # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-#     @tf.function
-#     def call(self, inputs, training=None):
-#         out = self.layer_dense_in(inputs['obs'])
-#         out = self.layer_dense_logits_out(out)
-#         return out
+class RewardNet(tf.keras.Model):
+    def __init__(self):
+        super(RewardNet, self).__init__()
+        num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        inp, evo = 256, 32; self.net_arch = "RWD[inD{}-cmp{}]".format(inp, num_components)
+        self.layer_flatten = tf.keras.layers.Flatten()
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+    @tf.function
+    def call(self, inputs, training=None):
+        out = self.layer_flatten(inputs['obs'])
+        out = self.layer_dense_in(out)
+        out = self.layer_dense_logits_out(out)
+        return out
 
-# class DoneNet(tf.keras.Model):
-#     def __init__(self):
-#         super(DoneNet, self).__init__()
-#         num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-#         inp, evo = 256, 32; self.net_arch = "DON[inD{}-cmp{}]".format(inp, num_components)
-#         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-#         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-#         # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-#     @tf.function
-#     def call(self, inputs, training=None):
-#         out = self.layer_dense_in(inputs['obs'])
-#         out = self.layer_dense_logits_out(out)
-#         return out
+class DoneNet(tf.keras.Model):
+    def __init__(self):
+        super(DoneNet, self).__init__()
+        num_components, event_shape = 2, (1,); params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        # params_size, self.dist = 1, tfp.layers.DistributionLambda(lambda input: tfp.distributions.Bernoulli(logits=input, dtype=tf.bool))
+        inp, evo = 256, 32; self.net_arch = "DON[inD{}-cmp{}]".format(inp, num_components)
+        self.layer_flatten = tf.keras.layers.Flatten()
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+    @tf.function
+    def call(self, inputs, training=None):
+        out = self.layer_flatten(inputs['obs'])
+        out = self.layer_dense_in(out)
+        out = self.layer_dense_logits_out(out)
+        return out
+
+class GenNet(tf.keras.Model):
+    def __init__(self, env, latent_size, categorical):
+        super(GenNet, self).__init__()
+        self.categorical, self.is_discrete = categorical, False
+
+        if isinstance(env.observation_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.observation_space.n, (1,), True
+        elif isinstance(env.observation_space, gym.spaces.Box): event_shape = list(env.observation_space.shape); num_components = np.prod(event_shape).item()
+
+        if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        else: num_components *= 4; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+
+        self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*4, latent_size*4, int(latent_size/2)
+        self.net_arch = "GN[inD{}-{:02d}{}D{}-cmp{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components)
+        self.layer_flatten = tf.keras.layers.Flatten()
+
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        self.layer_lstm, self.layer_dense = [], []
+        for i in range(self.net_blocks):
+            if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
+            self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+        
+        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+
+    def reset_states(self):
+        if self.net_lstm:
+            for i in range(self.net_blocks): self.layer_lstm[i].reset_states()
+    @tf.function
+    def call(self, inputs, training=None):
+        out_accu = []
+        for k,v in inputs.items():
+            if k == 'obs':
+                out = tf.cast(v, self.compute_dtype)
+                out = self.layer_flatten(out)
+                out_accu.append(out)
+        out = tf.concat(out_accu, 1)
+        out = self.layer_dense_in(out)
+        for i in range(self.net_blocks):
+            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
+            out = self.layer_dense[i](out)
+        out = self.layer_dense_logits_out(out)
+        
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
+        if isinfnan > 0: tf.print('gen net out:', out)
+        return out
 
 
 class ActionNet(tf.keras.Model):
@@ -303,6 +353,7 @@ class GeneralAI(tf.keras.Model):
         self.latent_dtype = compute_dtype
         # self.latent_dtype = tf.int64 if latent_cat else compute_dtype
         # self.latent_zero, self.latent_invar = tf.constant(0, self.latent_dtype, shape=(1,latent_size)), tf.TensorShape([None,latent_size])
+        # self.action_invar = tf.TensorShape([None]+action_shape)
 
 
         inputs = {'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
@@ -315,11 +366,12 @@ class GeneralAI(tf.keras.Model):
             self.latent_zero = smpl
             inputs['obs'] = self.latent_zero
 
-        # if arch in ('TEST'):
-        #     self.rwd = RewardNet(); outputs = self.rwd(inputs)
-        #     self.done = DoneNet(); outputs = self.done(inputs)
+        if arch in ('TEST'):
+            self.gen = GenNet(env, latent_size, False); outputs = self.gen(inputs)
+            self.rwd = RewardNet(); outputs = self.rwd(inputs)
+            self.done = DoneNet(); outputs = self.done(inputs)
         self.action = ActionNet(env, latent_size, action_cat, entropy_contrib); outputs = self.action(inputs)
-        if arch in ('AC'): self.value = ValueNet(env); outputs = self.value(inputs)
+        if arch in ('TEST','AC'): self.value = ValueNet(env); outputs = self.value(inputs)
 
         if arch in ('TEST','TRANS'):
             inputs['actions'] = self.action_out_zero
@@ -677,9 +729,77 @@ class GeneralAI(tf.keras.Model):
         # loss['advantages'] = advantages
         return loss
 
-    # @tf.function
-    # def TEST_imagine(self):
-    #     print("tracing -> GeneralAI TEST_imagine")
+    @tf.function
+    def TEST_imagine(self, inputs_):
+        print("tracing -> GeneralAI TEST_imagine")
+        inputs, outputs = inputs_.copy(), {}
+
+        obs = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+        dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
+        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
+
+        for step in tf.range(self.max_steps):
+            # tf.autograph.experimental.set_loop_options(shape_invariants=[(inputs['actions'], self.action_invar), (inputs['dones'], self.action_invar), (inputs['rewards'], self.action_invar)])
+            obs = obs.write(step, inputs['obs'][-1])
+            returns = returns.write(step, [0.0])
+
+            action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
+            # inputs['actions'] = action_dist.sample()
+            # actions = actions.write(step, inputs['actions'][-1])
+            action = action_dist.sample()
+            actions = actions.write(step, action[-1])
+            inputs['actions'] = action
+
+            trans_logits = self.trans(inputs); trans_dist = self.trans.dist(trans_logits)
+            inputs['obs'] = trans_dist.sample()
+            rwd_logits = self.rwd(inputs); rwd_dist = self.rwd.dist(rwd_logits)
+            done_logits = self.done(inputs); done_dist = self.done.dist(done_logits)
+            inputs['rewards'], inputs['dones'] = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
+
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            dones = dones.write(step, inputs['dones'][-1])
+            returns_updt = returns.stack()
+            returns_updt = returns_updt + inputs['rewards'][-1]
+            returns = returns.unstack(returns_updt)
+            if inputs['dones'][-1][0]: break
+
+        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = obs.stack(), actions.stack(), rewards.stack(), dones.stack(), returns.stack()
+        return outputs, inputs
+
+    @tf.function
+    def TEST_real(self, inputs_):
+        print("tracing -> GeneralAI TEST_real")
+        inputs, outputs = inputs_.copy(), {}
+
+        rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+        outputs['obs'] = rep_dist.sample()
+
+        action_logits = self.action(outputs); action_dist = self.action.dist(action_logits)
+        outputs['actions'] = action_dist.sample()
+
+        trans_logits = self.trans(outputs); trans_dist = self.trans.dist(trans_logits)
+        outputs['obs'] = trans_dist.sample()
+
+        gen_logits = self.gen(outputs); gen_dist = self.gen.dist(gen_logits)
+        # outputs['obs_gen'] = gen_dist.sample()
+        rwd_logits = self.rwd(outputs); rwd_dist = self.rwd.dist(rwd_logits)
+        done_logits = self.done(outputs); done_dist = self.done.dist(done_logits)
+
+        action = outputs['actions']
+        # action = tf.stop_gradient(outputs['actions']) # TODO stop gradient?
+        if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
+        action = tf.cast(action, self.action_dtype)
+        action = tf.squeeze(action)
+        inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+        
+        loss = {}
+        loss['restruct'] = self.loss_likelihood(gen_dist, inputs['obs'])
+        loss['rewards'] = self.loss_likelihood(rwd_dist, inputs['rewards'])
+        loss['dones'] = self.loss_likelihood(done_dist, inputs['dones'])
+        loss['total'] = loss['restruct'] + loss['rewards'] + loss['dones']
+        return outputs, inputs, loss
 
     @tf.function
     def TEST_run(self):
@@ -690,18 +810,28 @@ class GeneralAI(tf.keras.Model):
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
             while not inputs['dones'][-1][0]:
                 # outputs, inputs = self.TEST_actor(inputs)
-
                 with tf.GradientTape() as tape:
-                    outputs, inputs = self.TEST_actor(inputs)
-                    loss = self.TEST_learner(outputs)
+                    # outputs, inputs = self.TEST_actor(inputs)
+                    # loss = self.TEST_learner(outputs)
+                    outputs, inputs, loss = self.TEST_real(inputs)
                 # gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables)
                 # self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables))
-                # gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables)
-                # self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables))
-                gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
-                self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+                gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.gen.trainable_variables)
+                self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.gen.trainable_variables))
 
-                metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                inputs_imag = {}
+                inputs_imag['obs'], inputs_imag['rewards'], inputs_imag['dones'] = outputs['obs'], tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
+                inputs_imag['actions'] = self.action_out_zero
+                while not inputs_imag['dones'][-1][0]:
+                    # tf.autograph.experimental.set_loop_options(shape_invariants=[(inputs_imag['dones'], self.action_invar)])
+                    outputs_imag, inputs_imag = self.TEST_imagine(inputs_imag)
+                    with tf.GradientTape() as tape:
+                        loss_imag = self.AC_learner(outputs_imag)
+                    gradients = tape.gradient(loss_imag['total'], self.action.trainable_variables + self.value.trainable_variables)
+                    self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables + self.value.trainable_variables))
+
+                # metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                metrics = [episode, tf.math.reduce_sum(inputs['rewards']), inputs['rewards'][-1][0], tf.shape(inputs['rewards'])[0],
                     tf.math.reduce_mean(loss['total']), False, False, False, False,
                     # tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
                     # tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
@@ -717,12 +847,12 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model = False
-max_episodes = 100
+max_episodes = 1
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
 action_cat = True
-latent_size = 256
+latent_size = 8
 latent_cat = True
 mem_size_multi = 16
 
@@ -731,7 +861,7 @@ device_type = 'GPU' # use GPU for large networks or big data
 
 machine, device = 'dev', 0
 
-env_name, max_steps, render, env = 'CartPole', 64, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, render, env = 'CartPole', 16, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, render, env = 'TestRnd', 128, False, env_.RandomEnv()
@@ -744,10 +874,10 @@ env_name, max_steps, render, env = 'CartPole', 64, False, gym.make('CartPole-v1'
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
 # TODO try TD error with batch one
-# arch = 'TEST' # testing architechures
+arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
-arch = 'AC' # basic Actor Critic, actor/critic loss
+# arch = 'AC' # basic Actor Critic, actor/critic loss
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 
