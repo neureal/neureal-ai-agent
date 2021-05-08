@@ -7,7 +7,7 @@ np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'  # 0,1,2,3
 import tensorflow as tf
 # tf.keras.backend.set_floatx('float64')
-tf.config.run_functions_eagerly(True)
+# tf.config.run_functions_eagerly(True)
 # tf.random.set_seed(0)
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -98,7 +98,7 @@ class RepNet(tf.keras.Model):
 
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
-    def __init__(self, latent_size, categorical, memory_size):
+    def __init__(self, latent_size, categorical, memory_size=None):
         super(TransNet, self).__init__()
         self.categorical, event_shape = categorical, (latent_size,)
 
@@ -106,7 +106,7 @@ class TransNet(tf.keras.Model):
         else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
         self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 2, True, False, latent_size*4, latent_size*4, latent_size, 2
-        self.net_arch = "TN[inD{}-{:02d}{}{}D{}-cmp{}-lat{}-hds{}]".format(inp, self.net_blocks, ('AT' if self.net_attn else ''), ('LS' if self.net_lstm else ''), mid, num_components, latent_size, num_heads)
+        self.net_arch = "TN[inD{}-{:02d}{}{}D{}-cmp{}-lat{}-hds{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS' if self.net_lstm else ''), mid, num_components, latent_size, num_heads)
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.layer_cond_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='cond_dense_in') # action conditioning embedding
@@ -240,9 +240,9 @@ class GenNet(tf.keras.Model):
 
 
 class ActionNet(tf.keras.Model):
-    def __init__(self, env, latent_size, categorical, entropy_contrib):
+    def __init__(self, env, latent_size, categorical, memory_size=None):
         super(ActionNet, self).__init__()
-        self.entropy_contrib, self.categorical, self.is_discrete = tf.constant(entropy_contrib, self.compute_dtype), categorical, False
+        self.categorical, self.is_discrete = categorical, False
 
         if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, (1,), True
         elif isinstance(env.action_space, gym.spaces.Box): event_shape = list(env.action_space.shape); num_components = np.prod(event_shape).item()
@@ -250,36 +250,46 @@ class ActionNet(tf.keras.Model):
         if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
         else: num_components *= 4; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*4, latent_size*4, int(latent_size/2)
-        self.net_arch = "AN[inD{}-{:02d}{}D{}-cmp{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components)
+        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 1, True, False, latent_size*4, latent_size*4, int(latent_size/2), 2
+        self.net_arch = "AN[inD{}-{:02d}{}{}D{}-cmp{}{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, num_components, ('-hds'+str(num_heads) if self.net_attn else ''))
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_lstm, self.layer_dense = [], []
+        self.layer_dense_latent = tf.keras.layers.Dense(latent_size, name='dense_latent')
+
+        self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
         for i in range(self.net_blocks):
+            if self.net_attn: self.layer_attn.append(util.MultiHeadAttention(num_heads=num_heads, latent_size=latent_size, memory_size=memory_size, name='attn_{:02d}'.format(i)))
             if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
-            self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
-        
+            else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+            self.layer_dense_lat.append(tf.keras.layers.Dense(latent_size, name='dense_lat_{:02d}'.format(i)))
         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
 
     def reset_states(self):
+        if self.net_attn:
+            for i in range(self.net_blocks): self.layer_attn[i].reset_states()
         if self.net_lstm:
             for i in range(self.net_blocks): self.layer_lstm[i].reset_states()
-    @tf.function
     def call(self, inputs, training=None):
         out_accu = []
         for k,v in inputs.items():
             if k == 'obs':
                 out = tf.cast(v, self.compute_dtype)
                 out = self.layer_flatten(out)
+                out = self.layer_dense_in(out)
+                out = self.layer_dense_latent(out)
                 out_accu.append(out)
-        out = tf.concat(out_accu, 1)
-        out = self.layer_dense_in(out)
-        for i in range(self.net_blocks):
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
-            out = self.layer_dense[i](out)
-        out = self.layer_dense_logits_out(out)
+        out = tf.math.accumulate_n(out_accu)
         
+        for i in range(self.net_blocks):
+            out = tf.expand_dims(out, axis=0)
+            if self.net_attn: out = self.layer_attn[i](out, training=training)
+            if self.net_lstm: out = self.layer_lstm[i](out, training=training)
+            out = tf.squeeze(out, axis=0)
+            if not self.net_lstm: out = self.layer_dense[i](out)
+            out = self.layer_dense_lat[i](out)
+        out = self.layer_dense_logits_out(out)
+
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('action net out:', out)
         return out
@@ -323,10 +333,10 @@ class GeneralAI(tf.keras.Model):
     def __init__(self, arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, action_cat, latent_size, latent_cat, memory_size):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
-        self.arch, self.env, self.render, self.max_episodes, self.max_steps, self.returns_disc = arch, env, render, tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(returns_disc, tf.float64)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
 
+        self.arch, self.env, self.render, self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = arch, env, render, tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
 
@@ -370,7 +380,7 @@ class GeneralAI(tf.keras.Model):
             self.gen = GenNet(env, latent_size, False); outputs = self.gen(inputs)
             self.rwd = RewardNet(); outputs = self.rwd(inputs)
             self.done = DoneNet(); outputs = self.done(inputs)
-        self.action = ActionNet(env, latent_size, action_cat, entropy_contrib); outputs = self.action(inputs)
+        self.action = ActionNet(env, latent_size, action_cat, memory_size); outputs = self.action(inputs)
         if arch in ('TEST','AC'): self.value = ValueNet(env); outputs = self.value(inputs)
 
         if arch in ('TEST','TRANS'):
@@ -847,21 +857,22 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model = False
-max_episodes = 1
+max_episodes = 500
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
 action_cat = True
-latent_size = 8
+latent_size = 64
 latent_cat = True
-mem_size_multi = 16
+mem_size_multi = 1
 
 device_type = 'GPU' # use GPU for large networks or big data
-# device_type = 'CPU'
+device_type = 'CPU'
 
 machine, device = 'dev', 0
 
-env_name, max_steps, render, env = 'CartPole', 16, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.random as env_; env_name, max_steps, render, env = 'TestRnd', 128, False, env_.RandomEnv()
@@ -874,10 +885,10 @@ env_name, max_steps, render, env = 'CartPole', 16, False, gym.make('CartPole-v1'
 # import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
 # TODO try TD error with batch one
-arch = 'TEST' # testing architechures
+# arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
-# arch = 'AC' # basic Actor Critic, actor/critic loss
+arch = 'AC' # basic Actor Critic, actor/critic loss
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 
