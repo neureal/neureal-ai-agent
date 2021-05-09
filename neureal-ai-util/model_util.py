@@ -14,6 +14,10 @@ def replace_infnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
     return tf.where(isinfnan, replace, inputs)
 
+def discretize(inputs, min, max):
+    inputs = tf.math.round(inputs)
+    inputs = tf.clip_by_value(inputs, min, max)
+    return inputs
 
 
 class EvoNormS0(tf.keras.layers.Layer):
@@ -230,28 +234,38 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
 
 
-# def gym_get_spec(space):
-#     is_vec, sample = True, None
-#     # TODO expand the Dict of observation types (env.observation_space) to auto make input embedding networks
-#     sample = obs_space.sample()
-#     if isinstance(obs_space, gym.spaces.Discrete):
-#         sample = tf.convert_to_tensor([[sample]], dtype=dtype)
-#     elif isinstance(obs_space, gym.spaces.Box):
-#         if len(obs_space.shape) > 1: is_vec = False
-#         sample = tf.convert_to_tensor([sample], dtype=dtype)
-#     # elif isinstance(obs_space, gym.spaces.Tuple):
-#     elif isinstance(obs_space, gym.spaces.Dict):
-#         sample = gym_flatten(obs_space, sample, dtype=dtype)
-#         sample = tf.convert_to_tensor([sample], dtype=dtype)
+def gym_get_spec(space, compute_dtype='float64', force_cont=False, rtn_tf=False):
+    if isinstance(space, gym.spaces.Discrete):
+        dtype = tf.dtypes.as_dtype(space.dtype) if rtn_tf else space.dtype
+        dtype_out = compute_dtype if force_cont else 'int32'
+        dtype_out = tf.dtypes.as_dtype(dtype_out) if rtn_tf else np.dtype(dtype_out)
+        spec = {'dtype':dtype, 'min':0, 'max':space.n-1, 'dtype_out':dtype_out, 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,)}
+        zero = tf.constant([[0]], dtype) if rtn_tf else np.asarray(0, dtype)
+        zero_out = tf.constant([[0]], dtype_out) if rtn_tf else np.asarray(0, dtype_out)
+    elif isinstance(space, gym.spaces.Box):
+        dtype = tf.dtypes.as_dtype(space.dtype) if rtn_tf else space.dtype
+        dtype_out = tf.dtypes.as_dtype(compute_dtype) if rtn_tf else np.dtype(compute_dtype)
+        spec = {'dtype':dtype, 'min':space.low[...,0], 'max':space.high[...,0], 'dtype_out':dtype_out, 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}
+        zero = tf.zeros([1]+list(space.shape), dtype) if rtn_tf else np.zeros(space.shape, dtype)
+        zero_out = tf.zeros([1]+list(space.shape), dtype_out) if rtn_tf else np.zeros(space.shape, dtype_out)
+    elif isinstance(space, gym.spaces.Tuple):
+        spec, zero, zero_out = {}, {}, {}
+        for i,s in enumerate(space.spaces):
+            spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont, rtn_tf)
+            spec.update({i:spec_sub}); zero.update({i:zero_sub}); zero_out.update({i:zero_out_sub})
+    elif isinstance(space, gym.spaces.Dict):
+        spec, zero, zero_out = {}, {}, {}
+        for k,s in space.spaces.items():
+            spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont, rtn_tf)
+            spec.update({k:spec_sub}); zero.update({k:zero_sub}); zero_out.update({k:zero_out_sub})
+    return spec, zero, zero_out
 
-#     return dtypes, spec, sample
 
 
-# def gym_space_fill(spaces, fill):
-#     for space in spaces:
-#         s = space if isinstance(spaces, tuple) else spaces[space]
-#         if isinstance(s, (dict,tuple)): gym_space_fill(s, fill)
-#         else: s.fill(fill)
+
+
+
+
 
 def gym_flatten(space, x, dtype=np.float32): # works with numpy data type objects for x
     if isinstance(space, gym.spaces.Tuple): return np.concatenate([gym_flatten(s, x_part, dtype) for x_part, s in zip(x, space.spaces)])

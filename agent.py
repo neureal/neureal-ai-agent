@@ -42,6 +42,7 @@ class RepNet(tf.keras.Model):
 
         if categorical: num_components = 256; params_size, self.dist = util.CategoricalRP.params_size(num_components, event_shape), util.CategoricalRP(num_components, event_shape)
         else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+        # TODO add deterministic w/ latent_size output
 
         self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*4, latent_size*4, latent_size
         self.net_arch = "RN[inD{}-{:02d}{}D{}-cmp{}-lat{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components, latent_size)
@@ -194,18 +195,15 @@ class DoneNet(tf.keras.Model):
         return out
 
 class GenNet(tf.keras.Model):
-    def __init__(self, env, latent_size, categorical):
+    def __init__(self, spec, force_cont, latent_size):
         super(GenNet, self).__init__()
-        self.categorical, self.is_discrete = categorical, False
 
-        if isinstance(env.observation_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.observation_space.n, (1,), True
-        elif isinstance(env.observation_space, gym.spaces.Box): event_shape = list(env.observation_space.shape); num_components = np.prod(event_shape).item()
-
-        if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        num_components, event_shape = spec['num_components'], spec['event_shape']
+        if not force_cont and spec['is_discrete']: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
         else: num_components *= 4; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
         self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*4, latent_size*4, int(latent_size/2)
-        self.net_arch = "GN[inD{}-{:02d}{}D{}-cmp{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components)
+        self.net_arch = "GN[inD{}-{:02d}{}D{}-cmp{}{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components, ('-con' if force_cont else ''))
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
@@ -240,18 +238,15 @@ class GenNet(tf.keras.Model):
 
 
 class ActionNet(tf.keras.Model):
-    def __init__(self, env, latent_size, categorical, memory_size=None):
+    def __init__(self, spec, force_cont, latent_size, memory_size=None):
         super(ActionNet, self).__init__()
-        self.categorical, self.is_discrete = categorical, False
 
-        if isinstance(env.action_space, gym.spaces.Discrete): num_components, event_shape, self.is_discrete = env.action_space.n, (1,), True
-        elif isinstance(env.action_space, gym.spaces.Box): event_shape = list(env.action_space.shape); num_components = np.prod(event_shape).item()
-
-        if categorical: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+        num_components, event_shape = spec['num_components'], spec['event_shape']
+        if not force_cont and spec['is_discrete']: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
         else: num_components *= 4; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
 
-        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 1, True, False, latent_size*4, latent_size*4, int(latent_size/2), 2
-        self.net_arch = "AN[inD{}-{:02d}{}{}D{}-cmp{}{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, num_components, ('-hds'+str(num_heads) if self.net_attn else ''))
+        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 1, False, False, latent_size*4, latent_size*4, int(latent_size/2), 2
+        self.net_arch = "AN[inD{}-{:02d}{}{}D{}-cmp{}{}{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, num_components, ('-con' if force_cont else ''), ('-hds'+str(num_heads) if self.net_attn else ''))
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
@@ -296,9 +291,9 @@ class ActionNet(tf.keras.Model):
 
 
 class ValueNet(tf.keras.Model):
-    def __init__(self, env):
+    def __init__(self, latent_size):
         super(ValueNet, self).__init__()
-        self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, 128, 128, 32
+        self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*2, latent_size*2, int(latent_size/2)
         self.net_arch = "VN[inD{}-{:02d}{}D{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid)
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -330,45 +325,29 @@ class ValueNet(tf.keras.Model):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, action_cat, latent_size, latent_cat, memory_size):
+    def __init__(self, arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_ob, force_cont_action, latent_size, latent_cat, memory_size):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
 
-        self.arch, self.env, self.render, self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = arch, env, render, tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
+        self.arch, self.env, self.render, self.force_cont_ob, self.force_cont_action = arch, env, render, force_cont_ob, force_cont_action
+        self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
 
-        # TODO add generic env specs here
-        # self.obs_dtypes, self.obs_spec, self.obs_sample = util.gym_get_spec(env.observation_space)
-        # self.action_dtypes, self.action_spec, self.action_sample = util.gym_get_spec(env.action_space)
-        self.obs_dtype = tf.dtypes.as_dtype(env.observation_space.dtype)
-        self.obs_zero = tf.constant(0, self.obs_dtype, shape=[1]+list(env.observation_space.shape))
+        self.ob_spec, self.ob_zero, self.ob_zero_out = util.gym_get_spec(env.observation_space, self.compute_dtype, force_cont=force_cont_ob, rtn_tf=True)
+        self.action_spec, self.action_zero, self.action_zero_out = util.gym_get_spec(env.action_space, self.compute_dtype, force_cont=force_cont_action, rtn_tf=True)
 
-        self.action_dtype = tf.dtypes.as_dtype(env.action_space.dtype)
-        if isinstance(env.action_space, gym.spaces.Discrete):
-            action_shape = [1,]
-            self.action_min = tf.constant(0, compute_dtype)
-            self.action_max = tf.constant(env.action_space.n-1, compute_dtype)
-        elif isinstance(env.action_space, gym.spaces.Box):
-            action_shape = list(env.action_space.shape)
-            self.action_min = tf.constant(env.action_space.low[...,0], compute_dtype)
-            self.action_max = tf.constant(env.action_space.high[...,0], compute_dtype)
-        self.action_zero = tf.constant(0, self.action_dtype, shape=[1]+action_shape)
-        self.action_out_dtype = tf.int32 if action_cat else compute_dtype
-        self.action_out_zero = tf.constant(0, self.action_out_dtype, shape=[1]+action_shape)
-
-        # if arch in ('TRANS'): latent_size = env.observation_space.shape[0]
         self.latent_dtype = compute_dtype
         # self.latent_dtype = tf.int64 if latent_cat else compute_dtype
         # self.latent_zero, self.latent_invar = tf.constant(0, self.latent_dtype, shape=(1,latent_size)), tf.TensorShape([None,latent_size])
         # self.action_invar = tf.TensorShape([None]+action_shape)
 
 
-        inputs = {'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
+        inputs = {'obs':self.ob_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
         # self.obs_zero = tf.concat([inputs['obs'], tf.cast(inputs['rewards'],self.obs_dtype), tf.cast(inputs['dones'],self.obs_dtype)], axis=1)
-        # inputs = {'obs':self.obs_zero}
+        # inputs = {'obs':self.ob_zero}
         if arch in ('TEST','TRANS'):
             self.rep = RepNet(latent_size, latent_cat); outputs = self.rep(inputs); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
@@ -377,14 +356,14 @@ class GeneralAI(tf.keras.Model):
             inputs['obs'] = self.latent_zero
 
         if arch in ('TEST'):
-            self.gen = GenNet(env, latent_size, False); outputs = self.gen(inputs)
+            self.gen = GenNet(self.ob_spec, force_cont_ob, latent_size); outputs = self.gen(inputs)
             self.rwd = RewardNet(); outputs = self.rwd(inputs)
             self.done = DoneNet(); outputs = self.done(inputs)
-        self.action = ActionNet(env, latent_size, action_cat, memory_size); outputs = self.action(inputs)
-        if arch in ('TEST','AC'): self.value = ValueNet(env); outputs = self.value(inputs)
+        self.action = ActionNet(self.action_spec, force_cont_action, latent_size, memory_size); outputs = self.action(inputs)
+        if arch in ('TEST','AC'): self.value = ValueNet(latent_size); outputs = self.value(inputs)
 
         if arch in ('TEST','TRANS'):
-            inputs['actions'] = self.action_out_zero
+            inputs['actions'] = self.action_zero_out
             self.trans = TransNet(latent_size, latent_cat, memory_size); outputs = self.trans(inputs)
 
         self.reset_states()
@@ -476,11 +455,6 @@ class GeneralAI(tf.keras.Model):
         for net in self.layers:
             if hasattr(net, 'reset_states'): net.reset_states()
 
-    def action_discretize(self, action):
-        action = tf.math.round(action)
-        action = tf.clip_by_value(action, self.action_min, self.action_max)
-        return action
-
 
 
     @tf.function
@@ -490,9 +464,9 @@ class GeneralAI(tf.keras.Model):
 
         latents_next = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
-        targets = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        targets = tf.TensorArray(self.ob_spec['dtype'], size=0, dynamic_size=True)
 
-        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_out_zero}
+        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
         for step in tf.range(self.max_steps):
 
             rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
@@ -506,10 +480,10 @@ class GeneralAI(tf.keras.Model):
             action = action_dist.sample()
             inputs_rep['actions'] = action
 
-            if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
-            action = tf.cast(action, self.action_dtype)
+            if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
+            action = tf.cast(action, self.action_spec['dtype'])
             action = tf.squeeze(action)
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.ob_spec['dtype'], tf.float64, tf.bool))
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             targets = targets.write(step, inputs['obs'][-1])
@@ -534,7 +508,7 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI TRANS_run")
         for episode in tf.range(self.max_episodes):
             inputs = {}
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.ob_spec['dtype'], tf.float64, tf.bool))
             while not inputs['dones'][-1][0]:
                 with tf.GradientTape() as tape:
                     outputs, inputs = self.TRANS_actor(inputs)
@@ -557,8 +531,8 @@ class GeneralAI(tf.keras.Model):
         # TODO loop through env specs to get needed storage arrays and numpy_function def
         # metrics = {'rewards_total':tf.float64,'steps':tf.int32,'loss_total':self.compute_dtype,'loss_action':self.compute_dtype,'loss_value':self.compute_dtype,'returns':self.compute_dtype,'advantages':self.compute_dtype,'trans':self.compute_dtype}
         # for k in metrics.keys(): metrics[k] = tf.TensorArray(metrics[k], size=0, dynamic_size=True)
-        obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
-        actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
+        obs = tf.TensorArray(self.ob_spec['dtype'], size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_spec['dtype_out'], size=0, dynamic_size=True)
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
@@ -572,10 +546,10 @@ class GeneralAI(tf.keras.Model):
             action = action_dist.sample()
             actions = actions.write(step, action[-1])
 
-            if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
-            action = tf.cast(action, self.action_dtype)
+            if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
+            action = tf.cast(action, self.action_spec['dtype'])
             action = tf.squeeze(action)
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.ob_spec['dtype'], tf.float64, tf.bool))
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             dones = dones.write(step, inputs['dones'][-1])
@@ -618,7 +592,7 @@ class GeneralAI(tf.keras.Model):
         for episode in tf.range(self.max_episodes):
             self.action.reset_states(); self.value.reset_states()
             inputs = {}
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.ob_spec['dtype'], tf.float64, tf.bool))
             # TODO how unlimited length episodes without sacrificing returns signal?
             while not inputs['dones'][-1][0]:
                 outputs, inputs = self.AC_actor(inputs)
@@ -641,16 +615,16 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI TEST_actor")
         inputs, outputs = inputs_.copy(), {}
 
-        # obs = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        # obs = tf.TensorArray(self.ob_spec['dtype'], size=0, dynamic_size=True)
         # latents = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
         latents_next = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
-        # actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
+        # actions = tf.TensorArray(self.action_spec['dtype_out'], size=0, dynamic_size=True)
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         # dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
         # returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
-        targets = tf.TensorArray(self.obs_dtype, size=0, dynamic_size=True)
+        targets = tf.TensorArray(self.ob_spec['dtype'], size=0, dynamic_size=True)
 
-        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_out_zero}
+        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
         for step in tf.range(self.max_steps):
             # obs = obs.write(step, inputs['obs'][-1])
             # returns = returns.write(step, [0.0])
@@ -668,10 +642,10 @@ class GeneralAI(tf.keras.Model):
             inputs_rep['actions'] = action
             # actions = actions.write(step, action[-1])
 
-            if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
-            action = tf.cast(action, self.action_dtype)
+            if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
+            action = tf.cast(action, self.action_spec['dtype'])
             action = tf.squeeze(action)
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.ob_spec['dtype'], tf.float64, tf.bool))
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             # dones = dones.write(step, inputs['dones'][-1])
@@ -745,7 +719,7 @@ class GeneralAI(tf.keras.Model):
         inputs, outputs = inputs_.copy(), {}
 
         obs = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
-        actions = tf.TensorArray(self.action_out_dtype, size=0, dynamic_size=True)
+        actions = tf.TensorArray(self.action_spec['dtype_out'], size=0, dynamic_size=True)
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
         dones = tf.TensorArray(tf.bool, size=0, dynamic_size=True)
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
@@ -793,16 +767,18 @@ class GeneralAI(tf.keras.Model):
         outputs['obs'] = trans_dist.sample()
 
         gen_logits = self.gen(outputs); gen_dist = self.gen.dist(gen_logits)
+        # obs_gen = gen_dist.sample()
+        # if self.force_cont_ob and self.ob_spec['is_discrete']: obs_gen = util.discretize(obs_gen, self.ob_spec['min'], self.ob_spec['max'])
         # outputs['obs_gen'] = gen_dist.sample()
         rwd_logits = self.rwd(outputs); rwd_dist = self.rwd.dist(rwd_logits)
         done_logits = self.done(outputs); done_dist = self.done.dist(done_logits)
 
         action = outputs['actions']
         # action = tf.stop_gradient(outputs['actions']) # TODO stop gradient?
-        if not self.action.categorical and self.action.is_discrete: action = self.action_discretize(action)
-        action = tf.cast(action, self.action_dtype)
+        if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
+        action = tf.cast(action, self.action_spec['dtype'])
         action = tf.squeeze(action)
-        inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.obs_dtype, tf.float64, tf.bool))
+        inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], (self.ob_spec['dtype'], tf.float64, tf.bool))
         
         loss = {}
         loss['restruct'] = self.loss_likelihood(gen_dist, inputs['obs'])
@@ -817,7 +793,7 @@ class GeneralAI(tf.keras.Model):
         for episode in tf.range(self.max_episodes):
             # self.rep.reset_states(); self.trans.reset_states(); self.action.reset_states(); self.value.reset_states()
             inputs = {}
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.obs_dtype, tf.float64, tf.bool))
+            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], (self.ob_spec['dtype'], tf.float64, tf.bool))
             while not inputs['dones'][-1][0]:
                 # outputs, inputs = self.TEST_actor(inputs)
                 with tf.GradientTape() as tape:
@@ -831,7 +807,7 @@ class GeneralAI(tf.keras.Model):
 
                 inputs_imag = {}
                 inputs_imag['obs'], inputs_imag['rewards'], inputs_imag['dones'] = outputs['obs'], tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
-                inputs_imag['actions'] = self.action_out_zero
+                inputs_imag['actions'] = self.action_zero_out
                 while not inputs_imag['dones'][-1][0]:
                     # tf.autograph.experimental.set_loop_options(shape_invariants=[(inputs_imag['dones'], self.action_invar)])
                     outputs_imag, inputs_imag = self.TEST_imagine(inputs_imag)
@@ -861,10 +837,10 @@ max_episodes = 500
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
-action_cat = True
+force_cont_ob, force_cont_action = True, True
 latent_size = 64
 latent_cat = True
-mem_size_multi = 1
+latent_size_mem_multi = 1
 
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
@@ -906,8 +882,8 @@ if __name__ == '__main__':
     # agent_process.join()
 
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, action_cat, latent_size, latent_cat, memory_size=max_steps*mem_size_multi)
-        name = "gym-{}-{}-{}-{}".format(arch, env_name, ('Acat' if action_cat else 'Acon'), ('Lcat' if latent_cat else 'Lcon'))
+        model = GeneralAI(arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_ob, force_cont_action, latent_size, latent_cat, memory_size=max_steps*latent_size_mem_multi)
+        name = "gym-{}-{}-{}".format(arch, env_name, ('Lcat' if latent_cat else 'Lcon'))
 
 
         ## load models
