@@ -248,14 +248,10 @@ def gym_get_spec(space, compute_dtype='float64', force_cont=False, rtn_tf=False)
         spec = {'dtype':dtype, 'min':space.low[...,0], 'max':space.high[...,0], 'dtype_out':dtype_out, 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}
         zero = tf.zeros([1]+list(space.shape), dtype) if rtn_tf else np.zeros(space.shape, dtype)
         zero_out = tf.zeros([1]+list(space.shape), dtype_out) if rtn_tf else np.zeros(space.shape, dtype_out)
-    elif isinstance(space, gym.spaces.Tuple):
+    elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
         spec, zero, zero_out = {}, {}, {}
-        for i,s in enumerate(space.spaces):
-            spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont, rtn_tf)
-            spec.update({i:spec_sub}); zero.update({i:zero_sub}); zero_out.update({i:zero_out_sub})
-    elif isinstance(space, gym.spaces.Dict):
-        spec, zero, zero_out = {}, {}, {}
-        for k,s in space.spaces.items():
+        loop = space.spaces.items() if isinstance(space, gym.spaces.Dict) else enumerate(space.spaces)
+        for k,s in loop:
             spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont, rtn_tf)
             spec.update({k:spec_sub}); zero.update({k:zero_sub}); zero_out.update({k:zero_out_sub})
     return spec, zero, zero_out

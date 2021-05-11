@@ -22,18 +22,16 @@ class DataEnv(gym.Env):
             # ds = ds[:split[-1]]
             ds = ds[:,None]
 
-            obs_space_dict = gym.spaces.Dict()
-            obs_space_dict.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
-            obs_space_dict.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
-            self.observation_space = obs_space_dict
-
-            # action_space_dict = gym.spaces.Dict()
-            # action_space_dict.spaces['pair'] = gym.spaces.Discrete(self.trade_actions) # trade pair (BTC<>USD) + NOOP
-            # action_space_dict.spaces['percent'] = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float64) # percent of available margin
-
+            obs_space = gym.spaces.Dict()
+            obs_space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
+            obs_space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            self.observation_space = obs_space
             # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+
             self.action_space = gym.spaces.Discrete(256)
+
             self.reward_range = (0.0,1.0)
+
         # TODO split (reshape into batch) image into blocks or pixels to test for spatial autoregression
         # if data_src == 'mnist':
         #     ds = tfds.as_numpy(tfds.load('mnist', batch_size=-1))
