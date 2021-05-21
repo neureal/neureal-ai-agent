@@ -17,6 +17,198 @@ physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 
+
+def gym_flatten(space, x, dtype=np.float32): # works with numpy data type objects for x
+    if isinstance(space, gym.spaces.Tuple): return np.concatenate([gym_flatten(s, x_part, dtype) for x_part, s in zip(x, space.spaces)])
+    elif isinstance(space, gym.spaces.Dict): return np.concatenate([gym_flatten(s, x[key], dtype) for key, s in space.spaces.items()])
+    elif isinstance(space, gym.spaces.Discrete):
+        onehot = np.zeros(space.n, dtype=dtype); onehot[x] = 1.0; return onehot
+    else: return np.asarray(x, dtype=dtype).flatten()
+
+def gym_action_dist(action_space, dtype=tf.float32, cat_dtype=tf.int32, num_components=16):
+    params_size, is_discrete, dists = 0, True, None
+
+    if isinstance(action_space, gym.spaces.Discrete):
+        params_size = action_space.n
+        if action_space.n < 2: dists = tfp.layers.IndependentBernoulli(1, sample_dtype=tf.bool)
+        else: dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+    elif isinstance(action_space, gym.spaces.Box):
+        event_shape = list(action_space.shape)
+        event_size = np.prod(event_shape).item()
+        if action_space.dtype == np.uint8:
+            params_size = event_size * 256
+            if event_size == 1: dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Categorical(logits=input, dtype=cat_dtype))
+            else:
+                params_shape = event_shape+[256]
+                dists = tfp.layers.DistributionLambda(lambda input: tfp.distributions.Independent(
+                    tfp.distributions.Categorical(logits=tf.reshape(input, tf.concat([tf.shape(input)[:-1], params_shape], axis=0)), dtype=cat_dtype), reinterpreted_batch_ndims=len(event_shape)
+                ))
+        elif action_space.dtype == np.float32 or action_space.dtype == np.float64:
+            if len(event_shape) == 1: # arbitrary, but with big event shapes the paramater size is HUGE
+                # params_size = tfp.layers.MixtureSameFamily.params_size(num_components, component_params_size=tfp.layers.MultivariateNormalTriL.params_size(event_size))
+                # dists = tfp.layers.MixtureSameFamily(num_components, tfp.layers.MultivariateNormalTriL(event_size))
+                params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
+                dists = tfp.layers.MixtureLogistic(num_components, event_shape)
+            else:
+                params_size = tfp.layers.MixtureLogistic.params_size(num_components, event_shape)
+                dists = tfp.layers.MixtureLogistic(num_components, event_shape)
+            # self.bijector = tfp.bijectors.Sigmoid(low=-1.0, high=1.0)
+            is_discrete = False
+    # TODO expand to handle Tuple+Dict, make so discrete and continuous can be output at the same time
+    # event_shape/event_size = action_size['action_dist_pair'] + action_size['action_dist_percent']
+    elif isinstance(action_space, gym.spaces.Tuple):
+        dists = [None]*len(action_space.spaces)
+        for i,space in enumerate(action_space.spaces):
+            dists[i] = gym_action_dist(space, dtype=dtype, cat_dtype=cat_dtype, num_components=num_components)
+            params_size += dists[i][0]
+            if not dists[i][1]: is_discrete = False
+    elif isinstance(action_space, gym.spaces.Dict):
+        dists = {}
+        for k,space in action_space.spaces.items():
+            dists[k] = gym_action_dist(space, dtype=dtype, cat_dtype=cat_dtype, num_components=num_components)
+            params_size += dists[k][0]
+            if not dists[k][1]: is_discrete = False
+
+    return params_size, is_discrete, dists # params_size = total size, is_discrete = False if any continuous
+
+def gym_obs_embed(obs_space, dtype):
+    is_vec, sample = True, None
+    # TODO expand the Dict of observation types (env.observation_space) to auto make input embedding networks
+    sample = obs_space.sample()
+    if isinstance(obs_space, gym.spaces.Discrete):
+        sample = tf.convert_to_tensor([[sample]], dtype=dtype)
+    elif isinstance(obs_space, gym.spaces.Box):
+        if len(obs_space.shape) > 1: is_vec = False
+        sample = tf.convert_to_tensor([sample], dtype=dtype)
+    # elif isinstance(obs_space, gym.spaces.Tuple):
+    elif isinstance(obs_space, gym.spaces.Dict):
+        sample = gym_flatten(obs_space, sample, dtype=dtype)
+        sample = tf.convert_to_tensor([sample], dtype=dtype)
+
+    return is_vec, sample
+
+def gym_obs_get(obs_space, x):
+    if isinstance(obs_space, gym.spaces.Discrete): return np.asarray([x], obs_space.dtype)
+    elif isinstance(obs_space, gym.spaces.Box): return x
+    elif isinstance(obs_space, gym.spaces.Dict):
+        rtn = gym_flatten(obs_space, x, dtype=obs_space.dtype)
+        return rtn
+
+
+def gym_action_get_mem(action_space, size):
+    if isinstance(action_space, gym.spaces.Discrete): return np.zeros([size], dtype=action_space.dtype)
+    elif isinstance(action_space, gym.spaces.Box): return np.zeros([size]+list(action_space.shape), dtype=action_space.dtype)
+    elif isinstance(action_space, gym.spaces.Tuple):
+        actions = [None]*len(action_space.spaces)
+        for i,space in enumerate(action_space.spaces): actions[i] = gym_action_get_mem(space,size)
+        return actions
+    elif isinstance(action_space, gym.spaces.Dict):
+        actions = {}
+        for k,space in action_space.spaces.items(): actions[k] = gym_action_get_mem(space,size)
+        return actions
+
+def gym_obs_get_mem(obs_space, size):
+    if isinstance(obs_space, gym.spaces.Discrete): return np.zeros([size]+[1], dtype=obs_space.dtype)
+    elif isinstance(obs_space, gym.spaces.Box): return np.zeros([size]+list(obs_space.shape), dtype=obs_space.dtype)
+    elif isinstance(obs_space, gym.spaces.Dict):
+        sample = obs_space.sample()
+        sample = gym_flatten(obs_space, sample, dtype=obs_space.dtype)
+        return np.zeros([size]+list(sample.shape), dtype=obs_space.dtype)
+
+def update_mem(mem, index, item):
+    if isinstance(mem, list):
+        for i in range(len(mem)): mem[i][index] = item[i]
+    elif isinstance(mem, dict):
+        for k in mem.keys(): mem[k][index] = item[k]
+    else: mem[index] = item
+
+
+
+def dist_loss_entropy(dists, logits, targets, discrete=True, num_samples=1):
+    # dists[0][0] = param size, dists[0][1] = is discrete, dists[0][2] = dists lambda
+    if isinstance(dists, list):
+        cnt, s, e = len(dists), 0, dists[0][0]
+        loss, entropy = dist_loss_entropy(dists[0][2],logits[:,s:e],targets[0],dists[0][1],num_samples); s = e
+        for i in range(1, cnt):
+            e = s+dists[i][0]
+            ls, en = dist_loss_entropy(dists[i][2],logits[:,s:e],targets[i],dists[i][1],num_samples); s = e
+            loss += ls; entropy += en
+        loss, entropy = loss/cnt, entropy/cnt # all loss from here is always in the same range cause it's based on the 0.0-1.0 probability
+    elif isinstance(dists, dict):
+        keys = list(dists.keys()); k0 = keys[0]
+        cnt, s, e = len(keys), 0, dists[k0][0]
+        loss, entropy = dist_loss_entropy(dists[k0][2],logits[:,s:e],targets[k0],dists[k0][1],num_samples)
+        s = e
+        for i in range(1, cnt):
+            k = keys[i]
+            e = s+dists[k][0]
+            ls, en = dist_loss_entropy(dists[k][2],logits[:,s:e],targets[k],dists[k][1],num_samples)
+            s = e
+            loss += ls; entropy += en
+        loss, entropy = loss/cnt, entropy/cnt
+    else:
+        dist = dists(logits)
+        # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector)
+        targets = tf.cast(targets, dtype=dist.dtype)
+        # if dist.event_shape.rank == 0: targets = tf.squeeze(targets, axis=-1)
+        # loss = dist.prob(targets)
+        loss = -dist.log_prob(targets)
+        # # PPO
+        # log_prob = dist.log_prob(targets)
+        # log_prob_prev = tf.roll(log_prob, shift=1, axis=0)
+        # loss = tf.math.exp(log_prob - log_prob_prev)
+        if discrete: entropy = dist.entropy()
+        else:
+            entropy = dist.sample(num_samples)
+            entropy = -dist.log_prob(entropy)
+            # entropy = util.replace_infnan(entropy, self.float_maxroot)
+            entropy = tf.reduce_mean(entropy, axis=0)
+
+    return loss, entropy
+
+def dist_sample(dists, logits):
+    # v[0] = param size, v[1] = is discrete, v[2] = dist lambda
+    if isinstance(dists, list):
+        s, action = 0, [None]*len(dists)
+        for i,v in enumerate(dists):
+            e = s+v[0]; action[i] = dist_sample(v[2],logits[:,s:e]); s = e
+    elif isinstance(dists, dict):
+        s, action = 0, {}
+        for k,v in dists.items():
+            e = s+v[0]; action[k] = dist_sample(v[2],logits[:,s:e]); s = e
+    else:
+        dist = dists(logits)
+        # dist = tfp.distributions.TransformedDistribution(distribution=dist, bijector=self.bijector) # doesn't sample with float64
+        action = tf.squeeze(dist.sample(), axis=0)
+    return action
+    
+    # action = dist.sample()
+    # test = {}
+    # test['name'] = tf.squeeze(action, axis=0)
+    # # test = [tf.squeeze(action, axis=0),]
+    # return test
+
+
+def tf_to_np(data):
+    if isinstance(data, tf.Tensor): return data.numpy()
+    elif isinstance(data, list):
+        for i,v in enumerate(data): data[i] = tf_to_np(v)
+    elif isinstance(data, dict):
+        for k,v in data.items(): data[k] = tf_to_np(v)
+    return data
+def np_to_tf(data, dtype=None):
+    if isinstance(data, np.ndarray): return tf.convert_to_tensor(data, dtype=dtype)
+    elif isinstance(data, list):
+        data_tf = [None]*len(data)
+        for i,v in enumerate(data): data_tf[i] = np_to_tf(v, dtype=dtype)
+    elif isinstance(data, dict):
+        data_tf = {}
+        for k,v in data.items(): data_tf[k] = np_to_tf(v, dtype=dtype)
+    return data_tf
+
+
+
+
 class ActorCriticAI(tf.keras.Model):
     def __init__(self, env, lr=7e-3, gamma=0.99, value_c=0.5, entropy_c=1e-4):
         super().__init__('mlp_policy')
@@ -31,9 +223,9 @@ class ActorCriticAI(tf.keras.Model):
 
 
         self.action_num_components = 32
-        self.action_params_size, self.action_is_discrete, self.action_dist = util.gym_action_dist(env.action_space, dtype=self.compute_dtype, num_components=self.action_num_components)
+        self.action_params_size, self.action_is_discrete, self.action_dist = gym_action_dist(env.action_space, dtype=self.compute_dtype, num_components=self.action_num_components)
 
-        self.obs_is_vec, self.obs_sample = util.gym_obs_embed(env.observation_space, dtype=self.compute_dtype)
+        self.obs_is_vec, self.obs_sample = gym_obs_embed(env.observation_space, dtype=self.compute_dtype)
 
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 1, 0, 128, 64, 16
         # self.net_DNN, self.net_LSTM, inp, mid, evo = 0, 1, 1024, 512, 16
@@ -128,7 +320,7 @@ class ActorCriticAI(tf.keras.Model):
         return returns
 
     def _loss_action(self, action_logits, actions, advantages): # layer_action_dense_logits_out, targets, returns - values
-        loss, entropy = util.dist_loss_entropy(self.action_dist, action_logits, actions, self.action_is_discrete, self.action_num_components)
+        loss, entropy = dist_loss_entropy(self.action_dist, action_logits, actions, self.action_is_discrete, self.action_num_components)
 
         loss = tf.math.multiply(loss, advantages) # sample_weight
         # loss = loss - returns
@@ -189,8 +381,8 @@ class ActorCriticAI(tf.keras.Model):
         return tf.reduce_mean(loss_total), tf.reduce_mean(loss_action), tf.reduce_mean(loss_value)
 
     def train(self, obs, actions, returns):
-        obs = util.np_to_tf(obs, dtype=self.compute_dtype)
-        actions = util.np_to_tf(actions)
+        obs = np_to_tf(obs, dtype=self.compute_dtype)
+        actions = np_to_tf(actions)
         returns = tf.convert_to_tensor(returns, dtype=self.compute_dtype)
         loss_total_cur, loss_action_cur, loss_value_cur = self._train(obs, actions, returns)
         return loss_total_cur.numpy(), loss_action_cur.numpy(), loss_value_cur.numpy()
@@ -199,14 +391,14 @@ class ActorCriticAI(tf.keras.Model):
     @tf.function
     def _action_value(self, inputs):
         action_logits, value = self(inputs)
-        action = util.dist_sample(self.action_dist, action_logits)
+        action = dist_sample(self.action_dist, action_logits)
         print("tracing -> _action_value")
         return action, tf.squeeze(value)
 
     def action_value(self, obs):
         obs = tf.convert_to_tensor([obs], dtype=self.compute_dtype) # add single batch
         action, value = self._action_value(obs)
-        action, value = util.tf_to_np(action), util.tf_to_np(value)
+        action, value = tf_to_np(action), tf_to_np(value)
         # print("action {} value {}".format(action, value))
         return action, value
 
@@ -217,14 +409,14 @@ class AgentA2C:
 
     def train(self, env, render=False, batch_sz=64, updates=250):
         # Storage helpers for a single batch of data.
-        actions = util.gym_action_get_mem(env.action_space, batch_sz)
-        observations = util.gym_obs_get_mem(env.observation_space, batch_sz)
+        actions = gym_action_get_mem(env.action_space, batch_sz)
+        observations = gym_obs_get_mem(env.observation_space, batch_sz)
         values = np.zeros((batch_sz,), dtype=model.compute_dtype)
         rewards = np.zeros((batch_sz,), dtype=model.compute_dtype)
         dones = np.zeros((batch_sz,), dtype=np.bool)
 
         # Training loop: collect samples, send to optimizer, repeat updates times.
-        next_obs = util.gym_obs_get(env.observation_space, env.reset())
+        next_obs = gym_obs_get(env.observation_space, env.reset())
         if render: env.render()
 
         loss_total, loss_action, loss_value, loss_total_cur, loss_action_cur, loss_value_cur = [], [], [], 0.0, 0.0, 0.0
@@ -235,13 +427,13 @@ class AgentA2C:
 
         while update < updates or not finished:
             for step in range(batch_sz):
-                util.update_mem(observations, step, next_obs)
+                update_mem(observations, step, next_obs)
                 action, values[step] = self.model.action_value(next_obs)
-                util.update_mem(actions, step, action)
+                update_mem(actions, step, action)
                 
                 step_time_start = time.perf_counter_ns()
                 next_obs, rewards[step], dones[step], _ = env.step(action)
-                next_obs = util.gym_obs_get(env.observation_space, next_obs)
+                next_obs = gym_obs_get(env.observation_space, next_obs)
                 t_steps_total += (time.perf_counter_ns() - step_time_start) / 1e9 # seconds
                 steps_total += 1
                 if render:
@@ -264,7 +456,7 @@ class AgentA2C:
                     epi_steps = 0
                     t_total += t_epi
 
-                    next_obs = util.gym_obs_get(env.observation_space, env.reset())
+                    next_obs = gym_obs_get(env.observation_space, env.reset())
                     if render: env.render()
                     t_epi_start = time.time()
             if early_quit: break
