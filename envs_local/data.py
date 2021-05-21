@@ -54,9 +54,9 @@ class DataEnv(gym.Env):
         # ds = ds[:16]
         self.ds, self.ds_idx, self.ds_max = ds, 0, 64
 
-        self.ob_spec, self.ob_zero, _ = util.gym_get_spec(self.observation_space)
-        self.action_spec, self.action_zero, _ = util.gym_get_spec(self.action_space)
-        self.state = self.action_zero, self.ob_zero, np.float64(0.0), False, {}
+        self.obs_zero = util.gym_get_space_zero(self.observation_space)
+        self.action_zero = util.gym_get_space_zero(self.action_space)
+        self.state = self.action_zero, self.obs_zero, np.float64(0.0), False, {}
         self.item_accu = []
         
 
@@ -83,11 +83,11 @@ class DataEnv(gym.Env):
         # obs = self.observation_space.sample()
         # reward = np.float64(np.random.standard_normal())
 
-        obs = {'timestamp':np.asarray([self.ds_idx], self.ob_spec['timestamp']['dtype']), 'data':self.ds[self.ds_idx]}
+        obs = {'timestamp':np.asarray([self.ds_idx], self.observation_space.spaces['timestamp'].dtype), 'data':self.ds[self.ds_idx]}
         if self.data_src == 'shkspr':
             if action is not None:
                 # obs_prev = self.ds[self.ds_idx-1]
-                action_pred = np.asarray([action], self.ob_spec['data']['dtype'])
+                action_pred = np.asarray([action], self.observation_space.spaces['data'].dtype)
                 if action_pred == obs['data']: reward = np.float64(1.0)
             # TODO add ds_idx to obs
             self.ds_idx += 1

@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -234,27 +235,66 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
 
 
-def gym_get_spec(space, compute_dtype='float64', force_cont=False, rtn_tf=False):
+def gym_get_space_zero(space):
+    if isinstance(space, gym.spaces.Discrete): zero = np.asarray(0, space.dtype)
+    elif isinstance(space, gym.spaces.Box): zero = np.zeros(space.shape, space.dtype)
+    elif isinstance(space, gym.spaces.Tuple):
+        zero = [None]*len(space.spaces)
+        for i,s in enumerate(space.spaces): zero[i] = gym_get_space_zero(s)
+        zero = tuple(zero)
+    elif isinstance(space, gym.spaces.Dict):
+        zero = OrderedDict()
+        for k,s in space.spaces.items(): zero[k] = gym_get_space_zero(s)
+    return zero
+
+def gym_get_spec(space, compute_dtype='float64', force_cont=False):
     if isinstance(space, gym.spaces.Discrete):
-        dtype = tf.dtypes.as_dtype(space.dtype) if rtn_tf else space.dtype
+        dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = compute_dtype if force_cont else 'int32'
-        dtype_out = tf.dtypes.as_dtype(dtype_out) if rtn_tf else np.dtype(dtype_out)
-        spec = {'dtype':dtype, 'min':0, 'max':space.n-1, 'dtype_out':dtype_out, 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,)}
-        zero = tf.constant([[0]], dtype) if rtn_tf else np.asarray(0, dtype)
-        zero_out = tf.constant([[0]], dtype_out) if rtn_tf else np.asarray(0, dtype_out)
+        dtype_out = tf.dtypes.as_dtype(dtype_out)
+        spec = [{'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,)}]
+        zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
     elif isinstance(space, gym.spaces.Box):
-        dtype = tf.dtypes.as_dtype(space.dtype) if rtn_tf else space.dtype
-        dtype_out = tf.dtypes.as_dtype(compute_dtype) if rtn_tf else np.dtype(compute_dtype)
-        spec = {'dtype':dtype, 'min':space.low[...,0], 'max':space.high[...,0], 'dtype_out':dtype_out, 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}
-        zero = tf.zeros([1]+list(space.shape), dtype) if rtn_tf else np.zeros(space.shape, dtype)
-        zero_out = tf.zeros([1]+list(space.shape), dtype_out) if rtn_tf else np.zeros(space.shape, dtype_out)
+        dtype = tf.dtypes.as_dtype(space.dtype)
+        dtype_out = tf.dtypes.as_dtype(compute_dtype)
+        spec = [{'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}]
+        zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
     elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
-        spec, zero, zero_out = {}, {}, {}
+        spec, zero, zero_out = [], [], []
         loop = space.spaces.items() if isinstance(space, gym.spaces.Dict) else enumerate(space.spaces)
         for k,s in loop:
-            spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont, rtn_tf)
-            spec.update({k:spec_sub}); zero.update({k:zero_sub}); zero_out.update({k:zero_out_sub})
+            spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont)
+            spec += spec_sub; zero += zero_sub; zero_out += zero_out_sub
     return spec, zero, zero_out
+
+# TODO test tf.nest.flatten(obs)
+def gym_obs_to_feat(obs, space):
+    feat = []
+    if isinstance(obs, tuple):
+        for i,v in enumerate(obs): feat += gym_obs_to_feat(v, space[i])
+    elif isinstance(obs, dict):
+        for k,v in obs.items(): feat += gym_obs_to_feat(v, space[k])
+    elif isinstance(obs, np.ndarray): feat = [np.expand_dims(obs,0)]
+    else: feat = [np.asarray([[obs]], space.dtype)]
+    return feat
+
+# TODO test tf.nest.pack_sequence_as(out, space)
+def gym_out_to_space(out, space, i):
+    if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)): rtn = out[i[0]]
+    elif isinstance(space, gym.spaces.Tuple):
+        rtn = []
+        for s in space.spaces:
+            action_sub = gym_out_to_space(out, s, i)
+            rtn.append(action_sub)
+            if isinstance(action_sub, np.ndarray): i[0] += 1
+        rtn = tuple(rtn)
+    elif isinstance(space, gym.spaces.Dict):
+        rtn = OrderedDict()
+        for k,s in space.spaces.items():
+            action_sub = gym_out_to_space(out, s, i)
+            rtn[k] = action_sub
+            if isinstance(action_sub, np.ndarray): i[0] += 1
+    return rtn
 
 
 
