@@ -39,59 +39,54 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class RepNet(tf.keras.Model):
-    def __init__(self, latent_size, categorical):
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
         super(RepNet, self).__init__()
-        self.categorical, event_shape = categorical, (latent_size,)
-
-        if categorical: num_components = 256; params_size, self.dist = util.CategoricalRP.params_size(num_components, event_shape), util.CategoricalRP(num_components, event_shape)
-        else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-
-        self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*4, latent_size*4, latent_size
-        self.net_arch = "RN[inD{}-{:02d}{}D{}-cmp{}-lat{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components, latent_size)
+        inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
+        self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
-        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_latent = tf.keras.layers.Dense(latent_size, name='dense_latent')
+        # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
+        self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], []
+        for i in range(self.net_ins):
+            self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
+            self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
 
-        self.layer_lstm, self.layer_dense = [], []
-        for i in range(self.net_blocks):
+        self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
+        for i in range(net_blocks):
+            if self.net_attn: self.layer_attn.append(util.MultiHeadAttention(num_heads=num_heads, latent_size=latent_size, memory_size=memory_size, name='attn_{:02d}'.format(i)))
             if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
-            self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+            else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
+            self.layer_dense_lat.append(tf.keras.layers.Dense(latent_size, name='dense_lat_{:02d}'.format(i)))
 
+        if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
+        if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
+        if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-
-    def _net(self, inputs):
-        out = self.layer_dense_in(inputs)
-        for i in range(self.net_blocks):
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
-            out = self.layer_dense[i](out)
-        out = self.layer_dense_logits_out(out)
-        return out
+        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-cmp{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
 
     def reset_states(self):
+        for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, training=None):
-        out_accu = []
-        for k,v in inputs.items():
-            if k == 'obs':
-                out = tf.cast(v, self.compute_dtype)
-                out = self.layer_flatten(out)
-                out = self.layer_dense_in(out)
-                out = self.layer_dense_latent(out)
-                out_accu.append(out)
-            # if k == 'rewards':
-            #     out = tf.cast(v, self.compute_dtype)
-            #     out_accu.append(out)
-            # if k == 'dones':
-            #     out = tf.cast(v, self.compute_dtype)
-            #     out_accu.append(out)
+        # TODO how to loop through different embed layer structures?
+        out_accu = [None]*self.net_ins
+        for i in range(self.net_ins):
+            out = tf.cast(inputs['obs'][i], self.compute_dtype)
+            out = self.layer_flatten(out)
+            out = self.layer_dense_in[i](out)
+            out = self.layer_dense_in_lat[i](out)
+            out_accu[i] = out
         out = tf.math.accumulate_n(out_accu)
         
         for i in range(self.net_blocks):
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
-            out = self.layer_dense[i](out)
+            out = tf.expand_dims(out, axis=0)
+            if self.net_attn: out = self.layer_attn[i](out, training=training)
+            if self.net_lstm: out = self.layer_lstm[i](out, training=training)
+            out = tf.squeeze(out, axis=0)
+            if not self.net_lstm: out = self.layer_dense[i](out)
+            out = self.layer_dense_lat[i](out)
         out = self.layer_dense_logits_out(out)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
@@ -101,51 +96,54 @@ class RepNet(tf.keras.Model):
 
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
-    def __init__(self, latent_size, categorical, memory_size=None):
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1): # spec_in=[] for no action conditioning
         super(TransNet, self).__init__()
-        self.categorical, event_shape = categorical, (latent_size,)
-
-        if categorical: num_components = 256; params_size, self.dist = util.CategoricalRP.params_size(num_components, event_shape), util.CategoricalRP(num_components, event_shape)
-        else: num_components = latent_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-
-        self.net_blocks, self.net_attn, self.net_lstm, inp, mid, evo, num_heads = 2, True, False, latent_size*4, latent_size*4, latent_size, 2
-        self.net_arch = "TN[inD{}-{:02d}{}{}D{}-cmp{}-lat{}-hds{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS' if self.net_lstm else ''), mid, num_components, latent_size, num_heads)
+        inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
+        self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
-        self.layer_cond_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='cond_dense_in') # action conditioning embedding
-        self.layer_cond_dense_latent = tf.keras.layers.Dense(latent_size, name='cond_dense_latent')
+        # self.net_inputs = ['actions']*len(spec_in)+['obs']
+        self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], [] # action conditioning/embedding
+        for i in range(self.net_ins):
+            self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
+            self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
 
-        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_latent = tf.keras.layers.Dense(latent_size, name='dense_latent')
+        self.layer_obs_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='obs_dense_in')
+        self.layer_obs_dense_in_lat = tf.keras.layers.Dense(latent_size, name='obs_dense_in_lat')
 
         self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
-        for i in range(self.net_blocks):
+        for i in range(net_blocks):
             if self.net_attn: self.layer_attn.append(util.MultiHeadAttention(num_heads=num_heads, latent_size=latent_size, memory_size=memory_size, name='attn_{:02d}'.format(i)))
             if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
             else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
             self.layer_dense_lat.append(tf.keras.layers.Dense(latent_size, name='dense_lat_{:02d}'.format(i)))
+        
+        if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
+        if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
+        if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-cmp{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
 
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, training=None):
-        out_accu = []
-        for k,v in inputs.items():
-            if k == 'actions':
-                out = tf.cast(v, self.compute_dtype)
-                out = self.layer_flatten(out)
-                out = self.layer_cond_dense_in(out)
-                out = self.layer_cond_dense_latent(out)
-                out_accu.append(out)
-            if k == 'obs':
-                out = tf.cast(v, self.compute_dtype)
-                out = self.layer_flatten(out)
-                out = self.layer_dense_in(out)
-                out = self.layer_dense_latent(out)
-                out_accu.append(out)
+        out_accu = [None]*(self.net_ins+1)
+        for i in range(self.net_ins):
+            out = tf.cast(inputs['actions'][i], self.compute_dtype)
+            out = self.layer_flatten(out)
+            out = self.layer_dense_in[i](out)
+            out = self.layer_dense_in_lat[i](out)
+            out_accu[i] = out
+
+        out = tf.cast(inputs['obs'], self.compute_dtype)
+        out = self.layer_flatten(out)
+        out = self.layer_obs_dense_in(out)
+        out = self.layer_obs_dense_in_lat(out)
+        out_accu[-1] = out
+
         out = tf.math.accumulate_n(out_accu)
         
         for i in range(self.net_blocks):
@@ -162,132 +160,82 @@ class TransNet(tf.keras.Model):
         return out
 
 
-class RewardNet(tf.keras.Model):
-    def __init__(self):
-        super(RewardNet, self).__init__()
-        num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-        inp, evo = 256, 32; self.net_arch = "RWD[inD{}-cmp{}]".format(inp, num_components)
-        self.layer_flatten = tf.keras.layers.Flatten()
-        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-    def call(self, inputs, training=None):
-        out = self.layer_flatten(inputs['obs'])
-        out = self.layer_dense_in(out)
-        out = self.layer_dense_logits_out(out)
-        return out
+# class RewardNet(tf.keras.Model):
+#     def __init__(self, name):
+#         super(RewardNet, self).__init__()
+#         num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
+#         inp, evo = 256, 32; self.net_arch = "{}[inD{}-cmp{}]".format(name, inp, num_components)
+#         self.layer_flatten = tf.keras.layers.Flatten()
+#         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+#         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+#         # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+#         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+#     def call(self, inputs, training=None):
+#         out = self.layer_flatten(inputs['obs'])
+#         out = self.layer_dense_in(out)
+#         out = self.layer_dense_logits_out(out)
+#         return out
 
-class DoneNet(tf.keras.Model):
-    def __init__(self):
-        super(DoneNet, self).__init__()
-        num_components, event_shape = 2, (1,); params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
-        # params_size, self.dist = 1, tfp.layers.DistributionLambda(lambda input: tfp.distributions.Bernoulli(logits=input, dtype=tf.bool))
-        inp, evo = 256, 32; self.net_arch = "DON[inD{}-cmp{}]".format(inp, num_components)
-        self.layer_flatten = tf.keras.layers.Flatten()
-        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-    def call(self, inputs, training=None):
-        out = self.layer_flatten(inputs['obs'])
-        out = self.layer_dense_in(out)
-        out = self.layer_dense_logits_out(out)
-        return out
+# class DoneNet(tf.keras.Model):
+#     def __init__(self, name):
+#         super(DoneNet, self).__init__()
+#         num_components, event_shape = 2, (1,); params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
+#         # params_size, self.dist = 1, tfp.layers.DistributionLambda(lambda input: tfp.distributions.Bernoulli(logits=input, dtype=tf.bool))
+#         inp, evo = 256, 32; self.net_arch = "[inD{}-cmp{}]".format(name, inp, num_components)
+#         self.layer_flatten = tf.keras.layers.Flatten()
+#         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+#         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
+#         # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
+#         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+#     def call(self, inputs, training=None):
+#         out = self.layer_flatten(inputs['obs'])
+#         out = self.layer_dense_in(out)
+#         out = self.layer_dense_logits_out(out)
+#         return out
+
 
 class GenNet(tf.keras.Model):
-    def __init__(self, spec_in, spec_out, force_cont, latent_size):
+    def __init__(self, name, spec_out, force_cont, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
         super(GenNet, self).__init__()
-        mixture_size = 4
-
-        num_components, event_shape = spec['num_components'], spec['event_shape']
-        if not force_cont and spec['is_discrete']: params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
-        else: num_components *= mixture_size; params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-
-        self.net_blocks, self.net_lstm, inp, mid, evo = 1, False, latent_size*4, latent_size*4, int(latent_size/2)
-        self.net_arch = "GN[inD{}-{:02d}{}D{}-cmp{}{}]".format(inp, self.net_blocks, ('LS+' if self.net_lstm else ''), mid, num_components, ('-con' if force_cont else ''))
+        inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), 4
+        self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_lstm, self.layer_dense = [], []
-        for i in range(self.net_blocks):
-            if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
-            self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
-        
-        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-
-    def reset_states(self):
-        for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, training=None):
-        out_accu = []
-        for k,v in inputs.items():
-            if k == 'obs':
-                out = tf.cast(v, self.compute_dtype)
-                out = self.layer_flatten(out)
-                out_accu.append(out)
-        out = tf.concat(out_accu, 1)
-        out = self.layer_dense_in(out)
-        for i in range(self.net_blocks):
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0)), axis=0)
-            out = self.layer_dense[i](out)
-        out = self.layer_dense_logits_out(out)
-        
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
-        if isinfnan > 0: tf.print('gen net out:', out)
-        return out
-
-
-class ActionNet(tf.keras.Model):
-    def __init__(self, spec_in, spec_out, force_cont, latent_size, memory_size=None):
-        super(ActionNet, self).__init__()
-        inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), 4
-        self.net_blocks, self.net_attn, self.net_lstm, num_heads = 1, False, False, 2
-        self.layer_flatten = tf.keras.layers.Flatten()
-
-        self.layer_dense_in, self.layer_dense_in_lat, self.net_ins = [], [], len(spec_in)
-        for i in range(len(spec_in)):
-            self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
-            self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
+        self.layer_dense_in_lat = tf.keras.layers.Dense(latent_size, name='dense_in_lat')
 
         self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
-        for i in range(self.net_blocks):
+        for i in range(net_blocks):
             if self.net_attn: self.layer_attn.append(util.MultiHeadAttention(num_heads=num_heads, latent_size=latent_size, memory_size=memory_size, name='attn_{:02d}'.format(i)))
             if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
             else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
             self.layer_dense_lat.append(tf.keras.layers.Dense(latent_size, name='dense_lat_{:02d}'.format(i)))
 
-        params_size, self.dist, self.net_outs, arch_out = [], [], len(spec_out), ""
-        for spec in spec_out:
-            arch_out += "O{}{}".format(('d' if not force_cont and spec['is_discrete'] else 'c'), spec['num_components'])
-            if not force_cont and spec['is_discrete']:
-                params_size.append(util.Categorical.params_size(spec['num_components'], spec['event_shape']))
-                self.dist.append(util.Categorical(spec['num_components'], spec['event_shape']))
+        self.net_outs, params_size, self.dist, arch_out = len(spec_out), [], [], ""
+        for i in range(self.net_outs):
+            arch_out += "O{}{}".format(('d' if not force_cont and spec_out[i]['is_discrete'] else 'c'), spec_out[i]['num_components'])
+            if not force_cont and spec_out[i]['is_discrete']:
+                params_size.append(util.Categorical.params_size(spec_out[i]['num_components'], spec_out[i]['event_shape']))
+                self.dist.append(util.Categorical(spec_out[i]['num_components'], spec_out[i]['event_shape']))
             else:
-                params_size.append(util.MixtureLogistic.params_size(spec['num_components']*mixture_size, spec['event_shape']))
-                self.dist.append(util.MixtureLogistic(spec['num_components']*mixture_size, spec['event_shape']))
+                params_size.append(util.MixtureLogistic.params_size(spec_out[i]['num_components']*mixture_size, spec_out[i]['event_shape']))
+                self.dist.append(util.MixtureLogistic(spec_out[i]['num_components']*mixture_size, spec_out[i]['event_shape']))
 
         self.layer_dense_logits_out = []
-        for i in range(len(params_size)):
-            self.layer_dense_logits_out.append(tf.keras.layers.Dense(params_size[i], name='dense_logits_out_{:02d}'.format(i)))
+        for i in range(self.net_outs):
+            if spec_out[i]['net_type'] == 0: self.layer_dense_logits_out.append(tf.keras.layers.Dense(params_size[i], name='dense_logits_out_{:02d}'.format(i)))
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-
-        self.net_arch = "AN[inD{}-{:02d}{}{}D{}-{}{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, arch_out, ('-hds'+str(num_heads) if self.net_attn else ''))
+        self.net_arch = "{}[inD{}-{:02d}{}{}D{}-{}{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, arch_out, ('-hds'+str(num_heads) if self.net_attn else ''))
 
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, training=None):
-        out_accu = [None]*self.net_ins
-        for i in range(self.net_ins):
-            out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            out = self.layer_flatten(out)
-            out = self.layer_dense_in[i](out)
-            out = self.layer_dense_in_lat[i](out)
-            out_accu[i] = out
-        out = tf.math.accumulate_n(out_accu)
+        out = tf.cast(inputs['obs'], self.compute_dtype)
+        out = self.layer_flatten(out)
+        out = self.layer_dense_in(out)
+        out = self.layer_dense_in_lat(out)
         
         for i in range(self.net_blocks):
             out = tf.expand_dims(out, axis=0)
@@ -297,6 +245,7 @@ class ActionNet(tf.keras.Model):
             if not self.net_lstm: out = self.layer_dense[i](out)
             out = self.layer_dense_lat[i](out)
 
+        # TODO how to loop through different output layer structures?
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
             out_logits[i] = self.layer_dense_logits_out[i](out)
@@ -307,19 +256,17 @@ class ActionNet(tf.keras.Model):
 
 
 class ValueNet(tf.keras.Model):
-    def __init__(self, spec_in, latent_size):
+    def __init__(self, name, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
         super(ValueNet, self).__init__()
         inp, mid, evo = latent_size*2, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, num_heads = 1, False, False, 2
+        self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
-        self.layer_dense_in, self.layer_dense_in_lat, self.net_ins = [], [], len(spec_in)
-        for i in range(len(spec_in)):
-            self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
-            self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
+        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
+        self.layer_dense_in_lat = tf.keras.layers.Dense(latent_size, name='dense_in_lat')
 
         self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
-        for i in range(self.net_blocks):
+        for i in range(net_blocks):
             if self.net_attn: self.layer_attn.append(util.MultiHeadAttention(num_heads=num_heads, latent_size=latent_size, memory_size=memory_size, name='attn_{:02d}'.format(i)))
             if self.net_lstm: self.layer_lstm.append(tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i)))
             else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
@@ -328,21 +275,16 @@ class ValueNet(tf.keras.Model):
         self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-
-        self.net_arch = "VN[inD{}-{:02d}{}{}D{}{}]".format(inp, self.net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''))
+        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''))
 
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, training=None):
-        out_accu = [None]*self.net_ins
-        for i in range(self.net_ins):
-            out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            out = self.layer_flatten(out)
-            out = self.layer_dense_in[i](out)
-            out = self.layer_dense_in_lat[i](out)
-            out_accu[i] = out
-        out = tf.math.accumulate_n(out_accu)
+        out = tf.cast(inputs['obs'], self.compute_dtype)
+        out = self.layer_flatten(out)
+        out = self.layer_dense_in(out)
+        out = self.layer_dense_in_lat(out)
         
         for i in range(self.net_blocks):
             out = tf.expand_dims(out, axis=0)
@@ -357,7 +299,7 @@ class ValueNet(tf.keras.Model):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_cat, memory_size):
+    def __init__(self, arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
@@ -375,35 +317,34 @@ class GeneralAI(tf.keras.Model):
         self.gym_step_shapes = [tf.TensorShape([1]+list(feat['event_shape'])) for feat in self.obs_spec] + [tf.TensorShape((1,1)), tf.TensorShape((1,1))]
         self.gym_step_dtypes = [feat['dtype'] for feat in self.obs_spec] + [tf.float64, tf.bool]
 
-        # TODO add deterministic
-        if latent_cat: self.latent_spec = [{'dtype':compute_dtype, 'num_components':256, 'event_shape':(latent_size,)}]
-        else: self.latent_spec = [{'dtype':compute_dtype, 'num_components':latent_size, 'event_shape':(latent_size,)}]
+        if latent_dist == 0: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':0}
+        if latent_dist == 1: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size, latent_size), 'num_components':0}
+        if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':latent_size}
+        self.latent_spec = latent_spec
 
         inputs = {'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
-        if arch in ('TEST','TRANS'):
-            self.rep = RepNet(self.obs_spec, self.latent_spec); outputs = self.rep(inputs); rep_dist = self.rep.dist(outputs)
+        if arch in ('AC','TRANS','TEST'):
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size)
+            outputs = self.rep(inputs)
+            rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
-            smpl = tf.zeros_like(smpl, self.latent_spec[0]['dtype'])
+            smpl = tf.zeros_like(smpl, latent_spec['dtype'])
             self.latent_zero = smpl
             inputs['obs'] = self.latent_zero
 
         if arch in ('TEST'):
-            self.gen = GenNet(self.latent_spec, self.obs_spec, force_cont_obs, latent_size); outputs = self.gen(inputs)
-            self.rwd = RewardNet(); outputs = self.rwd(inputs)
-            self.done = DoneNet(); outputs = self.done(inputs)
+            self.gen = GenNet('GN', [latent_spec], self.obs_spec, force_cont_obs, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.gen(inputs)
+            # self.rwd = RewardNet('RWD'); outputs = self.rwd(inputs)
+            # self.done = DoneNet('DON'); outputs = self.done(inputs)
 
-        spec_in = self.obs_spec if arch in ('TEST','AC') else self.latent_spec
-        self.action = ActionNet(spec_in, self.action_spec, force_cont_action, latent_size, memory_size); outputs = self.action(inputs)
-        if arch in ('TEST','AC'):
-            self.value = ValueNet(spec_in, latent_size); outputs = self.value(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.action(inputs)
+        self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
 
-        if arch in ('TEST','TRANS'):
+        if arch in ('TRANS','TEST'):
             inputs['actions'] = self.action_zero_out
-            self.trans = TransNet(self.latent_spec, latent_size, memory_size); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=True, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.trans(inputs)
 
-        self.reset_states()
         self.discounted_sum = tf.Variable(0, dtype=tf.float64, trainable=False)
-
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
 
@@ -424,6 +365,7 @@ class GeneralAI(tf.keras.Model):
         
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self.reset_states()
         self.TRANS_run = tf.function(self.TRANS_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.AC_run = tf.function(self.AC_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.TEST_run = tf.function(self.TEST_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -469,8 +411,10 @@ class GeneralAI(tf.keras.Model):
 
 
     def loss_likelihood(self, dist, targets):
-        targets = tf.cast(targets, dist.dtype)
-        loss = -dist.log_prob(targets)
+        loss = self.compute_zero
+        for i in range(len(dist)):
+            t = tf.cast(targets[i], dist[i].dtype)
+            loss = loss - dist[i].log_prob(t)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
@@ -507,16 +451,19 @@ class GeneralAI(tf.keras.Model):
 
 
 
-    def TRANS_actor(self, inputs_):
+    def TRANS_actor(self, inputs):
         print("tracing -> GeneralAI TRANS_actor")
-        inputs, outputs = inputs_.copy(), {}
+        # inputs, outputs = inputs_.copy(), {}
 
-        latents_next = tf.TensorArray(self.latent_dtype, size=0, dynamic_size=True)
-        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True)
-        targets = tf.TensorArray(self.obs_spec['dtype'], size=0, dynamic_size=True)
+        latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
+        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        targets = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): targets[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
 
         inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
-        for step in tf.range(self.max_steps):
+        # inputs['actions'] = self.action_zero_out
+        step = tf.constant(0)
+        while step < self.max_steps and not inputs['dones'][-1][0]:
 
             rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
             inputs_rep['obs'] = rep_dist.sample()
@@ -525,49 +472,68 @@ class GeneralAI(tf.keras.Model):
             inputs_rep['obs'] = trans_dist.sample()
             latents_next = latents_next.write(step, inputs_rep['obs'][-1])
 
-            action_logits = self.action(inputs_rep); action_dist = self.action.dist(action_logits)
-            action = action_dist.sample()
-            inputs_rep['actions'] = action
+            action_logits = self.action(inputs_rep)
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action_dist = self.action.dist[i](action_logits[i])
+                action[i] = action_dist.sample()
+                inputs_rep['actions'][i] = action[i]
 
-            if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
-            action = tf.cast(action, self.action_spec['dtype'])
-            action = tf.squeeze(action)
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], self.gym_step_dtypes)
+                if self.force_cont_action and self.action_spec[i]['is_discrete']: action[i] = util.discretize(action[i], self.action_spec[i]['min'], self.action_spec[i]['max'])
+                action[i] = tf.cast(action[i], self.action_spec[i]['dtype'])
+                action[i] = tf.squeeze(action[i])
+
+            np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
 
             rewards = rewards.write(step, inputs['rewards'][-1])
-            targets = targets.write(step, inputs['obs'][-1])
-            if inputs['dones'][-1][0]: break
+            for i in range(self.obs_spec_len): targets[i] = targets[i].write(step, inputs['obs'][i][-1])
+            step += 1
 
-        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), targets.stack()
+        outputs = {}
+        out_targets = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): out_targets[i] = targets[i].stack()
+        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), out_targets
         return outputs, inputs
 
     def TRANS_learner(self, inputs, training=True):
         print("tracing -> GeneralAI TRANS_learner")
 
-        action_logits = self.action(inputs); action_dist = self.action.dist(action_logits)
+        action_logits = self.action(inputs)
+        action_dist = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
         loss = {}
         loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
         loss['total'] = loss['action']
         return loss
 
+    def TRANS_run_episode(self, inputs, episode, training=True):
+        print("tracing -> GeneralAI TRANS_run_episode")
+        while not inputs['dones'][-1][0]:
+            with tf.GradientTape() as tape:
+                outputs, inputs = self.TRANS_actor(inputs)
+                loss = self.TRANS_learner(outputs)
+            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+
+            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss['total']), False, False, False, False,
+                False, False, False, False
+            ]
+            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
     def TRANS_run(self):
         print("tracing -> GeneralAI TRANS_run")
         for episode in tf.range(self.max_episodes):
-            inputs = {}
-            inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_reset, [], self.gym_step_dtypes)
-            while not inputs['dones'][-1][0]:
-                with tf.GradientTape() as tape:
-                    outputs, inputs = self.TRANS_actor(inputs)
-                    loss = self.TRANS_learner(outputs)
-                gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
-                self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+            self.action.reset_states(); self.value.reset_states()
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            self.TRANS_run_episode(inputs, episode)
 
-                metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                    tf.math.reduce_mean(loss['total']), False, False, False, False,
-                    False, False, False, False
-                ]
-                tf.numpy_function(self.metrics_update, metrics, [])
 
 
 
@@ -588,6 +554,10 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
             returns = returns.write(step, [self.compute_zero])
 
+            rep_logits = self.rep(inputs)
+            rep_dist = self.rep.dist(rep_logits)
+            inputs['obs'] = rep_dist.sample()
+
             action_logits = self.action(inputs)
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
@@ -601,7 +571,8 @@ class GeneralAI(tf.keras.Model):
 
             np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            # inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             dones = dones.write(step, inputs['dones'][-1])
@@ -620,6 +591,10 @@ class GeneralAI(tf.keras.Model):
 
     def AC_learner(self, inputs, training=True):
         print("tracing -> GeneralAI AC_learner")
+
+        rep_logits = self.rep(inputs)
+        rep_dist = self.rep.dist(rep_logits)
+        inputs['obs'] = rep_dist.sample()
 
         action_logits = self.action(inputs)
         action_dist = [None]*self.action_spec_len
@@ -649,10 +624,10 @@ class GeneralAI(tf.keras.Model):
             outputs, inputs = self.AC_actor(inputs)
             with tf.GradientTape() as tape:
                 loss = self.AC_learner(outputs)
-            gradients = tape.gradient(loss['total'], self.action.trainable_variables + self.value.trainable_variables)
+            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables)
             # isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(gradients[0]), tf.math.is_inf(gradients[0])))
             # if isinfnan > 0: tf.print('\ngradients', gradients[0]); break
-            self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables + self.value.trainable_variables))
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables + self.value.trainable_variables))
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
@@ -895,7 +870,7 @@ entropy_contrib = 1e-8
 returns_disc = 1.0
 force_cont_obs, force_cont_action = False, False
 latent_size = 64
-latent_cat = True
+latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 latent_size_mem_multi = 1
 
 device_type = 'GPU' # use GPU for large networks or big data
@@ -939,8 +914,8 @@ if __name__ == '__main__':
     # agent_process.join()
 
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_cat, memory_size=max_steps*latent_size_mem_multi)
-        name = "gym-{}-{}-{}".format(arch, env_name, ('Lcat' if latent_cat else 'Lcon'))
+        model = GeneralAI(arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*latent_size_mem_multi)
+        name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
         ## debugging
         # model.build(()); model.action.summary(); quit(0)

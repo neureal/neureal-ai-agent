@@ -60,6 +60,24 @@ class EvoNormS0(tf.keras.layers.Layer):
 
 
 
+class Deterministic(tfp.layers.DistributionLambda):
+    def __init__(self, event_shape=(), **kwargs):
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
+        params_shape = tf.identity(list(event_shape))
+        super(Deterministic, self).__init__(lambda input: Deterministic.new(input, params_shape), **kwargs)
+        self._event_shape = event_shape
+    @staticmethod
+    def new(params, params_shape):
+        # print("tracing -> Deterministic new")
+        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        params = tf.reshape(params, output_shape)
+        dist = tfp.distributions.Deterministic(loc=params)
+        return dist
+    @staticmethod
+    def params_size(event_shape=(), name=None):
+        params_size = np.prod(event_shape).item()
+        return params_size
+
 class Categorical(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), dtype_cat=tf.int32, **kwargs):
         params_shape = list(event_shape)+[num_components]
@@ -68,7 +86,7 @@ class Categorical(tfp.layers.DistributionLambda):
         params_shape, reinterpreted_batch_ndims = tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims)
         super(Categorical, self).__init__(lambda input: Categorical.new(input, params_shape, reinterpreted_batch_ndims, dtype_cat), **kwargs)
         self._num_components, self._event_shape = num_components, event_shape
-    @staticmethod # this doesn't change anything, just keeps the variables seperate
+    @staticmethod
     def new(params, params_shape, reinterpreted_batch_ndims, dtype_cat=tf.int32):
         # print("tracing -> Categorical new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
@@ -83,8 +101,9 @@ class Categorical(tfp.layers.DistributionLambda):
         return params_size
 
 class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
-    def __init__(self, num_components, event_shape=(), temperature=1e-5, **kwargs):
+    def __init__(self, event_shape=(), temperature=1e-5, **kwargs):
         compute_dtype = tf.keras.backend.floatx()
+        num_components, event_shape = event_shape[-1], event_shape[:-1]
         params_shape = list(event_shape)+[num_components]
         reinterpreted_batch_ndims = len(event_shape)
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
@@ -110,7 +129,8 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
     #     # sample = tf.cast(sample, dtype=tf.float64)
     #     return sample
     @staticmethod
-    def params_size(num_components, event_shape=(), name=None):
+    def params_size(event_shape=(), name=None):
+        num_components, event_shape = event_shape[-1], event_shape[:-1]
         event_size = np.prod(event_shape).item()
         params_size = event_size * num_components
         return params_size
@@ -162,11 +182,9 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
             # reparameterize=True, # better spread of loc and scale params, rep net works better
         )
         return dist
-
-    @staticmethod
-    def sample(dist, name=None):
-        return dist.sample()
-
+    # @staticmethod
+    # def sample(dist, name=None):
+    #     return dist.sample()
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
@@ -247,17 +265,18 @@ def gym_get_space_zero(space):
         for k,s in space.spaces.items(): zero[k] = gym_get_space_zero(s)
     return zero
 
+# TODO add different kinds of net_type? 0 = Dense, 1 = 2 layer Dense, 2 = Conv2D, etc
 def gym_get_spec(space, compute_dtype='float64', force_cont=False):
     if isinstance(space, gym.spaces.Discrete):
         dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = compute_dtype if force_cont else 'int32'
         dtype_out = tf.dtypes.as_dtype(dtype_out)
-        spec = [{'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,)}]
+        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,)}]
         zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
     elif isinstance(space, gym.spaces.Box):
         dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = tf.dtypes.as_dtype(compute_dtype)
-        spec = [{'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}]
+        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}]
         zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
     elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
         spec, zero, zero_out = [], [], []
