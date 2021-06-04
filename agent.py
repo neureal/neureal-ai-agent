@@ -390,6 +390,7 @@ class GeneralAI(tf.keras.Model):
         return np.asarray(0, np.int32) # dummy
 
 
+    # TODO use ZMQ for remote messaging
     def env_reset(self, dummy):
         obs, reward, done = self.env.reset(), 0.0, False
         if self.render: env.render()
@@ -533,7 +534,6 @@ class GeneralAI(tf.keras.Model):
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.TRANS_run_episode(inputs, episode)
-
 
 
 
@@ -878,6 +878,7 @@ device_type = 'CPU'
 
 machine, device = 'dev', 0
 
+env_async, env_async_clock = True, 0.003
 env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
@@ -887,12 +888,10 @@ env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v0
 # import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
 # import envs_local.data as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
-# trader, trader_env, trader_speed = False, 3, 180.0
-# import gym_trader; env_name, max_steps, render, trader, env = 'Trader2', 128, False, True, gym.make('Trader-v0', agent_id=device, env=trader_env, speed=trader_speed)
+# import gym_trader; env_name, max_steps, render, env = 'Trader2', 128, False, True, gym.make('Trader-v0', agent_id=device, env=3, speed=180.0)
 
-# import envs_local.async_wrapper as env_async_wrapper; env_name, env = env_name+'-Asyn', env_async_wrapper.AsyncWrapperEnv(env)
 
-# TODO try TD error with batch one
+# TODO TD loss with batch one
 # arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
@@ -913,6 +912,7 @@ if __name__ == '__main__':
     # process_ctrl.value = 0
     # agent_process.join()
 
+    if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, render)
     with tf.device("/device:{}:{}".format(device_type,device)):
         model = GeneralAI(arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*latent_size_mem_multi)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
@@ -951,6 +951,7 @@ if __name__ == '__main__':
         if arch=='TRANS': model.TRANS_run()
         if arch=='AC': model.AC_run()
         total_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
+        env.close()
 
 
         ## metrics
