@@ -287,22 +287,19 @@ def gym_obs_to_feat(obs, space):
     return feat
 
 # TODO test tf.nest.pack_sequence_as(out, space)
-def gym_out_to_space(out, space, i):
-    if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)): rtn = out[i[0]]
+def gym_out_to_space(out, space, idx):
+    if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
+        data = out[idx[0]]
+        if isinstance(space, gym.spaces.Discrete): data = data.item()
+        idx[0] += 1
     elif isinstance(space, gym.spaces.Tuple):
-        rtn = []
-        for s in space.spaces:
-            action_sub = gym_out_to_space(out, s, i)
-            rtn.append(action_sub)
-            if isinstance(action_sub, np.ndarray): i[0] += 1
-        rtn = tuple(rtn)
+        data = [None]*len(space.spaces)
+        for i,s in enumerate(space.spaces): data[i] = gym_out_to_space(out, s, idx)
+        data = tuple(data)
     elif isinstance(space, gym.spaces.Dict):
-        rtn = OrderedDict()
-        for k,s in space.spaces.items():
-            action_sub = gym_out_to_space(out, s, i)
-            rtn[k] = action_sub
-            if isinstance(action_sub, np.ndarray): i[0] += 1
-    return rtn
+        data = OrderedDict()
+        for k,s in space.spaces.items(): data[k] = gym_out_to_space(out, s, idx)
+    return data
 
 def gym_space_to_bytes(data, space):
     byts = []
