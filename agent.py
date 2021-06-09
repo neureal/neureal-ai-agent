@@ -884,9 +884,9 @@ env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v0
 # env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # env_name, max_steps, render, env = 'Copy', 32, False, gym.make('Copy-v0')
-# import envs_local.random as env_; env_name, max_steps, render, env = 'TestRnd', 16, False, env_.RandomEnv()
-# import envs_local.data as env_; env_name, max_steps, render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
-# import envs_local.data as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
+# import envs_local.random_env as env_; env_name, max_steps, render, env = 'TestRnd', 16, False, env_.RandomEnv()
+# import envs_local.data_env as env_; env_name, max_steps, render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
+# import envs_local.data_env as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, render, env = 'Trader2', 128, False, True, gym.make('Trader-v0', agent_id=device, env=3, speed=180.0)
 

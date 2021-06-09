@@ -120,14 +120,6 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
         # dist = tfp.distributions.RelaxedBernoulli(temperature=temperature, logits=params)
         dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
         return dist
-    # @staticmethod
-    # def sample(dist, name=None):
-    #     sample = dist.sample()
-    #     sample = tf.exp(sample)
-    #     sample = tf.math.argmax(sample, axis=-1)
-    #     # sample = tf.math.argmax(sample, axis=-1, output_type=tf.int64) # cant calculate gradients
-    #     # sample = tf.cast(sample, dtype=tf.float64)
-    #     return sample
     @staticmethod
     def params_size(event_shape=(), name=None):
         num_components, event_shape = event_shape[-1], event_shape[:-1]
@@ -182,9 +174,6 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
             # reparameterize=True, # better spread of loc and scale params, rep net works better
         )
         return dist
-    # @staticmethod
-    # def sample(dist, name=None):
-    #     return dist.sample()
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):
         event_size = np.prod(event_shape).item()
@@ -314,3 +303,30 @@ def gym_out_to_space(out, space, i):
             rtn[k] = action_sub
             if isinstance(action_sub, np.ndarray): i[0] += 1
     return rtn
+
+def gym_space_to_bytes(data, space):
+    byts = []
+    if isinstance(data, tuple):
+        for i,v in enumerate(data): byts += gym_space_to_bytes(v, space[i])
+    elif isinstance(data, dict):
+        for k,v in data.items(): byts += gym_space_to_bytes(v, space[k])
+    else:
+        if not isinstance(data, np.ndarray): data = np.asarray(data, space.dtype)
+        byts = [np.frombuffer(data, dtype=np.uint8)]
+    return byts
+
+def gym_bytes_to_space(byts, space, idxs, idx):
+    if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
+        data = byts[idxs[idx[0]]:idxs[idx[0]+1]]
+        if space.dtype != np.uint8: data = np.frombuffer(data, dtype=space.dtype)
+        if isinstance(space, gym.spaces.Box) and len(space.shape) > 1: data = np.reshape(data, space.shape)
+        if isinstance(space, gym.spaces.Discrete): data = data.item()
+        idx[0] += 1
+    elif isinstance(space, gym.spaces.Tuple):
+        data = [None]*len(space.spaces)
+        for i,s in enumerate(space.spaces): data[i] = gym_bytes_to_space(byts, s, idxs, idx)
+        data = tuple(data)
+    elif isinstance(space, gym.spaces.Dict):
+        data = OrderedDict()
+        for k,s in space.spaces.items(): data[k] = gym_bytes_to_space(byts, s, idxs, idx)
+    return data
