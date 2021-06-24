@@ -275,22 +275,23 @@ def gym_get_spec(space, compute_dtype='float64', force_cont=False):
             spec += spec_sub; zero += zero_sub; zero_out += zero_out_sub
     return spec, zero, zero_out
 
-# TODO test tf.nest.flatten(obs)
-def gym_obs_to_feat(obs, space):
+
+# TODO test tf.nest.flatten(data)
+def gym_space_to_feat(data, space):
     feat = []
-    if isinstance(obs, tuple):
-        for i,v in enumerate(obs): feat += gym_obs_to_feat(v, space[i])
-    elif isinstance(obs, dict):
-        for k,v in obs.items(): feat += gym_obs_to_feat(v, space[k])
-    elif isinstance(obs, np.ndarray): feat = [np.expand_dims(obs,0)]
-    else: feat = [np.asarray([[obs]], space.dtype)]
+    if isinstance(data, tuple):
+        for i,v in enumerate(data): feat += gym_space_to_feat(v, space[i])
+    elif isinstance(data, dict):
+        for k,v in data.items(): feat += gym_space_to_feat(v, space[k])
+    elif isinstance(data, np.ndarray): feat = [np.expand_dims(data,0)]
+    else: feat = [np.asarray([[data]], space.dtype)]
     return feat
 
 # TODO test tf.nest.pack_sequence_as(out, space)
 def gym_out_to_space(out, space, idx):
     if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
         data = out[idx[0]]
-        if isinstance(space, gym.spaces.Discrete): data = data.item()
+        if isinstance(space, gym.spaces.Discrete): data = data.item() # numpy.int64 is coming in here in graph mode
         idx[0] += 1
     elif isinstance(space, gym.spaces.Tuple):
         data = [None]*len(space.spaces)
@@ -300,6 +301,23 @@ def gym_out_to_space(out, space, idx):
         data = OrderedDict()
         for k,s in space.spaces.items(): data[k] = gym_out_to_space(out, s, idx)
     return data
+
+
+def gym_struc_to_feat(data):
+    if data.dtype.names is None:
+        if len(data.shape) == 1: data = np.expand_dims(data,-1)
+        feat = [data]
+    else:
+        feat = []
+        for k in data.dtype.names: feat += gym_struc_to_feat(data[k])
+    return feat
+
+def gym_out_to_struc(out, dtype):
+    for i in range(len(out)): out[i] = np.frombuffer(out[i], dtype=np.uint8)
+    out = np.concatenate(out)
+    out = np.frombuffer(out, dtype=dtype)
+    return out
+
 
 def gym_space_to_bytes(data, space):
     byts = []

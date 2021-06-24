@@ -22,13 +22,13 @@ class DataEnv(gym.Env):
             # ds = ds[:split[-1]]
             ds = ds[:,None]
 
+            self.action_space = gym.spaces.Discrete(256)
+
             obs_space = gym.spaces.Dict()
             obs_space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
             obs_space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             self.observation_space = obs_space
             # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
-
-            self.action_space = gym.spaces.Discrete(256)
 
             self.reward_range = (0.0,1.0)
 
@@ -39,11 +39,11 @@ class DataEnv(gym.Env):
         #     ds = ds['train']['image']
 
         #     # train_obs, test_obs = tf.image.resize(train_obs, (16,16), method='nearest').numpy(), tf.image.resize(test_obs, (16,16), method='nearest').numpy()
-        #     # self.observation_space = gym.spaces.Box(low=0, high=255, shape=list(ds.shape)[1:], dtype=np.uint8)
         #     # self.action_space = gym.spaces.Discrete(10)
+        #     # self.observation_space = gym.spaces.Box(low=0, high=255, shape=list(ds.shape)[1:], dtype=np.uint8)
 
-        #     self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
         #     self.action_space = gym.spaces.Discrete(256)
+        #     self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
         #     self.reward_range = (0.0,1.0)
 
         #     self.pxl_x, self.pxl_y, self.x_max, self.y_max = 0, 0, ds.shape[1], ds.shape[2]
@@ -54,8 +54,8 @@ class DataEnv(gym.Env):
         # ds = ds[:16]
         self.ds, self.ds_idx, self.ds_max = ds, 0, 64
 
-        self.obs_zero = util.gym_get_space_zero(self.observation_space)
         self.action_zero = util.gym_get_space_zero(self.action_space)
+        self.obs_zero = util.gym_get_space_zero(self.observation_space)
         self.state = self.action_zero, self.obs_zero, np.float64(0.0), False, {}
         self.item_accu = []
         
@@ -64,9 +64,9 @@ class DataEnv(gym.Env):
     def reset(self): return self._request(None)[0]
     def render(self, mode='human', close=False):
         action, obs, reward, done, info = self.state
-        # if action == None: print("{}\n".format(obs))
+        # if action is None: print("{}\n".format(obs))
         # else: print("{}\t\t--> {:.18f}{}\n{}\n".format(action, reward, (' DONE!' if done else ''), obs))
-        if action == None:
+        if action is None:
             if self.data_src == 'shkspr':
                 text = np.asarray(self.item_accu, dtype=np.uint8)
                 text = text.tobytes()

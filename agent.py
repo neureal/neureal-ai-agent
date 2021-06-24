@@ -299,14 +299,14 @@ class ValueNet(tf.keras.Model):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size):
+    def __init__(self, arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         self.compute_zero = tf.constant(0, compute_dtype)
 
-        self.arch, self.env, self.render, self.force_cont_obs, self.force_cont_action = arch, env, render, force_cont_obs, force_cont_action
+        self.arch, self.env, self.env_render, self.force_cont_obs, self.force_cont_action = arch, env, env_render, force_cont_obs, force_cont_action
         self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
@@ -393,15 +393,18 @@ class GeneralAI(tf.keras.Model):
     # TODO use ZMQ for remote messaging
     def env_reset(self, dummy):
         obs, reward, done = self.env.reset(), 0.0, False
-        if self.render: env.render()
-        rtn = util.gym_obs_to_feat(obs, env.observation_space)
+        if self.env_render: self.env.render()
+        if hasattr(self.env,'np_struc'): rtn = util.gym_struc_to_feat(obs)
+        else: rtn = util.gym_space_to_feat(obs, self.env.observation_space)
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], np.bool)]
         return rtn
-    def env_step(self, *args):
-        action = util.gym_out_to_space(args, env.action_space, [0])
+    def env_step(self, *args): # args = tuple of ndarrays
+        if hasattr(self.env,'np_struc'): action = util.gym_out_to_struc(list(args), self.env.action_dtype)
+        else: action = util.gym_out_to_space(args, self.env.action_space, [0])
         obs, reward, done, _ = self.env.step(action)
-        if self.render: env.render()
-        rtn = util.gym_obs_to_feat(obs, env.observation_space)
+        if self.env_render: self.env.render()
+        if hasattr(self.env,'np_struc'): rtn = util.gym_struc_to_feat(obs)
+        else: rtn = util.gym_space_to_feat(obs, self.env.observation_space)
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], np.bool)]
         return rtn
 
@@ -879,16 +882,16 @@ device_type = 'CPU'
 machine, device = 'dev', 0
 
 env_async, env_async_clock = True, 0.003
-env_name, max_steps, render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
-# env_name, max_steps, render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
-# env_name, max_steps, render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
-# env_name, max_steps, render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
-# env_name, max_steps, render, env = 'Copy', 32, False, gym.make('Copy-v0')
-# import envs_local.random_env as env_; env_name, max_steps, render, env = 'TestRnd', 16, False, env_.RandomEnv()
-# import envs_local.data_env as env_; env_name, max_steps, render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
-# import envs_local.data_env as env_; env_name, max_steps, render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
-# import envs_local.bipedal_walker as env_; env_name, max_steps, render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
-# import gym_trader; env_name, max_steps, render, env = 'Trader2', 128, False, True, gym.make('Trader-v0', agent_id=device, env=3, speed=180.0)
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
+# env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
+# env_name, max_steps, env_render, env = 'Copy', 32, False, gym.make('Copy-v0')
+import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
+# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
+# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
+# import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
+# import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 128, False, gym.make('Trader-v0', agent_id=device, env=3, speed=180.0)
 
 
 # TODO TD loss with batch one
@@ -912,9 +915,9 @@ if __name__ == '__main__':
     # process_ctrl.value = 0
     # agent_process.join()
 
-    if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, render)
+    if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_render)
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*latent_size_mem_multi)
+        model = GeneralAI(arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*latent_size_mem_multi)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
         ## debugging

@@ -1,4 +1,4 @@
-import time, ctypes
+import time
 import multiprocessing as mp
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
@@ -9,7 +9,7 @@ import model_util as util
 
 class AsyncWrapperEnv(gym.Env):
     metadata = {'render.modes': ['human']}
-    def __init__(self, env, env_clock, render):
+    def __init__(self, env, env_clock, env_render):
         super(AsyncWrapperEnv, self).__init__()
         self.env = env
         self.action_space = env.action_space
@@ -18,25 +18,32 @@ class AsyncWrapperEnv(gym.Env):
         self.reward_range = env.reward_range
         self.spec = env.spec
 
-        self._env_clock, self._render = env_clock, render
+        self._env_clock, self._env_render, self._env_np_struc = env_clock, env_render, hasattr(env,'np_struc')
+        reward_done_zero = [np.frombuffer(np.asarray(0, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(False, np.bool), dtype=np.uint8)]
+        self._reward_done_zero = reward_done_zero
+        
+        if self._env_np_struc:
+            self.np_struc, self.action_dtype, self.obs_dtype = env.np_struc, env.action_dtype, env.obs_dtype
+            reward_size, done_size = np.dtype(np.float64).itemsize, np.dtype(np.bool).itemsize
+            self._obs_idx, self._done_idx = -(reward_size + done_size), -done_size
+            action_size, obs_size = env.action_dtype.itemsize, env.obs_dtype.itemsize + reward_size + done_size
+        else:
+            idx = 0; action_idxs = util.gym_space_to_bytes(self.action_space.sample(), self.action_space)
+            for i in range(len(action_idxs)): idx += action_idxs[i].size; action_idxs[i] = idx
+            action_idxs = [0] + action_idxs
+
+            idx = 0; obs_idxs = util.gym_space_to_bytes(self.observation_space.sample(), self.observation_space)
+            obs_idxs += reward_done_zero
+            for i in range(len(obs_idxs)): idx += obs_idxs[i].size; obs_idxs[i] = idx
+            obs_idxs = [0] + obs_idxs
+
+            self._action_idxs, self._obs_idxs = action_idxs, obs_idxs
+            action_size, obs_size = action_idxs[-1], obs_idxs[-1]
+
         # self._lock_print = mp.Lock()
         self._proc_ctrl = mp.Value('b', 0) # 1 = close, 0 = reset, -1 = step, -2 = done
-
-        idx = 0; _action_idxs = util.gym_space_to_bytes(self.action_space.sample(), self.action_space)
-        for i in range(len(_action_idxs)): idx += _action_idxs[i].size; _action_idxs[i] = idx
-        _action_idxs = [0] + _action_idxs
-
-        idx = 0; _obs_idxs = util.gym_space_to_bytes(self.observation_space.sample(), self.observation_space)
-        _rew_done_zero = [np.frombuffer(np.asarray(0, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(False, np.bool), dtype=np.uint8)]
-        _obs_idxs += _rew_done_zero
-        for i in range(len(_obs_idxs)): idx += _obs_idxs[i].size; _obs_idxs[i] = idx
-        _obs_idxs = [0] + _obs_idxs
-
-        self._action_idxs, self._obs_idxs, self._rew_done_zero = _action_idxs, _obs_idxs, _rew_done_zero
-
-        self._action_shared = mp.sharedctypes.Array(ctypes.c_uint8, _action_idxs[-1])
-        self._obs_shared = mp.sharedctypes.Array(ctypes.c_uint8, _obs_idxs[-1])
-
+        self._action_shared = mp.sharedctypes.Array('B', action_size)
+        self._obs_shared = mp.sharedctypes.Array('B', obs_size)
         self._proc = mp.Process(target=self._proc_run, name='ENV', args=())
 
 
@@ -50,8 +57,9 @@ class AsyncWrapperEnv(gym.Env):
             if self._proc_ctrl.value == 0:
                 obs = self.env.reset()
                 # print("proc reset", obs)
-                obs = util.gym_space_to_bytes(obs, self.observation_space)
-                obs += self._rew_done_zero
+                if self._env_np_struc: obs = [np.frombuffer(obs, dtype=np.uint8)]
+                else: obs = util.gym_space_to_bytes(obs, self.observation_space)
+                obs += self._reward_done_zero
                 obs = np.concatenate(obs)
                 with self._obs_shared.get_lock():
                     if not np.array_equal(obs_view, obs): np.copyto(obs_view, obs, casting='no')
@@ -60,18 +68,20 @@ class AsyncWrapperEnv(gym.Env):
             elif self._proc_ctrl.value == -1:
                 with self._action_shared.get_lock():
                     if not np.array_equal(action_view, action): np.copyto(action, action_view, casting='no')
-                action_space = util.gym_bytes_to_space(action, self.action_space, self._action_idxs, [0])
+                if self._env_np_struc: action_space = np.frombuffer(action, dtype=self.env.action_dtype)
+                else: action_space = util.gym_bytes_to_space(action, self.action_space, self._action_idxs, [0])
 
                 obs, reward, done, _ = self.env.step(action_space)
                 # print("proc step", obs)
-                obs = util.gym_space_to_bytes(obs, self.observation_space)
+                if self._env_np_struc: obs = [np.frombuffer(obs, dtype=np.uint8)]
+                else: obs = util.gym_space_to_bytes(obs, self.observation_space)
                 obs += [np.frombuffer(np.asarray(reward, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(done, np.bool), dtype=np.uint8)]
                 obs = np.concatenate(obs)
                 with self._obs_shared.get_lock():
                     if not np.array_equal(obs_view, obs): np.copyto(obs_view, obs, casting='no')
                 if done: self._proc_ctrl.value = -2
 
-            if self._render: self.env.render()
+            if self._env_render: self.env.render()
             time.sleep(self._env_clock)
 
         self.env.close()
@@ -96,7 +106,8 @@ class AsyncWrapperEnv(gym.Env):
         while self._proc_ctrl.value != -1: time.sleep(0)
 
         with self._obs_shared.get_lock(): np.copyto(obs, obs_view, casting='no')
-        obs = util.gym_bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
+        if self._env_np_struc: obs = np.frombuffer(obs[:self._obs_idx], dtype=self.env.obs_dtype)
+        else: obs = util.gym_bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         return obs
 
     def step(self, action):
@@ -104,29 +115,40 @@ class AsyncWrapperEnv(gym.Env):
         obs_view = np.asarray(self._obs_shared.get_obj())
         obs = np.zeros(obs_view.shape, obs_view.dtype)
 
-        action = util.gym_space_to_bytes(action, self.action_space)
-        action = np.concatenate(action)
+        if self._env_np_struc: action = np.frombuffer(action, dtype=np.uint8)
+        else:
+            action = util.gym_space_to_bytes(action, self.action_space)
+            action = np.concatenate(action)
         with self._action_shared.get_lock():
             if not np.array_equal(action_view, action): np.copyto(action_view, action, casting='no')
         time.sleep(0)
 
         with self._obs_shared.get_lock(): np.copyto(obs, obs_view, casting='no')
-        reward = obs[self._obs_idxs[-3]:self._obs_idxs[-2]]
+        if self._env_np_struc:
+            reward = obs[self._obs_idx:self._done_idx]
+            done = obs[self._done_idx:]
+            obs = np.frombuffer(obs[:self._obs_idx], dtype=self.env.obs_dtype)
+        else:
+            reward = obs[self._obs_idxs[-3]:self._obs_idxs[-2]]
+            done = obs[self._obs_idxs[-2]:self._obs_idxs[-1]]
+            obs = util.gym_bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         reward = np.frombuffer(reward, dtype=np.float64).item()
-        done = obs[self._obs_idxs[-2]:self._obs_idxs[-1]]
         done = np.frombuffer(done, dtype=np.bool).item()
-        obs = util.gym_bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         return obs, reward, done, {}
 
 if __name__ == '__main__':
     ## test
     # env = gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
-    import random_env as env_; env = env_.RandomEnv()
+    import random_env as env_; env = env_.RandomEnv(True)
     env = AsyncWrapperEnv(env, 0.003, False)
     obs = env.reset()
     print("main reset", obs)
-    action = env.action_space.sample()
+    if hasattr(env,'np_struc'):
+        action = np.random.randint(32, size=env.action_dtype.itemsize, dtype=np.uint8)
+        action = np.frombuffer(action, dtype=env.action_dtype)
+    else:
+        action = env.action_space.sample()
     obs, reward, done, info = env.step(action)
-    print("main step", obs)
+    print("main step ", obs)
     env.close()
     print("done")
