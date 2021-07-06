@@ -482,10 +482,7 @@ class GeneralAI(tf.keras.Model):
                 action_dist = self.action.dist[i](action_logits[i])
                 action[i] = action_dist.sample()
                 inputs_rep['actions'][i] = action[i]
-
-                if self.force_cont_action and self.action_spec[i]['is_discrete']: action[i] = util.discretize(action[i], self.action_spec[i]['min'], self.action_spec[i]['max'])
-                action[i] = tf.cast(action[i], self.action_spec[i]['dtype'])
-                action[i] = tf.squeeze(action[i])
+                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
 
             np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
@@ -567,10 +564,7 @@ class GeneralAI(tf.keras.Model):
                 action_dist = self.action.dist[i](action_logits[i])
                 action[i] = action_dist.sample()
                 actions[i] = actions[i].write(step, action[i][-1])
-
-                if self.force_cont_action and self.action_spec[i]['is_discrete']: action[i] = util.discretize(action[i], self.action_spec[i]['min'], self.action_spec[i]['max'])
-                action[i] = tf.cast(action[i], self.action_spec[i]['dtype'])
-                action[i] = tf.squeeze(action[i])
+                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
 
             np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
@@ -680,9 +674,7 @@ class GeneralAI(tf.keras.Model):
             inputs_rep['actions'] = action
             # actions = actions.write(step, action[-1])
 
-            if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
-            action = tf.cast(action, self.action_spec['dtype'])
-            action = tf.squeeze(action)
+            action = util.discretize(action, self.action_spec, self.force_cont_action)
             inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], self.gym_step_dtypes)
 
             rewards = rewards.write(step, inputs['rewards'][-1])
@@ -803,16 +795,13 @@ class GeneralAI(tf.keras.Model):
 
         gen_logits = self.gen(outputs); gen_dist = self.gen.dist(gen_logits)
         # obs_gen = gen_dist.sample()
-        # if self.force_cont_obs and self.obs_spec['is_discrete']: obs_gen = util.discretize(obs_gen, self.obs_spec['min'], self.obs_spec['max'])
         # outputs['obs_gen'] = gen_dist.sample()
         rwd_logits = self.rwd(outputs); rwd_dist = self.rwd.dist(rwd_logits)
         done_logits = self.done(outputs); done_dist = self.done.dist(done_logits)
 
         action = outputs['actions']
         # action = tf.stop_gradient(outputs['actions']) # TODO stop gradient?
-        if self.force_cont_action and self.action_spec['is_discrete']: action = util.discretize(action, self.action_spec['min'], self.action_spec['max'])
-        action = tf.cast(action, self.action_spec['dtype'])
-        action = tf.squeeze(action)
+        action = util.discretize(action, self.action_spec, self.force_cont_action)
         inputs['obs'], inputs['rewards'], inputs['dones'] = tf.numpy_function(self.env_step, [action], self.gym_step_dtypes)
         
         loss = {}
@@ -881,18 +870,19 @@ device_type = 'CPU'
 
 machine, device = 'dev', 0
 
-env_async, env_async_clock = True, 0.003
-# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+env_async, env_async_clock, env_async_speed = True, 0.001, 1000.0
+env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # env_name, max_steps, env_render, env = 'Copy', 32, False, gym.make('Copy-v0')
-import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
+# import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
-# import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 128, False, gym.make('Trader-v0', agent_id=device, env=3, speed=180.0)
+# import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
+max_steps = 4096
 
 # TODO TD loss with batch one
 # arch = 'TEST' # testing architechures
@@ -915,7 +905,7 @@ if __name__ == '__main__':
     # process_ctrl.value = 0
     # agent_process.join()
 
-    if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_render)
+    if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     with tf.device("/device:{}:{}".format(device_type,device)):
         model = GeneralAI(arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*latent_size_mem_multi)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])

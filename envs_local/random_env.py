@@ -131,6 +131,7 @@ class RandomEnv(gym.Env):
         # obs_space.spaces['extra'] = obs_space_sub
 
         obs_space = gym.spaces.Dict()
+        # obs_space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
         obs_space.spaces['byte'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
         obs_space.spaces['2Darray'] = gym.spaces.Box(low=0, high=255, shape=(2,3), dtype=np.uint8)
         obs_space.spaces['float32'] = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
@@ -150,6 +151,7 @@ class RandomEnv(gym.Env):
 
     def _obs_space_struc(self):
         types = [
+            # ('timestamp', np.float64),
             ('byte', np.uint8),
             ('2Darray', np.uint8, (2,3)),
             ('float32', np.float32),
@@ -179,6 +181,8 @@ class RandomEnv(gym.Env):
         reward = np.float64(0.0)
         done = False
         info = {}
+        
+        # if action is None: print("RandomEnv reset")
         
         if hasattr(self,'np_struc'):
             obs = np.random.randint(32, size=self.obs_dtype.itemsize, dtype=np.uint8)

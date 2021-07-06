@@ -15,9 +15,11 @@ def replace_infnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
     return tf.where(isinfnan, replace, inputs)
 
-def discretize(inputs, min, max):
-    inputs = tf.math.round(inputs)
-    inputs = tf.clip_by_value(inputs, min, max)
+def discretize(inputs, spec, force_cont):
+    if force_cont and spec['is_discrete']: inputs = tf.math.round(inputs)
+    inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])
+    inputs = tf.cast(inputs, spec['dtype'])
+    inputs = tf.squeeze(inputs)
     return inputs
 
 
@@ -291,6 +293,7 @@ def gym_space_to_feat(data, space):
 def gym_out_to_space(out, space, idx):
     if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
         data = out[idx[0]]
+        if isinstance(space, gym.spaces.Box): data = np.reshape(data, space.shape)
         if isinstance(space, gym.spaces.Discrete): data = data.item() # numpy.int64 is coming in here in graph mode
         idx[0] += 1
     elif isinstance(space, gym.spaces.Tuple):
@@ -334,7 +337,7 @@ def gym_bytes_to_space(byts, space, idxs, idx):
     if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
         data = byts[idxs[idx[0]]:idxs[idx[0]+1]]
         if space.dtype != np.uint8: data = np.frombuffer(data, dtype=space.dtype)
-        if isinstance(space, gym.spaces.Box) and len(space.shape) > 1: data = np.reshape(data, space.shape)
+        if isinstance(space, gym.spaces.Box): data = np.reshape(data, space.shape)
         if isinstance(space, gym.spaces.Discrete): data = data.item()
         idx[0] += 1
     elif isinstance(space, gym.spaces.Tuple):
