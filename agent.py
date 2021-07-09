@@ -45,6 +45,8 @@ class RepNet(tf.keras.Model):
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
+        # TODO how to loop through different embed layer structures? so can combine RepNet and TransNet
+        # TODO possibly use Perciever https://github.com/Rishit-dagli/Perceiver
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
         self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], []
         for i in range(self.net_ins):
@@ -70,7 +72,6 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, training=None):
-        # TODO how to loop through different embed layer structures?
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
@@ -882,7 +883,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-max_steps = 4096
+max_steps = 4096 # max replay buffer or train interval
 
 # TODO TD loss with batch one
 # arch = 'TEST' # testing architechures

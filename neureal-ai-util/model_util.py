@@ -184,6 +184,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 
 
+# TODO add ReZero between transformer layers? https://arxiv.org/abs/2003.04887
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def __init__(self, num_heads, latent_size, memory_size, **kwargs):
