@@ -456,88 +456,6 @@ class GeneralAI(tf.keras.Model):
 
 
 
-    def TRANS_actor(self, inputs):
-        print("tracing -> GeneralAI TRANS_actor")
-        # inputs, outputs = inputs_.copy(), {}
-
-        latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
-        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        targets = [None]*self.obs_spec_len
-        for i in range(self.obs_spec_len): targets[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
-
-        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
-        # inputs['actions'] = self.action_zero_out
-        step = tf.constant(0)
-        while step < self.max_steps and not inputs['dones'][-1][0]:
-
-            rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
-            inputs_rep['obs'] = rep_dist.sample()
-
-            trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
-            inputs_rep['obs'] = trans_dist.sample()
-            latents_next = latents_next.write(step, inputs_rep['obs'][-1])
-
-            action_logits = self.action(inputs_rep)
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                action_dist = self.action.dist[i](action_logits[i])
-                action[i] = action_dist.sample()
-                inputs_rep['actions'][i] = action[i]
-                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
-
-            np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
-
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            for i in range(self.obs_spec_len): targets[i] = targets[i].write(step, inputs['obs'][i][-1])
-            step += 1
-
-        outputs = {}
-        out_targets = [None]*self.obs_spec_len
-        for i in range(self.obs_spec_len): out_targets[i] = targets[i].stack()
-        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), out_targets
-        return outputs, inputs
-
-    def TRANS_learner(self, inputs, training=True):
-        print("tracing -> GeneralAI TRANS_learner")
-
-        action_logits = self.action(inputs)
-        action_dist = [None]*self.action_spec_len
-        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-
-        loss = {}
-        loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
-        loss['total'] = loss['action']
-        return loss
-
-    def TRANS_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI TRANS_run_episode")
-        while not inputs['dones'][-1][0]:
-            with tf.GradientTape() as tape:
-                outputs, inputs = self.TRANS_actor(inputs)
-                loss = self.TRANS_learner(outputs)
-            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
-
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['total']), False, False, False, False,
-                False, False, False, False
-            ]
-            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-
-    def TRANS_run(self):
-        print("tracing -> GeneralAI TRANS_run")
-        for episode in tf.range(self.max_episodes):
-            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            self.action.reset_states(); self.value.reset_states()
-            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.TRANS_run_episode(inputs, episode)
-
-
-
     def AC_actor(self, inputs):
         print("tracing -> GeneralAI AC_actor")
         obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
@@ -636,11 +554,93 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI AC_run")
         for episode in tf.range(self.max_episodes):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1) # TODO parallel wont work with single instance env, will this work multiple?
-            self.action.reset_states(); self.value.reset_states()
+            self.reset_states()
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.AC_run_episode(inputs, episode)
+
+
+
+    def TRANS_actor(self, inputs):
+        print("tracing -> GeneralAI TRANS_actor")
+        # inputs, outputs = inputs_.copy(), {}
+
+        latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
+        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        targets = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): targets[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+
+        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
+        # inputs['actions'] = self.action_zero_out
+        step = tf.constant(0)
+        while step < self.max_steps and not inputs['dones'][-1][0]:
+
+            rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+            inputs_rep['obs'] = rep_dist.sample()
+
+            trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
+            inputs_rep['obs'] = trans_dist.sample()
+            latents_next = latents_next.write(step, inputs_rep['obs'][-1])
+
+            action_logits = self.action(inputs_rep)
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action_dist = self.action.dist[i](action_logits[i])
+                action[i] = action_dist.sample()
+                inputs_rep['actions'][i] = action[i]
+                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+            np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            for i in range(self.obs_spec_len): targets[i] = targets[i].write(step, inputs['obs'][i][-1])
+            step += 1
+
+        outputs = {}
+        out_targets = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): out_targets[i] = targets[i].stack()
+        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), out_targets
+        return outputs, inputs
+
+    def TRANS_learner(self, inputs, training=True):
+        print("tracing -> GeneralAI TRANS_learner")
+
+        action_logits = self.action(inputs)
+        action_dist = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+
+        loss = {}
+        loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
+        loss['total'] = loss['action']
+        return loss
+
+    def TRANS_run_episode(self, inputs, episode, training=True):
+        print("tracing -> GeneralAI TRANS_run_episode")
+        while not inputs['dones'][-1][0]:
+            with tf.GradientTape() as tape:
+                outputs, inputs = self.TRANS_actor(inputs)
+                loss = self.TRANS_learner(outputs)
+            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+
+            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss['total']), False, False, False, False,
+                False, False, False, False
+            ]
+            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    def TRANS_run(self):
+        print("tracing -> GeneralAI TRANS_run")
+        for episode in tf.range(self.max_episodes):
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+            self.reset_states()
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            self.TRANS_run_episode(inputs, episode)
 
 
 
@@ -871,7 +871,7 @@ device_type = 'CPU'
 
 machine, device = 'dev', 0
 
-env_async, env_async_clock, env_async_speed = True, 0.001, 1000.0
+env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
@@ -883,15 +883,15 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-max_steps = 4096 # max replay buffer or train interval
+max_steps = 256 # max replay buffer or train interval or bootstrap
 
 # TODO TD loss with batch one
 # arch = 'TEST' # testing architechures
 # arch = 'DNN' # basic Deep Neural Network, likelyhood loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
 arch = 'AC' # basic Actor Critic, actor/critic loss
-# arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
+# arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+# arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
     # TODO add keyboard control so can stop
