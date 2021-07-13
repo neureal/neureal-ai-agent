@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 import model_util as util
 import gym
 
-# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tf-nightly-gpu==2.6.0.dev20210521, tfp_nightly==0.14.0.dev20210521
+# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tf-nightly-gpu-2.7.0.dev20210712, tfp_nightly==0.14.0.dev20210630
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
@@ -324,7 +324,7 @@ class GeneralAI(tf.keras.Model):
         self.latent_spec = latent_spec
 
         inputs = {'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
-        if arch in ('AC','TRANS','TEST'):
+        if arch in ('DQN','AC','TRANS','TEST'):
             self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size)
             outputs = self.rep(inputs)
             rep_dist = self.rep.dist(outputs)
@@ -339,7 +339,7 @@ class GeneralAI(tf.keras.Model):
             # self.done = DoneNet('DON'); outputs = self.done(inputs)
 
         self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.action(inputs)
-        self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
+        if arch in ('AC'): self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','TEST'):
             inputs['actions'] = self.action_zero_out
@@ -351,6 +351,9 @@ class GeneralAI(tf.keras.Model):
 
         metrics = {'rewards_total':np.float64,'rewards_final':np.float64,'steps':np.int64}
         metrics_loss = [{'loss_total':np.float64}]
+        if arch in ('DQN'):
+            metrics_loss.append({})
+            metrics_loss.append({'returns':np.float64})
         if arch in ('AC'):
             metrics_loss.append({'loss_action':np.float64,'loss_value':np.float64})
             metrics_loss.append({'returns':np.float64,'advantages':np.float64})
@@ -367,8 +370,9 @@ class GeneralAI(tf.keras.Model):
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.reset_states()
-        self.TRANS_run = tf.function(self.TRANS_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self.DQN_run = tf.function(self.DQN_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.AC_run = tf.function(self.AC_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self.TRANS_run = tf.function(self.TRANS_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.TEST_run = tf.function(self.TEST_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
 
 
@@ -415,6 +419,11 @@ class GeneralAI(tf.keras.Model):
             if hasattr(net, 'reset_states'): net.reset_states()
 
 
+    def loss_diff(self, diff): # deterministic difference
+        # loss = tf.where(tf.math.less(diff, self.compute_zero), tf.math.negative(diff), diff) # MAE
+        loss = tf.math.abs(diff) # MAE
+        return loss
+
     def loss_likelihood(self, dist, targets):
         loss = self.compute_zero
         for i in range(len(dist)):
@@ -424,7 +433,7 @@ class GeneralAI(tf.keras.Model):
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
         return loss
-        
+
     def loss_bound(self, dist, targets):
         targets = tf.cast(targets, dist.dtype)
         loss = dist.log_prob(targets)
@@ -434,13 +443,14 @@ class GeneralAI(tf.keras.Model):
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
         return loss
-        
-    def loss_AC(self, dist, targets, advantages): # actor/critic
+
+    # TODO try PPO/DQNReg, regularize the Q values?
+    def loss_PG(self, dist, targets, returns): # policy gradient, actor/critic
         loss = self.compute_zero
         for i in range(len(dist)):
             t = tf.cast(targets[i], dist[i].dtype)
             loss = loss - dist[i].log_prob(t)
-        loss = loss * advantages # * 1e-2
+        loss = loss * returns # * 1e-2
         # if self.categorical:
         #     entropy = dist.entropy()
         #     loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
@@ -448,11 +458,94 @@ class GeneralAI(tf.keras.Model):
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf loss:', loss)
         return loss
+
+
+
+    def DQN_actor(self, inputs):
+        print("tracing -> GeneralAI DQN_actor")
+        obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+        for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+        for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        step = tf.constant(0)
+        while step < self.max_steps and not inputs['dones'][-1][0]:
+            for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
+            returns = returns.write(step, [self.compute_zero])
+
+            rep_logits = self.rep(inputs)
+            rep_dist = self.rep.dist(rep_logits)
+            inputs['obs'] = rep_dist.sample()
+
+            action_logits = self.action(inputs)
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action_dist = self.action.dist[i](action_logits[i])
+                action[i] = action_dist.sample()
+                actions[i] = actions[i].write(step, action[i][-1])
+                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+            np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            dones = dones.write(step, inputs['dones'][-1])
+            returns_updt = returns.stack()
+            returns_updt = returns_updt + inputs['rewards'][-1]
+            returns = returns.unstack(returns_updt)
+
+            step += 1
+
+        outputs = {}
+        out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+        for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
+        for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
+        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
+        return outputs, inputs
+
+    def DQN_learner(self, inputs, training=True):
+        print("tracing -> GeneralAI DQN_learner")
+
+        rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+        inputs['obs'] = rep_dist.sample()
+
+        action_logits = self.action(inputs)
+        action_dist = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
         
-    def loss_diff(self, diff): # deterministic difference
-        # loss = tf.where(tf.math.less(advantages, self.compute_zero), tf.math.negative(advantages), advantages) # MAE
-        loss = tf.math.abs(diff) # MAE
+        returns = tf.squeeze(inputs['returns'], axis=-1)
+        returns = tf.cast(returns, self.compute_dtype)
+        
+        loss = {}
+        loss['total'] = self.loss_PG(action_dist, inputs['actions'], returns)
         return loss
+
+    def DQN_run_episode(self, inputs, episode, training=True):
+        print("tracing -> GeneralAI DQN_run_episode")
+        while not inputs['dones'][-1][0]:
+            outputs, inputs = self.DQN_actor(inputs)
+            with tf.GradientTape() as tape:
+                loss = self.DQN_learner(outputs)
+            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+
+            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss['total']), False, False,
+                tf.math.reduce_mean(outputs['returns']), False, False, False, False, False]
+            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    def DQN_run(self):
+        print("tracing -> GeneralAI DQN_run")
+        for episode in tf.range(self.max_episodes):
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+            self.reset_states()
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            self.DQN_run_episode(inputs, episode)
 
 
 
@@ -525,7 +618,7 @@ class GeneralAI(tf.keras.Model):
         advantages = returns - values
         
         loss = {}
-        loss['action'] = self.loss_AC(action_dist, inputs['actions'], advantages)
+        loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
         loss['value'] = self.loss_diff(advantages)
         loss['total'] = loss['action'] + loss['value']
 
@@ -724,7 +817,7 @@ class GeneralAI(tf.keras.Model):
         # advantages = returns - values
 
         loss = {}
-        # loss['action'] = self.loss_AC(action_dist, inputs['actions'], advantages)
+        # loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
         # loss['value'] = self.loss_diff(advantages)
         # loss['total'] = loss['action'] + loss['value']
 
@@ -887,9 +980,9 @@ max_steps = 256 # max replay buffer or train interval or bootstrap
 
 # TODO TD loss with batch one
 # arch = 'TEST' # testing architechures
-# arch = 'DNN' # basic Deep Neural Network, likelyhood loss
-arch = 'AC' # basic Actor Critic, actor/critic loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelyhood loss
+arch = 'DQN' # basic Deep Q type network, likelihood loss
+# arch = 'AC' # basic Actor Critic, actor/critic loss
+# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
@@ -942,8 +1035,9 @@ if __name__ == '__main__':
         ## run
         t1_start = time.perf_counter_ns()
         if arch=='TEST': model.TEST_run()
-        if arch=='TRANS': model.TRANS_run()
+        if arch=='DQN': model.DQN_run()
         if arch=='AC': model.AC_run()
+        if arch=='TRANS': model.TRANS_run()
         total_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
         env.close()
 
