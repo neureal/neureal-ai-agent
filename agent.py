@@ -370,10 +370,9 @@ class GeneralAI(tf.keras.Model):
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.reset_states()
-        self.DQN_run = tf.function(self.DQN_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.AC_run = tf.function(self.AC_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.TRANS_run = tf.function(self.TRANS_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.TEST_run = tf.function(self.TEST_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        arch_run = getattr(self, arch)
+        arch_run = tf.function(arch_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        setattr(self, arch, arch_run)
 
 
     def metrics_update(self, *args):
@@ -537,8 +536,8 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(outputs['returns']), False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-    def DQN_run(self):
-        print("tracing -> GeneralAI DQN_run")
+    def DQN(self):
+        print("tracing -> GeneralAI DQN")
         for episode in tf.range(self.max_episodes):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             self.reset_states()
@@ -643,8 +642,8 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-    def AC_run(self):
-        print("tracing -> GeneralAI AC_run")
+    def AC(self):
+        print("tracing -> GeneralAI AC")
         for episode in tf.range(self.max_episodes):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1) # TODO parallel wont work with single instance env, will this work multiple?
             self.reset_states()
@@ -725,8 +724,8 @@ class GeneralAI(tf.keras.Model):
             ]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-    def TRANS_run(self):
-        print("tracing -> GeneralAI TRANS_run")
+    def TRANS(self):
+        print("tracing -> GeneralAI TRANS")
         for episode in tf.range(self.max_episodes):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             self.reset_states()
@@ -734,6 +733,88 @@ class GeneralAI(tf.keras.Model):
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.TRANS_run_episode(inputs, episode)
+
+
+
+    def MU_actor(self, inputs):
+        print("tracing -> GeneralAI MU_actor")
+        # inputs, outputs = inputs_.copy(), {}
+
+        latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
+        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        targets = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): targets[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+
+        inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
+        # inputs['actions'] = self.action_zero_out
+        step = tf.constant(0)
+        while step < self.max_steps and not inputs['dones'][-1][0]:
+
+            rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+            inputs_rep['obs'] = rep_dist.sample()
+
+            trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
+            inputs_rep['obs'] = trans_dist.sample()
+            latents_next = latents_next.write(step, inputs_rep['obs'][-1])
+
+            action_logits = self.action(inputs_rep)
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action_dist = self.action.dist[i](action_logits[i])
+                action[i] = action_dist.sample()
+                inputs_rep['actions'][i] = action[i]
+                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+            np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            for i in range(self.obs_spec_len): targets[i] = targets[i].write(step, inputs['obs'][i][-1])
+            step += 1
+
+        outputs = {}
+        out_targets = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): out_targets[i] = targets[i].stack()
+        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), out_targets
+        return outputs, inputs
+
+    def MU_learner(self, inputs, training=True):
+        print("tracing -> GeneralAI MU_learner")
+
+        action_logits = self.action(inputs)
+        action_dist = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+
+        loss = {}
+        loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
+        loss['total'] = loss['action']
+        return loss
+
+    def MU_run_episode(self, inputs, episode, training=True):
+        print("tracing -> GeneralAI MU_run_episode")
+        while not inputs['dones'][-1][0]:
+            with tf.GradientTape() as tape:
+                outputs, inputs = self.MU_actor(inputs)
+                loss = self.MU_learner(outputs)
+            gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+
+            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss['total']), False, False, False, False,
+                False, False, False, False
+            ]
+            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    def MU(self):
+        print("tracing -> GeneralAI MU")
+        for episode in tf.range(self.max_episodes):
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+            self.reset_states()
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            self.MU_run_episode(inputs, episode)
 
 
 
@@ -905,8 +986,8 @@ class GeneralAI(tf.keras.Model):
         loss['total'] = loss['restruct'] + loss['rewards'] + loss['dones']
         return outputs, inputs, loss
 
-    def TEST_run(self):
-        print("tracing -> GeneralAI TEST_run")
+    def TEST(self):
+        print("tracing -> GeneralAI TEST")
         for episode in tf.range(self.max_episodes):
             # self.rep.reset_states(); self.trans.reset_states(); self.action.reset_states(); self.value.reset_states()
             inputs = {}
@@ -1033,11 +1114,9 @@ if __name__ == '__main__':
 
 
         ## run
+        arch_run = getattr(model, arch)
         t1_start = time.perf_counter_ns()
-        if arch=='TEST': model.TEST_run()
-        if arch=='DQN': model.DQN_run()
-        if arch=='AC': model.AC_run()
-        if arch=='TRANS': model.TRANS_run()
+        arch_run()
         total_time = (time.perf_counter_ns() - t1_start) / 1e9 # seconds
         env.close()
 
