@@ -182,7 +182,7 @@ class DoneNet(tf.keras.Model):
         super(DoneNet, self).__init__()
         num_components, event_shape = 2, (1,); params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
         # params_size, self.dist = 1, tfp.layers.DistributionLambda(lambda input: tfp.distributions.Bernoulli(logits=input, dtype=tf.bool))
-        inp, evo = 256, 32; self.net_arch = "[inD{}-cmp{}]".format(name, inp, num_components)
+        inp, evo = 256, 32; self.net_arch = "{}[inD{}-cmp{}]".format(name, inp, num_components)
         self.layer_flatten = tf.keras.layers.Flatten()
         self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
         self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
@@ -305,7 +305,7 @@ class GeneralAI(tf.keras.Model):
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
-        self.compute_zero = tf.constant(0, compute_dtype)
+        self.compute_zero, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
         self.arch, self.env, self.env_render, self.force_cont_obs, self.force_cont_action = arch, env, env_render, force_cont_obs, force_cont_action
         self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
@@ -323,7 +323,8 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':latent_size}
         self.latent_spec = latent_spec
 
-        inputs = {'obs':self.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
+        self.rewards_zero, self.dones_zero = tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
+        inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU','TEST'):
             self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size)
             outputs = self.rep(inputs)
@@ -368,9 +369,7 @@ class GeneralAI(tf.keras.Model):
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.reset_states()
-        arch_run = getattr(self, arch)
-        arch_run = tf.function(arch_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        setattr(self, arch, arch_run)
+        arch_run = getattr(self, arch); arch_run = tf.function(arch_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS); setattr(self, arch, arch_run)
 
 
     def metrics_update(self, *args):
@@ -588,7 +587,7 @@ class GeneralAI(tf.keras.Model):
 
             step += 1
 
-        for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1]) # TD loss
+        # for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1]) # TD loss
 
         outputs = {}
         out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
@@ -607,26 +606,26 @@ class GeneralAI(tf.keras.Model):
         values = self.value(inputs)
         values = tf.squeeze(values, axis=-1)
 
-        # # PG loss
-        # returns = tf.squeeze(inputs['returns'], axis=-1)
-        # returns = tf.cast(returns, self.compute_dtype)
-        # advantages = returns - values
+        # PG loss
+        returns = tf.squeeze(inputs['returns'], axis=-1)
+        returns = tf.cast(returns, self.compute_dtype)
+        advantages = returns - values
 
-        # TD loss
-        rewards = tf.squeeze(inputs['rewards'], axis=-1)
-        rewards = tf.cast(rewards, self.compute_dtype)
+        # # TD loss
+        # rewards = tf.squeeze(inputs['rewards'], axis=-1)
+        # rewards = tf.cast(rewards, self.compute_dtype)
 
-        values_next = tf.roll(values, -1, axis=0)
-        if inputs_last['dones'][-1][0]: values_next = tf.concat((values_next[:-2], [self.compute_zero]), axis=0)
-        else: values_next = values_next[:-1]
-        values = values[:-1]
-        inputs['obs'] = inputs['obs'][:-1]
+        # values_next = tf.roll(values, -1, axis=0)
+        # if inputs_last['dones'][-1][0]: values_next = tf.concat((values_next[:-2], [self.compute_zero]), axis=0)
+        # else: values_next = values_next[:-1]
+        # values = values[:-1]
+        # inputs['obs'] = inputs['obs'][:-1]
 
-        current_q = values
-        target_q = rewards + values_next
-        advantages = target_q - current_q
-        # advantages = 0.1 * current_q + tf.math.abs(advantages)
-        advantages = 0.1 * current_q + tf.math.pow(advantages, 2) # DQNReg
+        # current_q = values
+        # target_q = rewards + values_next
+        # advantages = target_q - current_q
+        # # advantages = 0.1 * current_q + tf.math.abs(advantages)
+        # advantages = 0.1 * current_q + tf.math.pow(advantages, 2) # DQNReg
 
         action_logits = self.action(inputs)
         action_dist = [None]*self.action_spec_len
@@ -692,14 +691,14 @@ class GeneralAI(tf.keras.Model):
             latents_next = latents_next.write(step, inputs_rep['obs'][-1])
 
             action_logits = self.action(inputs_rep)
-            action = [None]*self.action_spec_len
+            action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
             for i in range(self.action_spec_len):
                 action_dist = self.action.dist[i](action_logits[i])
                 action[i] = action_dist.sample()
-                inputs_rep['actions'][i] = action[i]
-                action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+                action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+            inputs_rep['actions'] = action
 
-            np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
+            np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
 
@@ -752,7 +751,7 @@ class GeneralAI(tf.keras.Model):
 
 
 
-    def MU_imagine(self, inputs_):
+    def MU_imagine(self, inputs):
         print("tracing -> GeneralAI MU_imagine")
         obs = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
         actions = [None]*self.action_spec_len
@@ -761,42 +760,35 @@ class GeneralAI(tf.keras.Model):
         dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-
-        inputs = inputs_.copy()
-        inputs['actions'] = self.action_zero_out
-
+        inputs_img = {'obs':self.latent_zero, 'actions':self.action_zero_out, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
 
         rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
-        inputs['obs'] = rep_dist.sample()
-
+        inputs_img['obs'] = rep_dist.sample()
 
         step = tf.constant(0)
-        while step < self.max_steps and not inputs['dones'][-1][0]:
-            obs = obs.write(step, inputs['obs'][-1])
-            returns = returns.write(step, [self.compute_zero])
+        while step < self.max_steps and not inputs_img['dones'][-1][0]:
+            obs = obs.write(step, inputs_img['obs'][-1])
+            returns = returns.write(step, [self.float64_zero])
 
-
-            action_logits = self.action(inputs)
+            action_logits = self.action(inputs_img)
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
                 action_dist = self.action.dist[i](action_logits[i])
                 action[i] = action_dist.sample()
                 actions[i] = actions[i].write(step, action[i][-1])
-                inputs['actions'][i] = action[i]
+            inputs_img['actions'] = action
 
+            trans_logits = self.trans(inputs_img); trans_dist = self.trans.dist(trans_logits)
+            inputs_img['obs'] = trans_dist.sample()
 
-            trans_logits = self.trans(inputs); trans_dist = self.trans.dist(trans_logits)
-            inputs['obs'] = trans_dist.sample()
+            rwd_logits = self.rwd(inputs_img); rwd_dist = self.rwd.dist(rwd_logits)
+            done_logits = self.done(inputs_img); done_dist = self.done.dist(done_logits)
+            inputs_img['rewards'], inputs_img['dones'] = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
 
-            rwd_logits = self.rwd(inputs); rwd_dist = self.rwd.dist(rwd_logits)
-            done_logits = self.done(inputs); done_dist = self.done.dist(done_logits)
-            inputs['rewards'], inputs['dones'] = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
-
-
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            dones = dones.write(step, inputs['dones'][-1])
+            rewards = rewards.write(step, inputs_img['rewards'][-1])
+            dones = dones.write(step, inputs_img['dones'][-1])
             returns_updt = returns.stack()
-            returns_updt = returns_updt + inputs['rewards'][-1]
+            returns_updt = returns_updt + inputs_img['rewards'][-1][0]
             returns = returns.unstack(returns_updt)
 
             step += 1
@@ -807,7 +799,7 @@ class GeneralAI(tf.keras.Model):
         outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = obs.stack(), out_actions, rewards.stack(), dones.stack(), returns.stack()
         return outputs
 
-    def MU_learner(self, inputs, training=True):
+    def MU_img_learner(self, inputs, training=True):
         print("tracing -> GeneralAI MU_learner")
 
         action_logits = self.action(inputs)
@@ -821,73 +813,67 @@ class GeneralAI(tf.keras.Model):
         loss['total'] = self.loss_PG(action_dist, inputs['actions'], returns)
         return loss
 
-    # def MU_actor(self, inputs):
-    #     print("tracing -> GeneralAI MU_actor")
+    def MU_actor(self, inputs):
+        print("tracing -> GeneralAI MU_actor")
+        
+        inputs_img = {'obs':self.latent_zero, 'actions':self.action_zero_out, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
 
+        rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+        inputs_img['obs'] = rep_dist.sample()
+
+        action_logits = self.action(inputs_img)
+        action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
+        for i in range(self.action_spec_len):
+            action_dist = self.action.dist[i](action_logits[i])
+            action[i] = action_dist.sample()
+            action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+        inputs_img['actions'] = action
+
+        trans_logits = self.trans(inputs_img); trans_dist = self.trans.dist(trans_logits)
+        inputs_img['obs'] = trans_dist.sample()
+        
+        rwd_logits = self.rwd(inputs_img); rwd_dist = self.rwd.dist(rwd_logits)
+        done_logits = self.done(inputs_img); done_dist = self.done.dist(done_logits)
+        inputs_img['rewards'], inputs_img['dones'] = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
+
+        # calculate prev returns?
+        # returns_img = prev inputs['rewards'] + curr inputs['inputs_img']
+        # returns = tf.squeeze(returns, axis=-1)
+        # returns = tf.cast(returns, self.compute_dtype)
+
+        # action_logits = self.action(inputs_img)
+        # action_dist = [None]*self.action_spec_len
+        # for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+        
+
+        np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
+        for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+        inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+        
+        # calculate prev returns?
+        # returns = prev inputs['rewards'] + curr inputs['rewards']
+
+        loss = {}
+        # loss['action'] = self.loss_PG(action_dist, action, returns)
+        # loss['value'] = self.loss_diff(returns - values)
+        loss['reward'] = self.loss_likelihood(rwd_dist, inputs['rewards'])
+        loss['done'] = self.loss_likelihood(done_dist, inputs['dones'])
+        loss['total'] = loss['reward'] + loss['done']
+        return loss, inputs
 
     def MU_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI MU_run_episode")
         while not inputs['dones'][-1][0]:
             outputs = self.MU_imagine(inputs)
             with tf.GradientTape() as tape:
-                loss = self.MU_learner(outputs)
+                loss = self.MU_img_learner(outputs)
             gradients = tape.gradient(loss['total'], self.action.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
 
-
-
-            inputs_img = {'obs':self.latent_zero, 'actions':self.action_zero_out, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
             with tf.GradientTape() as tape:
-                rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
-                inputs_img['obs'] = rep_dist.sample()
-                
-                action_logits = self.action(inputs_img)
-                action = [None]*self.action_spec_len
-                for i in range(self.action_spec_len):
-                    action_dist = self.action.dist[i](action_logits[i])
-                    action[i] = action_dist.sample()
-                    inputs_img['actions'][i] = action[i]
-                    action[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
-
-                np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
-                for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-                inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
-                
-                # calculate prev returns?
-                # returns = prev inputs['rewards'] + curr inputs['rewards']
-
-
-
-                trans_logits = self.trans(inputs_img); trans_dist = self.trans.dist(trans_logits)
-                inputs_img['obs'] = trans_dist.sample()
-                
-                rwd_logits = self.rwd(inputs_img); rwd_dist = self.rwd.dist(rwd_logits)
-                done_logits = self.done(inputs_img); done_dist = self.done.dist(done_logits)
-                inputs_img['rewards'], inputs_img['dones'] = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
-
-                # calculate prev returns?
-                # returns_img = prev inputs['rewards'] + curr inputs['inputs_img']
-                # returns = tf.squeeze(returns, axis=-1)
-                # returns = tf.cast(returns, self.compute_dtype)
-
-                # action_logits = self.action(inputs_img)
-                # action_dist = [None]*self.action_spec_len
-                # for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                
-
-
-                loss = {}
-                # loss['action'] = self.loss_PG(action_dist, action, returns)
-                # loss['value'] = self.loss_diff(returns - values)
-                loss['reward'] = self.loss_likelihood(rwd_dist, inputs['rewards'])
-                loss['done'] = self.loss_likelihood(done_dist, inputs['dones'])
-                loss['total'] = loss['reward'] + loss['done']
-
-
+                loss, inputs = self.MU_actor(inputs)
             gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables))
-            
-
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), False, False,
@@ -1092,7 +1078,7 @@ class GeneralAI(tf.keras.Model):
                 self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.gen.trainable_variables))
 
                 inputs_imag = {}
-                inputs_imag['obs'], inputs_imag['rewards'], inputs_imag['dones'] = outputs['obs'], tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
+                inputs_imag['obs'], inputs_imag['rewards'], inputs_imag['dones'] = outputs['obs'], self.rewards_zero, self.dones_zero
                 inputs_imag['actions'] = self.action_zero_out
                 while not inputs_imag['dones'][-1][0]:
                     # tf.autograph.experimental.set_loop_options(shape_invariants=[(inputs_imag['dones'], self.action_invar)])
@@ -1145,14 +1131,14 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-max_steps = 1 # max replay buffer or train interval or bootstrap
+max_steps = 256 # max replay buffer or train interval or bootstrap
 
 # TODO TD loss with batch one
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
-arch = 'AC' # Actor Critic, PG and advantage loss
+# arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
@@ -1180,11 +1166,12 @@ if __name__ == '__main__':
         # # model.AC_actor = tf.function(model.AC_actor, input_signature=inp_sig, experimental_autograph_options=tf.autograph.experimental.Feature.ALL)
         # model.AC_actor = tf.function(model.AC_actor, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         # self.AC_actor = tf.function(self.AC_actor)
-        # print(tf.autograph.to_code(model.AC_actor.python_function, experimental_optional_features=tf.autograph.experimental.Feature.LISTS)); quit(0)
+        # print(tf.autograph.to_code(model.MU_run_episode, recursive=True, experimental_optional_features=tf.autograph.experimental.Feature.LISTS)); quit(0)
+        # # print(tf.autograph.to_code(model.AC_actor.python_function, experimental_optional_features=tf.autograph.experimental.Feature.LISTS)); quit(0)
         # print(model.AC_actor.get_concrete_function(inputs)); quit(0)
         # print(model.AC_actor.get_concrete_function(inputs).graph.as_graph_def()); quit(0)
         # obs, reward, done = env.reset(), 0.0, False
-        # test = model.AC_actor.python_function(inputs)
+        # # test = model.AC_actor.python_function(inputs)
         # test = model.AC_actor(inputs)
         # print(test); quit(0)
 
