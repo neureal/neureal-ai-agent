@@ -196,7 +196,7 @@ class DoneNet(tf.keras.Model):
 
 
 class GenNet(tf.keras.Model):
-    def __init__(self, name, spec_out, force_cont, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
+    def __init__(self, name, spec_out, force_cont, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1, force_determined=False):
         super(GenNet, self).__init__()
         inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), 4
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
@@ -215,7 +215,10 @@ class GenNet(tf.keras.Model):
         self.net_outs, params_size, self.dist, arch_out = len(spec_out), [], [], ""
         for i in range(self.net_outs):
             arch_out += "O{}{}".format(('d' if not force_cont and spec_out[i]['is_discrete'] else 'c'), spec_out[i]['num_components'])
-            if not force_cont and spec_out[i]['is_discrete']:
+            if force_determined:
+                params_size.append(util.Deterministic.params_size(spec_out[i]['event_shape']))
+                self.dist.append(util.Deterministic(spec_out[i]['event_shape']))
+            elif not force_cont and spec_out[i]['is_discrete']:
                 params_size.append(util.Categorical.params_size(spec_out[i]['num_components'], spec_out[i]['event_shape']))
                 self.dist.append(util.Categorical(spec_out[i]['num_components'], spec_out[i]['event_shape']))
             else:
@@ -337,12 +340,13 @@ class GeneralAI(tf.keras.Model):
         if arch in ('TEST',):
             self.gen = GenNet('GN', [latent_spec], self.obs_spec, force_cont_obs, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.gen(inputs)
 
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_determined=False); outputs = self.action(inputs)
         if arch in ('AC'): self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU','TEST'):
             inputs['actions'] = self.action_zero_out
             self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=True, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.trans(inputs)
+        if arch in ('MU','TEST'):
             self.rwd = RewardNet('RWD'); outputs = self.rwd(inputs)
             self.done = DoneNet('DON'); outputs = self.done(inputs)
 
@@ -416,9 +420,15 @@ class GeneralAI(tf.keras.Model):
 
 
     def loss_diff(self, out, targets=None): # deterministic difference
-        diff = out if targets is None else tf.math.subtract(out, targets)
-        # loss = tf.where(tf.math.less(diff, self.compute_zero), tf.math.negative(diff), diff) # MAE
-        loss = tf.math.abs(diff) # MAE
+        if isinstance(out, list):
+            loss = self.compute_zero
+            for i in range(len(out)):
+                o, t = tf.cast(out[i], self.compute_dtype), tf.cast(targets[i], self.compute_dtype)
+                loss = loss + tf.math.abs(tf.math.subtract(o, t)) # MAE
+        else:
+            diff = out if targets is None else tf.math.subtract(out, targets)
+            # loss = tf.where(tf.math.less(diff, self.compute_zero), tf.math.negative(diff), diff) # MAE
+            loss = tf.math.abs(diff) # MAE
         return loss
 
     def loss_likelihood(self, dist, targets):
@@ -671,30 +681,35 @@ class GeneralAI(tf.keras.Model):
 
     def TRANS_actor(self, inputs):
         print("tracing -> GeneralAI TRANS_actor")
-        # inputs, outputs = inputs_.copy(), {}
-
-        latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
+        obs = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+        actions = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+        # latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
         rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         targets = [None]*self.obs_spec_len
         for i in range(self.obs_spec_len): targets[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
 
+        # inputs_rep = {'obs':self.latent_zero}
         inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
-        # inputs['actions'] = self.action_zero_out
         step = tf.constant(0)
         while step < self.max_steps and not inputs['dones'][-1][0]:
+            for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
+            for i in range(self.action_spec_len): actions[i] = actions[i].write(step, inputs_rep['actions'][i][-1])
 
             rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
             inputs_rep['obs'] = rep_dist.sample()
 
             trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
             inputs_rep['obs'] = trans_dist.sample()
-            latents_next = latents_next.write(step, inputs_rep['obs'][-1])
+            # latents_next = latents_next.write(step, inputs_rep['obs'][-1])
 
             action_logits = self.action(inputs_rep)
             action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
             for i in range(self.action_spec_len):
                 action_dist = self.action.dist[i](action_logits[i])
                 action[i] = action_dist.sample()
+                # action[i] = tf.cast(action[i], self.action_spec[i]['dtype_out']) # force_determined
                 action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
             inputs_rep['actions'] = action
 
@@ -707,28 +722,45 @@ class GeneralAI(tf.keras.Model):
             step += 1
 
         outputs = {}
+        out_obs = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
+        out_actions = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
         out_targets = [None]*self.obs_spec_len
         for i in range(self.obs_spec_len): out_targets[i] = targets[i].stack()
-        outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), out_targets
+        # outputs['obs'], outputs['rewards'], outputs['targets'] = latents_next.stack(), rewards.stack(), out_targets
+        # outputs['obs'], outputs['rewards'], outputs['targets'] = out_obs, rewards.stack(), out_targets
+        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['targets'] = out_obs, out_actions, rewards.stack(), out_targets
         return outputs, inputs
 
     def TRANS_learner(self, inputs, training=True):
         print("tracing -> GeneralAI TRANS_learner")
+        # inputs_rep = {'obs':self.latent_zero}
+        inputs_rep = {'obs':self.latent_zero, 'actions':inputs['actions']}
 
-        action_logits = self.action(inputs)
+        rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+        inputs_rep['obs'] = rep_dist.sample()
+
+        trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
+        inputs_rep['obs'] = trans_dist.sample()
+        # latents_next = latents_next.write(step, inputs_rep['obs'][-1])
+
+        action_logits = self.action(inputs_rep)
         action_dist = [None]*self.action_spec_len
-        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+        for i in range(self.action_spec_len):
+            action_dist[i] = self.action.dist[i](action_logits[i])
+            # action_dist[i] = action_dist[i].sample() # force_determined
 
         loss = {}
-        loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
-        loss['total'] = loss['action']
+        loss['total'] = self.loss_likelihood(action_dist, inputs['targets'])
+        # loss['total'] = self.loss_diff(action_dist, inputs['targets']) # force_determined
         return loss
 
     def TRANS_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI TRANS_run_episode")
         while not inputs['dones'][-1][0]:
+            outputs, inputs = self.TRANS_actor(inputs)
             with tf.GradientTape() as tape:
-                outputs, inputs = self.TRANS_actor(inputs)
                 loss = self.TRANS_learner(outputs)
             gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
@@ -1110,7 +1142,7 @@ learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
 force_cont_obs, force_cont_action = False, False
-latent_size = 64
+latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 latent_size_mem_multi = 1
 
@@ -1120,25 +1152,24 @@ device_type = 'CPU'
 machine, device = 'dev', 0
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # env_name, max_steps, env_render, env = 'Copy', 32, False, gym.make('Copy-v0')
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 16, True, env_.DataEnv('shkspr')
-# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 128, False, env_.DataEnv('mnist')
+import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 128, False, env_.BipedalWalker()
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-max_steps = 256 # max replay buffer or train interval or bootstrap
+max_steps = 1 # max replay buffer or train interval or bootstrap
 
-# TODO TD loss with batch one
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
+# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':

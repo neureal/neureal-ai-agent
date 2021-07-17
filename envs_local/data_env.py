@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
@@ -22,13 +23,15 @@ class DataEnv(gym.Env):
             # ds = ds[:split[-1]]
             ds = ds[:,None]
 
-            self.action_space = gym.spaces.Discrete(256)
+            # self.action_space = gym.spaces.Discrete(256)
 
+            # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             obs_space = gym.spaces.Dict()
             obs_space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
-            obs_space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            # obs_space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            obs_space.spaces['data'] = gym.spaces.Discrete(256)
             self.observation_space = obs_space
-            # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            self.action_space = obs_space
 
             self.reward_range = (0.0,1.0)
 
@@ -76,20 +79,24 @@ class DataEnv(gym.Env):
                 print(text)
             self.item_accu = []
         else:
-            self.item_accu.append(action)
+            self.item_accu.append(action['data'][0])
 
     def _request(self, action):
         reward, done, info = np.float64(0.0), False, {}
         # obs = self.observation_space.sample()
         # reward = np.float64(np.random.standard_normal())
 
-        obs = {'timestamp':np.asarray([self.ds_idx], self.observation_space.spaces['timestamp'].dtype), 'data':self.ds[self.ds_idx]}
+        # obs = {'timestamp':np.asarray([self.ds_idx], np.float64), 'data':self.ds[self.ds_idx]}
+        obs = OrderedDict()
+        obs['timestamp'] = np.asarray([self.ds_idx], np.float64)
+        obs['data'] = np.asarray(self.ds[self.ds_idx], np.int64)
         if self.data_src == 'shkspr':
-            if action is not None:
+            if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]
-                action_pred = np.asarray([action], self.observation_space.spaces['data'].dtype)
-                if action_pred == obs['data']: reward = np.float64(1.0)
-            # TODO add ds_idx to obs
+                # action_pred = np.asarray([action], np.uint8)
+                action['data'] = np.asarray([action['data']], np.int64)
+                if action['data'] == obs['data']: reward = np.float64(1.0)
+                # if action == obs: eward = np.float64(1.0)
             self.ds_idx += 1
             if self.ds_idx >= self.ds_max:
                 done = True
