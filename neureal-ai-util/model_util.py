@@ -263,12 +263,12 @@ def gym_get_spec(space, compute_dtype='float64', force_cont=False):
         dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = compute_dtype if force_cont else 'int32'
         dtype_out = tf.dtypes.as_dtype(dtype_out)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,)}]
+        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
         zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
     elif isinstance(space, gym.spaces.Box):
         dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = tf.dtypes.as_dtype(compute_dtype)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape}]
+        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape, 'step_shape':tf.TensorShape([1]+list(space.shape))}]
         zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
     elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
         spec, zero, zero_out = [], [], []

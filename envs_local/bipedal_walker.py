@@ -140,7 +140,7 @@ class BipedalWalker(gym.Env, EzPickle):
 
         high = np.array([np.inf] * 24)
         self.action_space = spaces.Box(np.array([-1, -1, -1, -1]), np.array([1, 1, 1, 1]), dtype=np.float32)
-        self.observation_space = spaces.Box(-high, high, dtype=np.float32)
+        self.observation_space = spaces.Box(-high, high, dtype=np.float64)
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
