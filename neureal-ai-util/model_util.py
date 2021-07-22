@@ -184,7 +184,6 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 
 
-# TODO add ReZero between transformer layers? https://arxiv.org/abs/2003.04887
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def __init__(self, num_heads, latent_size, memory_size, **kwargs):
@@ -194,6 +193,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         mem_zero = tf.constant(np.full((1, memory_size, latent_size), 0), compute_dtype)
         self._mem_size, self._mem_zero = tf.identity(memory_size), tf.identity(mem_zero)
+        self._residual = tf.Variable(0.0, trainable=True) # ReZero
     
     def build(self, input_shape):
         self._mem_idx = tf.Variable(self._mem_size, trainable=False, name='mem_idx')
@@ -222,13 +222,13 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         value = self._memory[:,self._mem_idx:]
         seq_size = tf.shape(value)[1]
 
-        query = self._query_dense(query)
+        query_ = self._query_dense(query)
         key = self._key_dense(value)
         value = self._value_dense(value)
 
         if training: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
 
-        attention_output, attention_scores = self._compute_attention(query, key, value, attention_mask)
+        attention_output, attention_scores = self._compute_attention(query_, key, value, attention_mask)
         
         scores = tf.math.reduce_sum(attention_scores, axis=(1,2))[0]
         scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
@@ -236,6 +236,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         self._memory[:,self._mem_idx:].assign(scores)
 
         attention_output = self._output_dense(attention_output)
+        attention_output = query + attention_output * self._residual # ReZero
         return attention_output
 
     def reset_states(self):
