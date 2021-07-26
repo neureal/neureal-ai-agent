@@ -44,10 +44,14 @@ class RepNet(tf.keras.Model):
         # TODO how to loop through different embed layer structures? so can combine RepNet and TransNet
         # TODO possibly use Perciever https://github.com/Rishit-dagli/Perceiver
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
-        self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], []
+        # self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], []
+        self.net_ins, self.layer_attn_in = len(spec_in), []
+        # self.net_ins, self.layer_attn_in, self.layer_attn_in2 = len(spec_in), [], []
         for i in range(self.net_ins):
-            self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
-            self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
+            # self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
+            # self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
+            self.layer_attn_in.append(util.CrossAttention(num_heads=num_heads, latent_size=latent_size, init=True, name='attn_in_{:02d}'.format(i)))
+            # self.layer_attn_in2.append(util.CrossAttention(num_heads=num_heads, latent_size=latent_size, init=False, name='attn_in2_{:02d}'.format(i)))
 
         self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
         for i in range(net_blocks):
@@ -67,13 +71,16 @@ class RepNet(tf.keras.Model):
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
+        # for layer in self.layer_attn_in: layer.reset_states()
     def call(self, inputs, training=None):
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
-            out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            out = self.layer_flatten(out)
-            out = self.layer_dense_in[i](out)
-            out = self.layer_dense_in_lat[i](out)
+            data = tf.cast(inputs['obs'][i], self.compute_dtype)
+            # out = self.layer_flatten(data)
+            # out = self.layer_dense_in[i](out)
+            # out = self.layer_dense_in_lat[i](out)
+            out = self.layer_attn_in[i](None, data)
+            # out = self.layer_attn_in2[i](out, data)
             out_accu[i] = out
         out = tf.math.accumulate_n(out_accu)
         
@@ -338,7 +345,7 @@ class GeneralAI(tf.keras.Model):
         if arch in ('TEST',):
             self.gen = GenNet('GN', [latent_spec], self.obs_spec, force_cont_obs, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.gen(inputs)
 
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=True, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.action(inputs)
         if arch in ('AC','MU'): self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU','TEST'):
@@ -471,8 +478,8 @@ class GeneralAI(tf.keras.Model):
         loss = self.loss_likelihood(dist, targets)
         loss = loss * returns # * 1e-2
         # if self.categorical:
-        #     entropy = dist.entropy()
-        #     loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
+        # entropy = dist.entropy()
+        # loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -524,7 +531,7 @@ class GeneralAI(tf.keras.Model):
         outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
         return outputs, inputs
 
-    # TODO try one step history learner
+    # TODO try one step history learner, training head is max_steps steps behind live
     def PG_learner(self, inputs, training=True):
         print("tracing -> GeneralAI PG_learner")
 
@@ -1189,15 +1196,15 @@ returns_disc = 1.0
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-latent_size_mem_multi = 1
+attn_mem_multi = 1
 
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
 
-machine, device = 'dev', 0
+machine, device, extra = 'dev', 0, ''
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
@@ -1207,16 +1214,16 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-# max_steps = 64 # max replay buffer or train interval or bootstrap
+max_steps = 1 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-arch = 'PG' # Policy Gradient agent, PG loss
+# arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
+arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
@@ -1235,7 +1242,7 @@ if __name__ == '__main__':
 
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*latent_size_mem_multi)
+        model = GeneralAI(arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*attn_mem_multi)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
         ## debugging
@@ -1282,10 +1289,10 @@ if __name__ == '__main__':
                 for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 100,000-200,000 episodes
 
-        name = "{}-{}-a{}-{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M"))
+        name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M"), extra)
         total_steps = np.sum(metrics['steps'])
         step_time = total_time/total_steps
-        title = "{} {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    dis:{}    en:{}".format(name, name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, returns_disc, entropy_contrib); print(title)
+        title = "{}    [{}] {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(name, device_type, name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])

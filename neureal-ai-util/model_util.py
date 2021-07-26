@@ -189,15 +189,15 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def __init__(self, num_heads, latent_size, memory_size, **kwargs):
         compute_dtype = tf.keras.backend.floatx()
         key_dim = int(latent_size/num_heads)
-        super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), **kwargs)
+        super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=True, **kwargs)
 
         mem_zero = tf.constant(np.full((1, memory_size, latent_size), 0), compute_dtype)
         self._mem_size, self._mem_zero = tf.identity(memory_size), tf.identity(mem_zero)
-        self._residual = tf.Variable(0.0, trainable=True) # ReZero
     
     def build(self, input_shape):
         self._mem_idx = tf.Variable(self._mem_size, trainable=False, name='mem_idx')
         self._memory = tf.Variable(self._mem_zero, trainable=False, name='memory')
+        self._residual = tf.Variable(0.0, trainable=True, name='residual') # ReZero
 
     def _compute_attention(self, query, key, value, attention_mask=None, training=None):
         attention_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
@@ -226,7 +226,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         key = self._key_dense(value)
         value = self._value_dense(value)
 
-        if training: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
+        # if training: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
 
         attention_output, attention_scores = self._compute_attention(query_, key, value, attention_mask)
         
@@ -242,6 +242,55 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def reset_states(self):
         self._mem_idx.assign(self._mem_size)
         self._memory.assign(self._mem_zero)
+
+
+
+class CrossAttention(tf.keras.layers.MultiHeadAttention):
+    def __init__(self, num_heads, latent_size, init, **kwargs):
+        compute_dtype = tf.keras.backend.floatx()
+        key_dim = int(latent_size/num_heads)
+        super(CrossAttention, self).__init__(num_heads=tf.identity(num_heads), key_dim=tf.identity(key_dim), use_bias=False, **kwargs)
+
+        init_zero = tf.constant(np.full((1, 1, latent_size), 1), compute_dtype)
+        self._init, self._init_zero, self._evo = init, tf.identity(init_zero), tf.identity(int(latent_size/2))
+    
+    def build(self, input_shape):
+        if self._init: self._init_latent = tf.Variable(self._init_zero, trainable=True, name='init_latent')
+        # self._residual = tf.Variable(0.0, trainable=True, name='residual') # ReZero
+
+    def _compute_attention(self, query, key, value, attention_mask=None, training=None):
+        attention_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
+        attention_scores = self._masked_softmax(attention_scores, attention_mask)
+        attention_output = special_math_ops.einsum(self._combine_equation, attention_scores, value)
+        return attention_output, attention_scores
+
+    def call(self, query, value, attention_mask=None, training=None):
+        batch_size = tf.shape(value)[0]
+        if self._init: query = tf.broadcast_to(self._init_latent, (batch_size, 1, tf.shape(self._init_latent)[-1]))
+        else: query = tf.expand_dims(query, axis=1)
+        value = tf.reshape(value, (batch_size, -1, tf.shape(value)[-1]))
+
+        if not self._built_from_signature:
+            self._build_from_signature(query=query, value=value, key=None)
+            with tf.init_scope():
+                self._query_dense.activation = EvoNormS0(self._evo)
+                self._key_dense.activation = EvoNormS0(self._evo)
+                self._value_dense.activation = EvoNormS0(self._evo)
+
+        query_ = self._query_dense(query)
+        key = self._key_dense(value)
+        value = self._value_dense(value)
+
+        attention_output, attention_scores = self._compute_attention(query_, key, value, attention_mask)
+
+        attention_output = self._output_dense(attention_output)
+        # attention_output = query + attention_output * self._residual # ReZero
+
+        attention_output = tf.squeeze(attention_output, axis=1)
+        return attention_output
+
+    # def reset_states(self):
+    #     if self._init: self._init_latent.assign(self._init_zero)
 
 
 
