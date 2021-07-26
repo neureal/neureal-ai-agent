@@ -24,13 +24,17 @@ class DataEnv(gym.Env):
             ds = ds[:,None]
 
             # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
-            obs_space = gym.spaces.Dict()
-            obs_space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
-            obs_space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
-            # obs_space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # limits rep learning
-            self.observation_space = obs_space
-            self.action_space = obs_space
-            # self.action_space = gym.spaces.Discrete(256) # limits rep learning
+            space = gym.spaces.Dict()
+            space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
+            # space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
+            space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # limits rep learning
+            self.observation_space = space
+
+            space = gym.spaces.Dict()
+            space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
+            # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            self.action_space = space
 
             self.reward_range = (0.0,1.0)
 
@@ -78,9 +82,7 @@ class DataEnv(gym.Env):
                 print(text)
             self.item_accu = []
         else:
-            # self.item_accu.append(action['data'][0])
-            self.item_accu.append(action['data'])
-            # self.item_accu.append(action) # limits rep learning
+            self.item_accu.append(action)
 
     def _request(self, action):
         reward, done, info = np.float64(0.0), False, {}
@@ -89,31 +91,27 @@ class DataEnv(gym.Env):
 
         # obs = {'timestamp':np.asarray([self.ds_idx], np.float64), 'data':self.ds[self.ds_idx]}
         obs = OrderedDict()
-        obs['timestamp'] = np.asarray([self.ds_idx], np.float64)
-        obs['data'] = np.asarray(self.ds[self.ds_idx], np.int64)
+        obs['timestamp'] = np.asarray([self.ds_idx], self.observation_space['timestamp'].dtype)
+        obs['data'] = np.asarray(self.ds[self.ds_idx], self.observation_space['data'].dtype)
+        # latent = np.concatenate([self.ds[self.ds_idx]]) # limits rep learning
         # latent = np.concatenate([self.ds[self.ds_idx],[self.ds_idx]]) # limits rep learning
-        # obs['data'] = np.asarray(latent, np.uint8) # limits rep learning
+        # obs['data'] = np.asarray(latent, self.observation_space['data'].dtype) # limits rep learning
         if self.data_src == 'shkspr':
             if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]
-                # action_pred = np.asarray([action['data']], np.int64)
-                # action_pred = np.asarray(action['data'], np.uint8)
-                action_pred = np.int64(action['data'])
-                # action_pred = np.uint8(action) # limits rep learning
-
-                # if action == obs: reward = np.float64(1.0)
-                # if action_pred == obs['data']: reward = np.float64(1.0)
-                if action_pred == obs['data'][0]: reward = np.float64(1.0)
+                action = action['data'][0] if isinstance(action['data'], np.ndarray) else action['data']
+                target = obs['data'][0] if isinstance(obs['data'], np.ndarray) else obs['data']
+                if action == target: reward = np.float64(1.0)
             self.ds_idx += 1
             if self.ds_idx >= self.ds_max:
                 done = True
         # if self.data_src == 'mnist':
         #     obs = obs[self.pxl_x, self.pxl_y]
         #     if action is not None:
-        #         # action_pred = np.asarray([action], self.dsl.dtype)
-        #         # if action_pred == self.dsl[self.ds_idx-1]: reward = np.float64(1.0)
-        #         action_pred = np.asarray([action], np.uint8)
-        #         if action_pred == obs: reward = np.float64(1.0)
+        #         # action = np.asarray([action], self.dsl.dtype)
+        #         # if action == self.dsl[self.ds_idx-1]: reward = np.float64(1.0)
+        #         action = np.asarray([action], np.uint8)
+        #         if action == obs: reward = np.float64(1.0)
         #     # TODO add ds_idx, pxl_x, pxl_y to obs
         #     self.pxl_x += 1
         #     if self.pxl_x >= self.x_max:
