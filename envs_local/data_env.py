@@ -31,8 +31,8 @@ class DataEnv(gym.Env):
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # limits rep learning
             self.observation_space = space
 
-            space = gym.spaces.Dict()
-            space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
+            # space = gym.spaces.Dict()
+            # space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             self.action_space = space
 

@@ -15,6 +15,7 @@ def replace_infnan(inputs, replace):
     isinfnan = tf.math.logical_or(tf.math.is_nan(inputs), tf.math.is_inf(inputs))
     return tf.where(isinfnan, replace, inputs)
 
+# TODO tf.keras.layers.Discretization ?
 def discretize(inputs, spec, force_cont):
     if force_cont and spec['is_discrete']: inputs = tf.math.round(inputs)
     inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])

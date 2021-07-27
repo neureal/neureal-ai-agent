@@ -215,7 +215,7 @@ class GenNet(tf.keras.Model):
             else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
             self.layer_dense_lat.append(tf.keras.layers.Dense(latent_size, name='dense_lat_{:02d}'.format(i)))
 
-        self.net_outs, params_size, self.dist, arch_out = len(spec_out), [], [], ""
+        self.net_outs, params_size, self.dist, self.logits_step_shape, arch_out = len(spec_out), [], [], [], ""
         for i in range(self.net_outs):
             arch_out += "O{}{}".format(('d' if not force_cont and spec_out[i]['is_discrete'] else 'c'), spec_out[i]['num_components'])
             if force_det_out:
@@ -227,6 +227,7 @@ class GenNet(tf.keras.Model):
             else:
                 params_size.append(util.MixtureLogistic.params_size(spec_out[i]['num_components']*mixture_size, spec_out[i]['event_shape']))
                 self.dist.append(util.MixtureLogistic(spec_out[i]['num_components']*mixture_size, spec_out[i]['event_shape']))
+            self.logits_step_shape.append(tf.TensorShape([1]+[params_size[i]]))
 
         self.layer_dense_logits_out = []
         for i in range(self.net_outs):
@@ -439,15 +440,17 @@ class GeneralAI(tf.keras.Model):
         if isinstance(out, list):
             loss = self.compute_zero
             for i in range(len(out)):
-                o, t = tf.cast(tf.squeeze(out[i], axis=-1), self.compute_dtype), tf.cast(tf.squeeze(targets[i], axis=-1), self.compute_dtype)
+                o, t = tf.cast(out[i], self.compute_dtype), tf.cast(targets[i], self.compute_dtype)
                 loss = loss + tf.math.abs(tf.math.subtract(o, t)) # MAE
         else:
-            if targets is None: diff = tf.cast(tf.squeeze(out, axis=-1), self.compute_dtype)
+            out = tf.cast(out, self.compute_dtype)
+            if targets is None: diff = out
             else:
-                out, targets = tf.cast(tf.squeeze(out, axis=-1), self.compute_dtype), tf.cast(tf.squeeze(targets, axis=-1), self.compute_dtype)
+                targets = tf.cast(targets, self.compute_dtype)
                 diff = tf.math.subtract(out, targets)
             # loss = tf.where(tf.math.less(diff, self.compute_zero), tf.math.negative(diff), diff) # MAE
             loss = tf.math.abs(diff) # MAE
+        loss = tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss)))
         return loss
 
     def loss_likelihood(self, dist, targets):
@@ -474,8 +477,9 @@ class GeneralAI(tf.keras.Model):
         return loss
 
     def loss_PG(self, dist, targets, returns): # policy gradient, actor/critic
-        returns = tf.cast(tf.squeeze(returns, axis=-1), self.compute_dtype)
         loss = self.loss_likelihood(dist, targets)
+        returns = tf.cast(returns, self.compute_dtype)
+        returns = tf.squeeze(returns, axis=-1)
         loss = loss * returns # * 1e-2
         # if self.categorical:
         # entropy = dist.entropy()
@@ -630,6 +634,7 @@ class GeneralAI(tf.keras.Model):
         inputs['obs'] = rep_dist.sample()
 
         values = self.value(inputs, training=training)
+        # value_logits = self.value(inputs, training=training); value_dist = self.value.dist(value_logits)
 
         # PG loss
         returns = tf.cast(inputs['returns'], self.compute_dtype)
@@ -658,6 +663,7 @@ class GeneralAI(tf.keras.Model):
         loss = {}
         loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
         loss['value'] = self.loss_diff(advantages)
+        # loss['value'] = self.loss_likelihood(value_dist, inputs['returns'])
         loss['total'] = loss['action'] + loss['value']
 
         loss['advantages'] = advantages
@@ -909,19 +915,49 @@ class GeneralAI(tf.keras.Model):
         rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
         inputs['obs'] = rep_dist.sample()
 
-        inputs_img = {'obs':inputs['obs'][0:1], 'actions':self.action_zero_out}
+        action_logits = self.action(inputs, training=training)
+        action_dist = [None]*self.action_spec_len
+        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+
+        values = self.value(inputs, training=training)
+
+        returns = tf.cast(inputs['returns'], self.compute_dtype)
+        advantages = returns - values
+
+        loss = {}
+        loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
+        loss['value'] = self.loss_diff(advantages)
+
+
         loss_policy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        loss_return = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_reward = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_done = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_return = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        inputs_img = {'obs':inputs['obs'][0:1], 'actions':self.action_zero_out}
 
         for step in tf.range(tf.shape(inputs['obs'])[0]):
 
-            action_logits = self.action(inputs_img, training=training)
-            action_dist = [None]*self.action_spec_len
-            for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-            # return_logits = self.value(inputs_img, training=training); return_dist = self.value.dist(return_logits)
-            returns = self.value(inputs_img, training=training)
+            # action_dist = [None]*self.action_spec_len
+            # for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+            # value_logits = self.value(inputs_img, training=training); value_dist = self.value.dist(value_logits)
+
+            # # loss_policy = loss_policy.write(step, self.loss_likelihood(action_dist, inputs_img['actions']))
+            # loss_policy = loss_policy.write(step, self.loss_PG(action_dist, action, inputs['returns'][step:step+1]))
+            # # loss_return = loss_return.write(step, self.loss_likelihood(value_dist, inputs['returns'][step:step+1]))
+
+
+            action_logits_img = self.action(inputs_img, training=training)
+            action_logits_cur = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action_logits_cur[i] = action_logits[i][step:step+1]
+                action_logits_cur[i].set_shape(self.action.logits_step_shape[i])
+
+            values_img = self.value(inputs_img, training=training)
+
+            loss_policy = loss_policy.write(step, self.loss_diff(action_logits_img, action_logits_cur))
+            loss_return = loss_return.write(step, self.loss_diff(values_img, values[step:step+1]))
+
 
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
@@ -935,15 +971,12 @@ class GeneralAI(tf.keras.Model):
             rwd_logits = self.rwd(inputs_img, training=training); rwd_dist = self.rwd.dist(rwd_logits)
             done_logits = self.done(inputs_img, training=training); done_dist = self.done.dist(done_logits)
 
-            loss_policy = loss_policy.write(step, self.loss_likelihood(action_dist, action))
-            # loss_return = loss_return.write(step, self.loss_likelihood(return_dist, inputs['returns'][step:step+1]))
-            loss_return = loss_return.write(step, self.loss_diff(returns, inputs['returns'][step:step+1]))
             loss_reward = loss_reward.write(step, self.loss_likelihood(rwd_dist, inputs['rewards'][step:step+1]))
             loss_done = loss_done.write(step, self.loss_likelihood(done_dist, inputs['dones'][step:step+1]))
 
-        loss = {}
         loss['policy'], loss['return'], loss['reward'], loss['done'] = loss_policy.concat(), loss_return.concat(), loss_reward.concat(), loss_done.concat()
-        loss['total'] = loss['policy'] + loss['return'] + loss['reward'] + loss['done']
+        # loss['total'] = loss['policy'] + loss['return'] + loss['reward'] + loss['done']
+        loss['total'] = loss['action'] + loss['value'] + loss['policy'] + loss['return'] + loss['reward'] + loss['done']
         return loss
 
 
@@ -978,7 +1011,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 500
+max_episodes = 160
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
@@ -993,7 +1026,7 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, ''
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
-# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
@@ -1003,17 +1036,17 @@ env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-max_steps = 1 # max replay buffer or train interval or bootstrap
+# max_steps = 4 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
-arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
+arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
