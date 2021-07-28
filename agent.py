@@ -44,13 +44,13 @@ class RepNet(tf.keras.Model):
         # TODO how to loop through different embed layer structures? so can combine RepNet and TransNet
         # TODO possibly use Perciever https://github.com/Rishit-dagli/Perceiver
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
-        # self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], []
-        self.net_ins, self.layer_attn_in = len(spec_in), []
+        self.net_ins, self.layer_dense_in, self.layer_dense_in_lat = len(spec_in), [], []
+        # self.net_ins, self.layer_attn_in = len(spec_in), []
         # self.net_ins, self.layer_attn_in, self.layer_attn_in2 = len(spec_in), [], []
         for i in range(self.net_ins):
-            # self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
-            # self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
-            self.layer_attn_in.append(util.CrossAttention(num_heads=num_heads, latent_size=latent_size, init=True, name='attn_in_{:02d}'.format(i)))
+            self.layer_dense_in.append(tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in_{:02d}'.format(i)))
+            self.layer_dense_in_lat.append(tf.keras.layers.Dense(latent_size, name='dense_in_lat_{:02d}'.format(i)))
+            # self.layer_attn_in.append(util.CrossAttention(num_heads=num_heads, latent_size=latent_size, init=True, name='attn_in_{:02d}'.format(i)))
             # self.layer_attn_in2.append(util.CrossAttention(num_heads=num_heads, latent_size=latent_size, init=False, name='attn_in2_{:02d}'.format(i)))
 
         self.layer_attn, self.layer_lstm, self.layer_dense, self.layer_dense_lat = [], [], [], []
@@ -76,10 +76,10 @@ class RepNet(tf.keras.Model):
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             data = tf.cast(inputs['obs'][i], self.compute_dtype)
-            # out = self.layer_flatten(data)
-            # out = self.layer_dense_in[i](out)
-            # out = self.layer_dense_in_lat[i](out)
-            out = self.layer_attn_in[i](None, data)
+            out = self.layer_flatten(data)
+            out = self.layer_dense_in[i](out)
+            out = self.layer_dense_in_lat[i](out)
+            # out = self.layer_attn_in[i](None, data)
             # out = self.layer_attn_in2[i](out, data)
             out_accu[i] = out
         out = tf.math.accumulate_n(out_accu)
@@ -364,19 +364,16 @@ class GeneralAI(tf.keras.Model):
 
         metrics = {'rewards_total':np.float64,'rewards_final':np.float64,'steps':np.int64}
         metrics_loss = OrderedDict()
-        metrics_loss['totals'] = {'loss_total':np.float64}
+        if arch not in ('MU',): metrics_loss['totals'] = {'loss_total':np.float64}
         # if arch in ('AC','MU'):
-        if arch in ('AC','MU'):
-            metrics_loss['nets'] = {'loss_action':np.float64,'loss_value':np.float64}
+        if arch in ('AC','MU'): metrics_loss['nets'] = {'loss_action':np.float64,'loss_value':np.float64}
         if arch in ('MU','TEST'):
+            metrics_loss['nets2'] = {'loss_policy':np.float64,'loss_return':np.float64}
             metrics_loss['nets1'] = {'loss_rwd':np.float64,'loss_done':np.float64}
-        # if arch in ('PG','MU'):
-        if arch in ('PG','MU'):
-            metrics_loss['extras'] = {'returns':np.float64}
-        if arch in ('AC','TEST'):
-            metrics_loss['extras'] = {'returns':np.float64,'advantages':np.float64}
+        # if arch in ('PG','MU'): metrics_loss['extras'] = {'returns':np.float64}
+        if arch in ('AC','MU','TEST'): metrics_loss['extras'] = {'returns':np.float64,'advantages':np.float64}
         # if arch in ('MU','TEST'):
-        #     metrics_loss['nets2'] = {'loss_total_img':np.float64,'returns_img':np.float64}
+        #     metrics_loss['nets3'] = {'loss_total_img':np.float64,'returns_img':np.float64}
         #     # metrics_loss['extras1'] = {'steps_img':np.float64,'':np.float64}
         #     metrics_loss['extras1'] = {'steps_img':np.float64}
 
@@ -398,17 +395,19 @@ class GeneralAI(tf.keras.Model):
         self.metrics_main['rewards_total'][episode] += args[1]
         self.metrics_main['rewards_final'][episode] = args[2]
         self.metrics_main['steps'][episode] += args[3]
-        if args[4] is not False: self.metrics_loss['totals']['loss_total'][episode].append(args[4])
-        if args[5] is not False: self.metrics_loss['nets']['loss_action'][episode].append(args[5])
-        if args[6] is not False: self.metrics_loss['nets']['loss_value'][episode].append(args[6])
-        if args[7] is not False: self.metrics_loss['extras']['returns'][episode].append(args[7])
-        if args[8] is not False: self.metrics_loss['extras']['advantages'][episode].append(args[8])
-        if args[9] is not False: self.metrics_loss['nets1']['loss_rwd'][episode].append(args[9])
-        if args[10] is not False: self.metrics_loss['nets1']['loss_done'][episode].append(args[10])
-        if args[11] is not False: self.metrics_loss['nets2']['loss_total_img'][episode].append(args[11])
-        if args[12] is not False: self.metrics_loss['nets2']['returns_img'][episode].append(args[12])
-        if args[13] is not False: self.metrics_loss['extras1']['steps_img'][episode].append(args[13])
-        if args[14] is not False: self.metrics_loss['extras1'][''][episode].append(args[14])
+        if args[4] is not False and 'totals' in self.metrics_loss: self.metrics_loss['totals']['loss_total'][episode].append(args[4])
+        if args[5] is not False and 'nets' in self.metrics_loss: self.metrics_loss['nets']['loss_action'][episode].append(args[5])
+        if args[6] is not False and 'nets' in self.metrics_loss: self.metrics_loss['nets']['loss_value'][episode].append(args[6])
+        if args[7] is not False and 'extras' in self.metrics_loss: self.metrics_loss['extras']['returns'][episode].append(args[7])
+        if args[8] is not False and 'extras' in self.metrics_loss: self.metrics_loss['extras']['advantages'][episode].append(args[8])
+        if args[9] is not False and 'nets1' in self.metrics_loss: self.metrics_loss['nets1']['loss_rwd'][episode].append(args[9])
+        if args[10] is not False and 'nets1' in self.metrics_loss: self.metrics_loss['nets1']['loss_done'][episode].append(args[10])
+        if args[11] is not False and 'nets2' in self.metrics_loss: self.metrics_loss['nets2']['loss_policy'][episode].append(args[11])
+        if args[12] is not False and 'nets2' in self.metrics_loss: self.metrics_loss['nets2']['loss_return'][episode].append(args[12])
+        if args[13] is not False and 'nets3' in self.metrics_loss: self.metrics_loss['nets3']['loss_total_img'][episode].append(args[13])
+        if args[14] is not False and 'nets3' in self.metrics_loss: self.metrics_loss['nets3']['returns_img'][episode].append(args[14])
+        if args[15] is not False and 'extras1' in self.metrics_loss: self.metrics_loss['extras1']['steps_img'][episode].append(args[15])
+        if args[16] is not False and 'extras1' in self.metrics_loss: self.metrics_loss['extras1'][''][episode].append(args[16])
         return np.asarray(0, np.int32) # dummy
 
 
@@ -562,7 +561,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), False, False,
-                tf.math.reduce_mean(outputs['returns']), False, False, False, False, False, False, False]
+                tf.math.reduce_mean(outputs['returns']), False, False, False, False, False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def PG(self):
@@ -683,7 +682,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
-                tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), False, False, False, False, False, False]
+                tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), False, False, False, False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def AC(self):
@@ -786,7 +785,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), False, False, False, False,
-                False, False, False, False, False, False
+                False, False, False, False, False, False, False, False
             ]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
@@ -947,15 +946,15 @@ class GeneralAI(tf.keras.Model):
             # # loss_return = loss_return.write(step, self.loss_likelihood(value_dist, inputs['returns'][step:step+1]))
 
 
-            action_logits_img = self.action(inputs_img, training=training)
-            action_logits_cur = [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                action_logits_cur[i] = action_logits[i][step:step+1]
-                action_logits_cur[i].set_shape(self.action.logits_step_shape[i])
+            # action_logits_img = self.action(inputs_img, training=training)
+            # action_logits_cur = [None]*self.action_spec_len
+            # for i in range(self.action_spec_len):
+            #     action_logits_cur[i] = action_logits[i][step:step+1]
+            #     action_logits_cur[i].set_shape(self.action.logits_step_shape[i])
 
             values_img = self.value(inputs_img, training=training)
 
-            loss_policy = loss_policy.write(step, self.loss_diff(action_logits_img, action_logits_cur))
+            # loss_policy = loss_policy.write(step, self.loss_diff(action_logits_img, action_logits_cur))
             loss_return = loss_return.write(step, self.loss_diff(values_img, values[step:step+1]))
 
 
@@ -977,6 +976,7 @@ class GeneralAI(tf.keras.Model):
         loss['policy'], loss['return'], loss['reward'], loss['done'] = loss_policy.concat(), loss_return.concat(), loss_reward.concat(), loss_done.concat()
         # loss['total'] = loss['policy'] + loss['return'] + loss['reward'] + loss['done']
         loss['total'] = loss['action'] + loss['value'] + loss['policy'] + loss['return'] + loss['reward'] + loss['done']
+        loss['advantages'] = advantages
         return loss
 
 
@@ -991,9 +991,9 @@ class GeneralAI(tf.keras.Model):
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables + self.action.trainable_variables + self.value.trainable_variables))
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['policy']), tf.math.reduce_mean(loss['return']), tf.math.reduce_sum(outputs['returns']), False, tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['done']),
+                tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']), tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['done']),
                 # tf.math.reduce_mean(loss_img['total']), tf.math.reduce_mean(outputs_img['returns']), tf.shape(outputs_img['rewards'])[0], False]
-                False, False, False, False]
+                tf.math.reduce_mean(loss['policy']), tf.math.reduce_mean(loss['return']), False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def MU(self):
