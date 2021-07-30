@@ -82,7 +82,8 @@ class RepNet(tf.keras.Model):
             # out = self.layer_attn_in[i](None, data)
             # out = self.layer_attn_in2[i](out, data)
             out_accu[i] = out
-        out = tf.math.accumulate_n(out_accu)
+        # out = tf.math.accumulate_n(out_accu)
+        out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
             out = tf.expand_dims(out, axis=0)
@@ -148,7 +149,8 @@ class TransNet(tf.keras.Model):
         out = self.layer_obs_dense_in_lat(out)
         out_accu[-1] = out
 
-        out = tf.math.accumulate_n(out_accu)
+        # out = tf.math.accumulate_n(out_accu)
+        out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
             out = tf.expand_dims(out, axis=0)
@@ -201,7 +203,7 @@ class DoneNet(tf.keras.Model):
 class GenNet(tf.keras.Model):
     def __init__(self, name, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=1, force_det_out=False):
         super(GenNet, self).__init__()
-        inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), 4
+        inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), int(latent_size/4)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -217,17 +219,18 @@ class GenNet(tf.keras.Model):
 
         self.net_outs, params_size, self.dist, self.logits_step_shape, arch_out = len(spec_out), [], [], [], ""
         for i in range(self.net_outs):
-            arch_out += "O{}{}".format(('d' if not force_cont and spec_out[i]['is_discrete'] else 'c'), spec_out[i]['num_components'])
+            num_components, event_shape = spec_out[i]['num_components'], spec_out[i]['event_shape']
             if force_det_out:
-                params_size.append(util.Deterministic.params_size(spec_out[i]['event_shape']))
-                self.dist.append(util.Deterministic(spec_out[i]['event_shape']))
+                params_size.append(util.Deterministic.params_size(event_shape)); self.dist.append(util.Deterministic(event_shape))
             elif not force_cont and spec_out[i]['is_discrete']:
-                params_size.append(util.Categorical.params_size(spec_out[i]['num_components'], spec_out[i]['event_shape']))
-                self.dist.append(util.Categorical(spec_out[i]['num_components'], spec_out[i]['event_shape']))
+                params_size.append(util.Categorical.params_size(num_components, event_shape)); self.dist.append(util.Categorical(num_components, event_shape))
             else:
-                params_size.append(util.MixtureLogistic.params_size(spec_out[i]['num_components']*mixture_size, spec_out[i]['event_shape']))
-                self.dist.append(util.MixtureLogistic(spec_out[i]['num_components']*mixture_size, spec_out[i]['event_shape']))
+                num_components *= mixture_size
+                params_size.append(util.MixtureLogistic.params_size(num_components, event_shape)); self.dist.append(util.MixtureLogistic(num_components, event_shape))
+                # params_size.append(tfp.layers.MixtureLogistic.params_size(num_components, event_shape)); self.dist.append(tfp.layers.MixtureLogistic(num_components, event_shape)) # makes NaNs
+                # params_size.append(util.MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=1)); self.dist.append(util.MixtureMultiNormalTriL(num_components, event_shape, matrix_size=1))
             self.logits_step_shape.append(tf.TensorShape([1]+[params_size[i]]))
+            arch_out += "O{}{}".format(('d' if not force_cont and spec_out[i]['is_discrete'] else 'c'), num_components)
 
         self.layer_dense_logits_out = []
         for i in range(self.net_outs):
@@ -266,7 +269,7 @@ class GenNet(tf.keras.Model):
 class ValueNet(tf.keras.Model):
     def __init__(self, name, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
         super(ValueNet, self).__init__()
-        inp, mid, evo = latent_size*2, latent_size*2, int(latent_size/2)
+        inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -440,7 +443,8 @@ class GeneralAI(tf.keras.Model):
             loss = self.compute_zero
             for i in range(len(out)):
                 o, t = tf.cast(out[i], self.compute_dtype), tf.cast(targets[i], self.compute_dtype)
-                loss = loss + tf.math.abs(tf.math.subtract(o, t)) # MAE
+                # loss = loss + tf.math.abs(tf.math.subtract(o, t)) # MAE
+                loss = loss + tf.math.square(tf.math.subtract(o, t)) # MSE
         else:
             out = tf.cast(out, self.compute_dtype)
             if targets is None: diff = out
@@ -448,7 +452,8 @@ class GeneralAI(tf.keras.Model):
                 targets = tf.cast(targets, self.compute_dtype)
                 diff = tf.math.subtract(out, targets)
             # loss = tf.where(tf.math.less(diff, self.compute_zero), tf.math.negative(diff), diff) # MAE
-            loss = tf.math.abs(diff) # MAE
+            # loss = tf.math.abs(diff) # MAE
+            loss = tf.math.square(diff) # MSE
         loss = tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss)))
         return loss
 
@@ -480,9 +485,12 @@ class GeneralAI(tf.keras.Model):
         returns = tf.cast(returns, self.compute_dtype)
         returns = tf.squeeze(returns, axis=-1)
         loss = loss * returns # * 1e-2
-        # if self.categorical:
-        # entropy = dist.entropy()
-        # loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
+        # loss = loss * tf.math.softplus(returns)
+        if isinstance(dist, list):
+            entropy = self.compute_zero
+            for i in range(len(dist)): entropy = entropy + dist[i].entropy()
+        else: entropy = dist.entropy()
+        loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -561,7 +569,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), False, False,
-                tf.math.reduce_mean(outputs['returns']), False, False, False, False, False, False, False, False, False]
+                tf.math.reduce_sum(outputs['returns']), False, False, False, False, False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def PG(self):
@@ -634,10 +642,11 @@ class GeneralAI(tf.keras.Model):
 
         values = self.value(inputs, training=training)
         # value_logits = self.value(inputs, training=training); value_dist = self.value.dist(value_logits)
+        # values = value_dist.sample()
 
         # PG loss
         returns = tf.cast(inputs['returns'], self.compute_dtype)
-        advantages = returns - values
+        advantages = returns - values # new chance of chosen action: if over predict = push away, if under predict = push closer, if can predict = stay
 
         # # TD loss
         # rewards = tf.squeeze(inputs['rewards'], axis=-1)
@@ -682,7 +691,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
-                tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), False, False, False, False, False, False, False, False]
+                tf.math.reduce_sum(outputs['returns']), tf.math.reduce_sum(loss['advantages']), False, False, False, False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def AC(self):
@@ -952,10 +961,10 @@ class GeneralAI(tf.keras.Model):
             #     action_logits_cur[i] = action_logits[i][step:step+1]
             #     action_logits_cur[i].set_shape(self.action.logits_step_shape[i])
 
-            values_img = self.value(inputs_img, training=training)
+            # values_img = self.value(inputs_img, training=training)
 
             # loss_policy = loss_policy.write(step, self.loss_diff(action_logits_img, action_logits_cur))
-            loss_return = loss_return.write(step, self.loss_diff(values_img, values[step:step+1]))
+            # loss_return = loss_return.write(step, self.loss_diff(values_img, values[step:step+1]))
 
 
             action = [None]*self.action_spec_len
@@ -991,7 +1000,7 @@ class GeneralAI(tf.keras.Model):
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables + self.action.trainable_variables + self.value.trainable_variables))
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']), tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['done']),
+                tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']), tf.math.reduce_sum(outputs['returns']), tf.math.reduce_sum(loss['advantages']), tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['done']),
                 # tf.math.reduce_mean(loss_img['total']), tf.math.reduce_mean(outputs_img['returns']), tf.shape(outputs_img['rewards'])[0], False]
                 tf.math.reduce_mean(loss['policy']), tf.math.reduce_mean(loss['return']), False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
@@ -1026,13 +1035,13 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, ''
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
 # env_name, max_steps, env_render, env = 'Qbert', 1024, False, gym.make('QbertNoFrameskip-v4') # max_steps 400000
 
-# env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
+env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
@@ -1040,13 +1049,13 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-# max_steps = 4 # max replay buffer or train interval or bootstrap
+# max_steps = 1 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
-# arch = 'AC' # Actor Critic, PG and advantage loss
+arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':

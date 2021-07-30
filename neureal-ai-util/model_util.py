@@ -131,6 +131,24 @@ class CategoricalRP(tfp.layers.DistributionLambda): # reparametertized
         return params_size
 
 
+class MixtureSameFamily(tfp.distributions.MixtureSameFamily):
+    def _entropy(self):
+        # entropy = self.components_distribution.entropy() * self.mixture_distribution.probs_parameter()
+        # entropy = tf.reduce_sum(entropy, axis=1) # entropy1
+        # entropy = tf.concat([self.components_distribution.entropy(), tf.expand_dims(self.mixture_distribution.entropy(), axis=1)], axis=1)
+        # entropy = tf.reduce_mean(entropy, axis=1) # entropy2
+        entropy = self.sample(256)
+        entropy = -self.log_prob(entropy)
+        entropy = tf.reduce_mean(entropy, axis=0) # entropy3
+        return entropy
+
+class Logistic(tfp.distributions.Logistic):
+    def _log_prob(self, x):
+        loc = tf.convert_to_tensor(self.loc)
+        scale = tf.convert_to_tensor(self.scale)
+        z = (x - loc) / (scale)
+        # return -z - 2. * tf.math.softplus(-z) - tf.math.log1p(scale)
+        return -z - 2. * tf.math.softplus(-z) - tf.math.log(scale)
 
 class MixtureLogistic(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), **kwargs):
@@ -162,13 +180,14 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
         scale_params = tf.reshape(scale_params, output_shape)
 
-        dist = tfp.distributions.MixtureSameFamily(
+        dist = MixtureSameFamily(
                 mixture_distribution = tfp.distributions.Categorical(
                     logits=mixture_params
                 ),
                 components_distribution = tfp.distributions.Independent(
                     # tfp.distributions.Normal(
-                    tfp.distributions.Logistic(
+                    # tfp.distributions.Logistic(
+                    Logistic(
                         loc=loc_params,
                         scale=scale_params
                     ),
