@@ -203,7 +203,7 @@ class DoneNet(tf.keras.Model):
 class GenNet(tf.keras.Model):
     def __init__(self, name, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=1, force_det_out=False):
         super(GenNet, self).__init__()
-        inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), int(latent_size/4)
+        inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -217,20 +217,20 @@ class GenNet(tf.keras.Model):
             else: self.layer_dense.append(tf.keras.layers.Dense(mid, activation=util.EvoNormS0(evo), use_bias=False, name='dense_{:02d}'.format(i)))
             self.layer_dense_lat.append(tf.keras.layers.Dense(latent_size, name='dense_lat_{:02d}'.format(i)))
 
-        self.net_outs, params_size, self.dist, self.logits_step_shape, arch_out = len(spec_out), [], [], [], ""
+        self.net_outs, params_size, self.dist, self.logits_step_shape, arch_out = len(spec_out), [], [], [], "O"
         for i in range(self.net_outs):
             num_components, event_shape = spec_out[i]['num_components'], spec_out[i]['event_shape']
             if force_det_out:
-                params_size.append(util.Deterministic.params_size(event_shape)); self.dist.append(util.Deterministic(event_shape))
+                params_size.append(util.Deterministic.params_size(event_shape)); self.dist.append(util.Deterministic(event_shape)); typ = 'p'
             elif not force_cont and spec_out[i]['is_discrete']:
-                params_size.append(util.Categorical.params_size(num_components, event_shape)); self.dist.append(util.Categorical(num_components, event_shape))
+                params_size.append(util.Categorical.params_size(num_components, event_shape)); self.dist.append(util.Categorical(num_components, event_shape)); typ = 'd'
             else:
                 num_components *= mixture_size
-                params_size.append(util.MixtureLogistic.params_size(num_components, event_shape)); self.dist.append(util.MixtureLogistic(num_components, event_shape))
+                params_size.append(util.MixtureLogistic.params_size(num_components, event_shape)); self.dist.append(util.MixtureLogistic(num_components, event_shape)); typ = 'cm'
                 # params_size.append(tfp.layers.MixtureLogistic.params_size(num_components, event_shape)); self.dist.append(tfp.layers.MixtureLogistic(num_components, event_shape)) # makes NaNs
-                # params_size.append(util.MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=1)); self.dist.append(util.MixtureMultiNormalTriL(num_components, event_shape, matrix_size=1))
+                # params_size.append(util.MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=2)); self.dist.append(util.MixtureMultiNormalTriL(num_components, event_shape, matrix_size=2)); typ = 'ct'
             self.logits_step_shape.append(tf.TensorShape([1]+[params_size[i]]))
-            arch_out += "O{}{}".format(('d' if not force_cont and spec_out[i]['is_discrete'] else 'c'), num_components)
+            arch_out += "{}{}".format(typ, num_components)
 
         self.layer_dense_logits_out = []
         for i in range(self.net_outs):
@@ -269,7 +269,7 @@ class GenNet(tf.keras.Model):
 class ValueNet(tf.keras.Model):
     def __init__(self, name, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
         super(ValueNet, self).__init__()
-        inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
+        inp, mid, evo = latent_size*2, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
 
@@ -486,11 +486,11 @@ class GeneralAI(tf.keras.Model):
         returns = tf.squeeze(returns, axis=-1)
         loss = loss * returns # * 1e-2
         # loss = loss * tf.math.softplus(returns)
-        if isinstance(dist, list):
-            entropy = self.compute_zero
-            for i in range(len(dist)): entropy = entropy + dist[i].entropy()
-        else: entropy = dist.entropy()
-        loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
+        # if isinstance(dist, list):
+        #     entropy = self.compute_zero
+        #     for i in range(len(dist)): entropy = entropy + dist[i].entropy()
+        # else: entropy = dist.entropy()
+        # loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -1020,7 +1020,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 160
+max_episodes = 2000
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
@@ -1032,7 +1032,7 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, ''
+machine, device, extra = 'dev', 0, '' # _mixlog-abs-Nentropy3-log1p-Nreparam_obs-tsBoxF-dataBoxI_round
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
@@ -1041,20 +1041,20 @@ env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
 # env_name, max_steps, env_render, env = 'Qbert', 1024, False, gym.make('QbertNoFrameskip-v4') # max_steps 400000
 
-env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
+# env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2')
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
 
-# max_steps = 1 # max replay buffer or train interval or bootstrap
+max_steps = 1 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
-arch = 'AC' # Actor Critic, PG and advantage loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
+# arch = 'AC' # Actor Critic, PG and advantage loss
+arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
@@ -1123,7 +1123,7 @@ if __name__ == '__main__':
         name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M"), extra)
         total_steps = np.sum(metrics['steps'])
         step_time = total_time/total_steps
-        title = "{}    [{}] {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(name, device_type, name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps); print(title)
+        title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])

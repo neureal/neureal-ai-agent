@@ -18,8 +18,10 @@ def replace_infnan(inputs, replace):
 # TODO tf.keras.layers.Discretization ?
 def discretize(inputs, spec, force_cont):
     if force_cont and spec['is_discrete']: inputs = tf.math.round(inputs)
+    if spec['dtype'] == tf.uint8 or spec['dtype'] == tf.int32 or spec['dtype'] == tf.int64: inputs = tf.math.round(inputs)
     inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])
     inputs = tf.cast(inputs, spec['dtype'])
+    # inputs = tf.dtypes.saturate_cast(inputs, spec['dtype'])
     inputs = tf.squeeze(inputs)
     return inputs
 
@@ -147,8 +149,8 @@ class Logistic(tfp.distributions.Logistic):
         loc = tf.convert_to_tensor(self.loc)
         scale = tf.convert_to_tensor(self.scale)
         z = (x - loc) / (scale)
-        # return -z - 2. * tf.math.softplus(-z) - tf.math.log1p(scale)
-        return -z - 2. * tf.math.softplus(-z) - tf.math.log(scale)
+        return -z - 2. * tf.math.softplus(-z) - tf.math.log1p(scale)
+        # return -z - 2. * tf.math.softplus(-z) - tf.math.log(scale)
 
 class MixtureLogistic(tfp.layers.DistributionLambda):
     def __init__(self, num_components, event_shape=(), **kwargs):
@@ -172,29 +174,23 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         components_params = params[..., num_components:]
         loc_params, scale_params = tf.split(components_params, 2, axis=-1)
 
-        output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        batch_size = tf.shape(params)[:-1]
+        output_shape = tf.concat([batch_size, params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
         
         scale_params = tf.math.abs(scale_params)
-        # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
         scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
+        # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
         scale_params = tf.reshape(scale_params, output_shape)
 
-        dist = MixtureSameFamily(
-                mixture_distribution = tfp.distributions.Categorical(
-                    logits=mixture_params
-                ),
-                components_distribution = tfp.distributions.Independent(
-                    # tfp.distributions.Normal(
-                    # tfp.distributions.Logistic(
-                    Logistic(
-                        loc=loc_params,
-                        scale=scale_params
-                    ),
-                    reinterpreted_batch_ndims=reinterpreted_batch_ndims
-                ),
-            # reparameterize=True, # better spread of loc and scale params, rep net works better
-        )
+        dist_mixture = tfp.distributions.Categorical(logits=mixture_params)
+        # dist_component = tfp.distributions.Normal(loc=loc_params, scale=scale_params)
+        # dist_component = tfp.distributions.Logistic(loc=loc_params, scale=scale_params)
+        dist_component = Logistic(loc=loc_params, scale=scale_params)
+        dist_components = tfp.distributions.Independent(dist_component, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
+        dist = MixtureSameFamily(mixture_distribution=dist_mixture, components_distribution=dist_components)
+        # dist = MixtureSameFamily(mixture_distribution=dist_mixture, components_distribution=dist_components, reparameterize=True) # better spread of loc and scale params, rep net works better, can have bugs
+
         return dist
     @staticmethod
     def params_size(num_components, event_shape=(), name=None):

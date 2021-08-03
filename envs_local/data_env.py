@@ -64,6 +64,7 @@ class DataEnv(gym.Env):
         self.obs_zero = util.gym_get_space_zero(self.observation_space)
         self.state = self.action_zero, self.obs_zero, np.float64(0.0), False, {}
         self.item_accu = []
+        self.episode = 0
         
 
     def step(self, action): return self._request(action)
@@ -101,7 +102,9 @@ class DataEnv(gym.Env):
                 # obs_prev = self.ds[self.ds_idx-1]
                 action = action['data'][0] if isinstance(action['data'], np.ndarray) else action['data']
                 target = obs['data'][0] if isinstance(obs['data'], np.ndarray) else obs['data']
+                # if action >= 122: print(action, self.episode)
                 if action == target: reward = np.float64(1.0)
+            else: self.episode += 1
             self.ds_idx += 1
             if self.ds_idx >= self.ds_max:
                 done = True
