@@ -507,8 +507,7 @@ class GeneralAI(tf.keras.Model):
         dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,), clear_after_read=True)
         returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,), clear_after_read=True)
 
-        idx_act = tf.constant(0)
-        idx_train = tf.constant(0)
+        idx_act, idx_train = tf.constant(0), tf.constant(0)
 
         for episode in tf.range(self.max_episodes):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -537,6 +536,7 @@ class GeneralAI(tf.keras.Model):
                     np_in = tf.numpy_function(self.env_step, action, self.gym_step_dtypes)
                     for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
                     inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+                    inputs['rewards'] += 4000.0
 
                     rewards = rewards.write(idx_act, inputs['rewards'][-1])
                     dones = dones.write(idx_act, inputs['dones'][-1])
@@ -560,7 +560,7 @@ class GeneralAI(tf.keras.Model):
                         gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables)
                         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
 
-                        metrics = [episode, outputs['rewards'][-1][0], outputs['rewards'][-1][0], 1,
+                        metrics = [episode, outputs['rewards'][-1][0]-4000.0, outputs['rewards'][-1][0]-4000.0, 1,
                             loss['total'][0], False, False,
                             outputs['returns'][-1][0], False, False, False, False, False, False, False, False, False]
                         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
@@ -1102,9 +1102,9 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, '' # _mixlog-abs-Nentropy3-log1p-Nreparam_obs-tsBoxF-dataBoxI_round
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
-# env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
+env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
 # env_name, max_steps, env_render, env = 'Qbert', 1024, False, gym.make('QbertNoFrameskip-v4') # max_steps 400000
 
