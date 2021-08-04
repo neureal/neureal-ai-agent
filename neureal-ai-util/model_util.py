@@ -213,7 +213,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def build(self, input_shape):
         self._mem_idx = tf.Variable(self._mem_size, trainable=False, name='mem_idx')
         self._memory = tf.Variable(self._mem_zero, trainable=False, name='memory')
-        self._residual = tf.Variable(0.0, trainable=True, name='residual') # ReZero
+        self._residual = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
     def _compute_attention(self, query, key, value, attention_mask=None, training=None):
         attention_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
