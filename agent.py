@@ -517,8 +517,10 @@ class GeneralAI(tf.keras.Model):
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
 
             while not inputs['dones'][-1][0]:
+                # tf.autograph.experimental.set_loop_options(parallel_iterations=1)
                 step = tf.constant(0)
                 while step < self.max_steps and not inputs['dones'][-1][0]:
+                    # tf.autograph.experimental.set_loop_options(parallel_iterations=1)
                     for i in range(self.obs_spec_len): obs[i] = obs[i].write(idx_act, inputs['obs'][i][-1])
                     returns = returns.write(idx_act, [self.float64_zero])
 
@@ -541,10 +543,8 @@ class GeneralAI(tf.keras.Model):
                     rewards = rewards.write(idx_act, inputs['rewards'][-1])
                     dones = dones.write(idx_act, inputs['dones'][-1])
                     rng = tf.range(idx_act-step, idx_act+1)
-                    # returns_updt = returns.stack()
                     returns_updt = returns.gather(rng)
                     returns_updt = returns_updt + inputs['rewards'][-1]
-                    # returns = returns.unstack(returns_updt)
                     returns = returns.scatter(rng, returns_updt)
 
                     if idx_act >= self.max_steps:
@@ -555,12 +555,26 @@ class GeneralAI(tf.keras.Model):
                         outputs['obs'], outputs['actions'] = out_obs, out_actions
                         outputs['rewards'], outputs['dones'], outputs['returns'] = tf.expand_dims(rewards.read(idx_train), axis=0), tf.expand_dims(dones.read(idx_train), axis=0), tf.expand_dims(returns.read(idx_train), axis=0)
 
+                        # # rng = tf.range(idx_train, idx_act-step)
+                        # rng = tf.range(idx_train, idx_act+1)
+                        # outputs = {}
+                        # out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+                        # for i in range(self.obs_spec_len): out_obs[i] = obs[i].gather(rng)
+                        # for i in range(self.action_spec_len): out_actions[i] = actions[i].gather(rng)
+                        # outputs['obs'], outputs['actions'] = out_obs, out_actions
+                        # outputs['rewards'], outputs['dones'], outputs['returns'] = rewards.gather(rng), dones.gather(rng), returns.gather(rng)
+
+                        # for i in range(self.obs_spec_len): obs[i].read(idx_train)
+                        # for i in range(self.action_spec_len): actions[i].read(idx_train)
+                        # rewards.read(idx_train); dones.read(idx_train); returns.read(idx_train)
+
                         with tf.GradientTape() as tape:
                             loss = self.PG_learner(outputs)
                         gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables)
                         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
 
                         metrics = [episode, outputs['rewards'][-1][0]-4000.0, outputs['rewards'][-1][0]-4000.0, 1,
+                        # metrics = [episode, outputs['rewards'][-1][0], outputs['rewards'][-1][0], 1,
                             loss['total'][0], False, False,
                             outputs['returns'][-1][0], False, False, False, False, False, False, False, False, False]
                         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
@@ -569,40 +583,8 @@ class GeneralAI(tf.keras.Model):
 
                     step += 1
                     idx_act += 1
+            # tf.print('episode')
 
-        # outputs = {}
-        # out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
-        # for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
-        # for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
-        # outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
-        # return
-
-
-
-    # def PG_actor(self, inputs):
-    #     print("tracing -> GeneralAI PG_actor")
-
-    #     rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
-    #     inputs['obs'] = rep_dist.sample()
-
-    #     action_logits = self.action(inputs)
-    #     action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
-    #     for i in range(self.action_spec_len):
-    #         action_dist = self.action.dist[i](action_logits[i])
-    #         action[i] = action_dist.sample()
-    #         action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
-    #     inputs['actions'] = action
-
-    #     np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
-    #     for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-    #     inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
-        
-    #     inputs['returns'][-1][0] += inputs['rewards'][-1][0]
-
-    #     return inputs
-
-
-    # TODO try one step history learner, training head is max_steps steps behind live
     def PG_learner(self, inputs, training=True):
         print("tracing -> GeneralAI PG_learner")
 
@@ -616,38 +598,6 @@ class GeneralAI(tf.keras.Model):
         loss = {}
         loss['total'] = self.loss_PG(action_dist, inputs['actions'], inputs['returns'])
         return loss
-
-    # def PG_run_episode(self, inputs, episode, training=True):
-    #     print("tracing -> GeneralAI PG_run_episode")
-    #     # TODO how unlimited length episodes without sacrificing returns signal?
-    #     step = tf.constant(0)
-    #     while not inputs['dones'][-1][0]:
-    #         inputs = self.PG_actor(inputs)
-    #         with tf.GradientTape() as tape:
-    #             loss = self.PG_learner(inputs)
-    #         gradients = tape.gradient(loss['total'], self.rep.trainable_variables + self.action.trainable_variables)
-    #         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-
-    #         metrics = [episode, tf.math.reduce_sum(inputs['rewards']), inputs['rewards'][-1][0], tf.shape(inputs['rewards'])[0],
-    #             tf.math.reduce_mean(loss['total']), False, False,
-    #             tf.math.reduce_sum(inputs['returns']), False, False, False, False, False, False, False, False, False]
-    #         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-
-    #         step += 1
-    #         if step >= self.max_steps:
-    #             step = tf.constant(0)
-    #             inputs['returns'] = self.rewards_zero
-
-
-    # def PG(self):
-    #     print("tracing -> GeneralAI PG")
-    #     for episode in tf.range(self.max_episodes):
-    #         tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-    #         self.reset_states()
-    #         np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-    #         for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-    #         inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1], 'actions':self.action_zero_out, 'returns':self.rewards_zero}
-    #         self.PG_run_episode(inputs, episode)
 
 
 
@@ -1099,7 +1049,7 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _mixlog-abs-Nentropy3-log1p-Nreparam_obs-tsBoxF-dataBoxI_round
+machine, device, extra = 'dev', 0, '' # _Nparallel-forcepos-Nfullhist _Ntrain _mixlog-abs-Nentropy3-log1p-Nreparam _obs-tsBoxF-dataBoxI_round
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
