@@ -198,6 +198,56 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         params_size = num_components + event_size * num_components * 2
         return params_size
 
+class MixtureMultiNormalTriL(tfp.layers.DistributionLambda):
+    def __init__(self, num_components, event_shape=(), matrix_size=1, **kwargs):
+        compute_dtype = tf.keras.backend.floatx()
+        eps = tf.experimental.numpy.finfo(compute_dtype).eps
+        maxroot = tf.math.sqrt(tf.dtypes.as_dtype(compute_dtype).max)
+
+        params_shape = [num_components]+list(event_shape)
+        reinterpreted_batch_ndims = len(event_shape)
+        num_components_loc = num_components * np.prod(event_shape).item()
+        matrix_params = [matrix_size * (matrix_size + 1) // 2]
+        
+        kwargs.pop('make_distribution_fn', None) # for get_config serializing
+        num_components, num_components_loc, params_shape, matrix_params = tf.identity(num_components), tf.identity(num_components_loc), tf.identity(params_shape), tf.identity(matrix_params)
+        reinterpreted_batch_ndims, eps, maxroot = tf.identity(reinterpreted_batch_ndims), tf.identity(tf.constant(eps, compute_dtype)), tf.identity(tf.constant(maxroot, compute_dtype))
+        super(MixtureMultiNormalTriL, self).__init__(lambda input: MixtureMultiNormalTriL.new(input, num_components, num_components_loc, params_shape, matrix_params, reinterpreted_batch_ndims, eps, maxroot), **kwargs)
+        self._num_components, self._event_shape = num_components, event_shape
+
+    @staticmethod # this doesn't change anything, just keeps the variables seperate
+    def new(params, num_components, num_components_loc, params_shape, matrix_params, reinterpreted_batch_ndims, eps, maxroot):
+        # print("tracing -> MixtureMultiNormalTriL new")
+        mixture_params = params[..., :num_components]
+
+        components_params = params[..., num_components:]
+        loc_params = components_params[..., :num_components_loc]
+        scale_params = components_params[..., num_components_loc:]
+
+        batch_size = tf.shape(params)[:-1]
+        output_shape = tf.concat([batch_size, params_shape, [1]], axis=0)
+        loc_params = tf.reshape(loc_params, output_shape)
+        
+        # scale_params = tf.math.abs(scale_params)
+        # # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
+        # output_shape = tf.concat([output_shape, matrix_params], axis=0)
+        output_shape = tf.concat([batch_size, params_shape, matrix_params], axis=0)
+        scale_params = tf.reshape(scale_params, output_shape)
+        scale_params = tfp.math.fill_triangular(scale_params)
+
+        dist_mixture = tfp.distributions.Categorical(logits=mixture_params)
+        dist_component = tfp.distributions.MultivariateNormalTriL(loc=loc_params, scale_tril=scale_params)
+        dist_components = tfp.distributions.Independent(dist_component, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
+        dist = MixtureSameFamily(mixture_distribution=dist_mixture, components_distribution=dist_components)
+
+        return dist
+    @staticmethod
+    def params_size(num_components, event_shape=(), matrix_size=1, name=None):
+        event_size = np.prod(event_shape).item()
+        matrix_params = matrix_size * (matrix_size + 1) // 2
+        params_size = num_components + num_components * event_size + num_components * event_size * matrix_params # mix + loc + scale
+        return params_size
 
 
 from tensorflow.python.ops import special_math_ops
