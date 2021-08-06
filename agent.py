@@ -310,14 +310,14 @@ class ValueNet(tf.keras.Model):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size):
+    def __init__(self, arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         self.compute_zero, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
-        self.arch, self.env, self.env_render, self.force_cont_obs, self.force_cont_action = arch, env, env_render, force_cont_obs, force_cont_action
+        self.arch, self.env, self.env_render, self.value_cont, self.force_cont_obs, self.force_cont_action = arch, env, env_render, value_cont, force_cont_obs, force_cont_action
         self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
@@ -349,8 +349,12 @@ class GeneralAI(tf.keras.Model):
         if arch in ('TEST',):
             self.gen = GenNet('GN', [latent_spec], self.obs_spec, force_cont_obs, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.gen(inputs)
 
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=True, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.action(inputs)
-        if arch in ('AC','MU'): self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.action(inputs)
+        if arch in ('AC','MU'):
+            if value_cont:
+                value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+                self.value = GenNet('VN', value_spec, False, int(latent_size/8), net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.value(inputs)
+            else: self.value = ValueNet('VN', latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU','TEST'):
             inputs['actions'] = self.action_zero_out
@@ -479,17 +483,24 @@ class GeneralAI(tf.keras.Model):
         if isinfnan > 0: tf.print('NaN/Inf bound loss:', loss)
         return loss
 
+    def loss_entropy(self, dist): # "Soft Actor Critic" = try increase entropy
+        loss = self.compute_zero
+        if self.entropy_contrib > 0.0:
+            if isinstance(dist, list):
+                for i in range(len(dist)): loss = loss + dist[i].entropy()
+            else: loss = dist.entropy()
+            loss = -loss * self.entropy_contrib
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+        if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
+        return loss
+
     def loss_PG(self, dist, targets, returns): # policy gradient, actor/critic
         loss = self.loss_likelihood(dist, targets)
         returns = tf.cast(returns, self.compute_dtype)
         returns = tf.squeeze(returns, axis=-1)
+        loss = loss - np.e*2.0
         loss = loss * returns # * 1e-2
-        # loss = loss * tf.math.softplus(returns)
-        # if isinstance(dist, list):
-        #     entropy = self.compute_zero
-        #     for i in range(len(dist)): entropy = entropy + dist[i].entropy()
-        # else: entropy = dist.entropy()
-        # loss = loss - entropy * self.entropy_contrib # "Soft Actor Critic" = try increase entropy
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -553,7 +564,9 @@ class GeneralAI(tf.keras.Model):
         for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
         
         loss = {}
-        loss['total'] = self.loss_PG(action_dist, inputs['actions'], inputs['returns'])
+        loss['action'] = self.loss_PG(action_dist, inputs['actions'], inputs['returns'])
+        loss['entropy'] = self.loss_entropy(action_dist)
+        loss['total'] = loss['action'] + loss['entropy']
         return loss
 
     def PG_run_episode(self, inputs, episode, training=True):
@@ -568,7 +581,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), False, False,
-                tf.math.reduce_sum(outputs['returns']), False, False, False, False, False, False, False, False, False]
+                tf.math.reduce_mean(outputs['returns']), False, False, False, False, False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def PG(self):
@@ -639,9 +652,10 @@ class GeneralAI(tf.keras.Model):
         rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
         inputs['obs'] = rep_dist.sample()
 
-        values = self.value(inputs, training=training)
-        # value_logits = self.value(inputs, training=training); value_dist = self.value.dist(value_logits)
-        # values = value_dist.sample()
+        if self.value_cont:
+            value_logits = self.value(inputs, training=training); value_dist = self.value.dist[0](value_logits[0])
+            values = value_dist.sample()
+        else: values = self.value(inputs, training=training)
 
         # PG loss
         returns = tf.cast(inputs['returns'], self.compute_dtype)
@@ -669,9 +683,10 @@ class GeneralAI(tf.keras.Model):
         
         loss = {}
         loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
-        loss['value'] = self.loss_diff(advantages)
-        # loss['value'] = self.loss_likelihood(value_dist, inputs['returns'])
-        loss['total'] = loss['action'] + loss['value']
+        loss['entropy'] = self.loss_entropy(action_dist)
+        if self.value_cont: loss['value'] = self.loss_likelihood(value_dist, inputs['returns'])
+        else: loss['value'] = self.loss_diff(advantages)
+        loss['total'] = loss['action'] + loss['entropy'] + loss['value']
 
         loss['advantages'] = advantages
         return loss
@@ -690,7 +705,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
-                tf.math.reduce_sum(outputs['returns']), tf.math.reduce_sum(loss['advantages']), False, False, False, False, False, False, False, False]
+                tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), False, False, False, False, False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def AC(self):
@@ -999,7 +1014,7 @@ class GeneralAI(tf.keras.Model):
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables + self.done.trainable_variables + self.action.trainable_variables + self.value.trainable_variables))
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']), tf.math.reduce_sum(outputs['returns']), tf.math.reduce_sum(loss['advantages']), tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['done']),
+                tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']), tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']), tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['done']),
                 # tf.math.reduce_mean(loss_img['total']), tf.math.reduce_mean(outputs_img['returns']), tf.shape(outputs_img['rewards'])[0], False]
                 tf.math.reduce_mean(loss['policy']), tf.math.reduce_mean(loss['return']), False, False, False, False]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
@@ -1023,6 +1038,7 @@ max_episodes = 2000
 learn_rate = 1e-5
 entropy_contrib = 1e-8
 returns_disc = 1.0
+value_cont = True
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
@@ -1031,7 +1047,7 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _Nentropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
@@ -1051,8 +1067,8 @@ env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('Lunar
 # max_steps = 1 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-arch = 'PG' # Policy Gradient agent, PG loss
-# arch = 'AC' # Actor Critic, PG and advantage loss
+# arch = 'PG' # Policy Gradient agent, PG loss
+arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
@@ -1072,7 +1088,7 @@ if __name__ == '__main__':
 
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*attn_mem_multi)
+        model = GeneralAI(arch, env, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, memory_size=max_steps*attn_mem_multi)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
         ## debugging
@@ -1122,7 +1138,8 @@ if __name__ == '__main__':
         name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M"), extra)
         total_steps = np.sum(metrics['steps'])
         step_time = total_time/total_steps
-        title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time, learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps); print(title)
+        title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
+        title += "     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
