@@ -166,40 +166,6 @@ class TransNet(tf.keras.Model):
         return out
 
 
-class RewardNet(tf.keras.Model):
-    def __init__(self, name):
-        super(RewardNet, self).__init__()
-        num_components, event_shape = 16, (1,); params_size, self.dist = util.MixtureLogistic.params_size(num_components, event_shape), util.MixtureLogistic(num_components, event_shape)
-        inp, evo = 256, 32; self.net_arch = "{}[inD{}-cmp{}]".format(name, inp, num_components)
-        self.layer_flatten = tf.keras.layers.Flatten()
-        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-    def call(self, inputs, training=None):
-        out = self.layer_flatten(inputs['obs'])
-        out = self.layer_dense_in(out)
-        out = self.layer_dense_logits_out(out)
-        return out
-
-class DoneNet(tf.keras.Model):
-    def __init__(self, name):
-        super(DoneNet, self).__init__()
-        num_components, event_shape = 2, (1,); params_size, self.dist = util.Categorical.params_size(num_components, event_shape), util.Categorical(num_components, event_shape)
-        # params_size, self.dist = 1, tfp.layers.DistributionLambda(lambda input: tfp.distributions.Bernoulli(logits=input, dtype=tf.bool))
-        inp, evo = 256, 32; self.net_arch = "{}[inD{}-cmp{}]".format(name, inp, num_components)
-        self.layer_flatten = tf.keras.layers.Flatten()
-        self.layer_dense_in = tf.keras.layers.Dense(inp, activation=util.EvoNormS0(evo), use_bias=False, name='dense_in')
-        self.layer_dense_logits_out = tf.keras.layers.Dense(params_size, name='dense_logits_out')
-        # self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-    def call(self, inputs, training=None):
-        out = self.layer_flatten(inputs['obs'])
-        out = self.layer_dense_in(out)
-        out = self.layer_dense_logits_out(out)
-        return out
-
-
 class GenNet(tf.keras.Model):
     def __init__(self, name, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=1, force_det_out=False):
         super(GenNet, self).__init__()
@@ -338,7 +304,7 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU','TEST'):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size)
             outputs = self.rep(inputs)
             rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
@@ -360,10 +326,10 @@ class GeneralAI(tf.keras.Model):
             inputs['actions'] = self.action_zero_out
             self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=True, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.trans(inputs)
         if arch in ('MU','TEST'):
-            self.rwd = RewardNet('RWD'); outputs = self.rwd(inputs)
-            self.done = DoneNet('DON'); outputs = self.done(inputs)
-            # self.rwd = GenNet('RWD', self.reward_spec, force_cont_action, latent_size); outputs = self.rwd(inputs)
-            # self.done = GenNet('DON', self.done_spec, force_cont_action, latent_size); outputs = self.done(inputs)
+            reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+            self.rwd = GenNet('RD', reward_spec, False, latent_size, net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.rwd(inputs)
+            done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+            self.done = GenNet('DN', done_spec, False, int(latent_size/8), net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
@@ -499,7 +465,7 @@ class GeneralAI(tf.keras.Model):
         loss = self.loss_likelihood(dist, targets)
         returns = tf.cast(returns, self.compute_dtype)
         returns = tf.squeeze(returns, axis=-1)
-        loss = loss - np.e*2.0
+        loss = loss - np.e*9.0
         loss = loss * returns # * 1e-2
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
@@ -851,8 +817,8 @@ class GeneralAI(tf.keras.Model):
             trans_logits = self.trans(inputs_img); trans_dist = self.trans.dist(trans_logits)
             inputs_img['obs'] = trans_dist.sample()
 
-            rwd_logits = self.rwd(inputs_img); rwd_dist = self.rwd.dist(rwd_logits)
-            done_logits = self.done(inputs_img); done_dist = self.done.dist(done_logits)
+            rwd_logits = self.rwd(inputs_img); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+            done_logits = self.done(inputs_img); done_dist = self.done.dist[0](done_logits[0])
             inputs_img['rewards'], inputs_img['dones'] = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
 
             rewards = rewards.write(step, inputs_img['rewards'][-1])
@@ -941,14 +907,18 @@ class GeneralAI(tf.keras.Model):
         action_dist = [None]*self.action_spec_len
         for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
-        values = self.value(inputs, training=training)
+        if self.value_cont:
+            value_logits = self.value(inputs, training=training); value_dist = self.value.dist[0](value_logits[0])
+            values = value_dist.sample()
+        else: values = self.value(inputs, training=training)
 
         returns = tf.cast(inputs['returns'], self.compute_dtype)
         advantages = returns - values
 
         loss = {}
         loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
-        loss['value'] = self.loss_diff(advantages)
+        if self.value_cont: loss['value'] = self.loss_likelihood(value_dist, inputs['returns'])
+        else: loss['value'] = self.loss_diff(advantages)
 
 
         loss_policy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
@@ -990,14 +960,13 @@ class GeneralAI(tf.keras.Model):
             trans_logits = self.trans(inputs_img, training=training); trans_dist = self.trans.dist(trans_logits)
             inputs_img['obs'] = trans_dist.sample()
 
-            rwd_logits = self.rwd(inputs_img, training=training); rwd_dist = self.rwd.dist(rwd_logits)
-            done_logits = self.done(inputs_img, training=training); done_dist = self.done.dist(done_logits)
+            rwd_logits = self.rwd(inputs_img, training=training); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+            done_logits = self.done(inputs_img, training=training); done_dist = self.done.dist[0](done_logits[0])
 
             loss_reward = loss_reward.write(step, self.loss_likelihood(rwd_dist, inputs['rewards'][step:step+1]))
             loss_done = loss_done.write(step, self.loss_likelihood(done_dist, inputs['dones'][step:step+1]))
 
         loss['policy'], loss['return'], loss['reward'], loss['done'] = loss_policy.concat(), loss_return.concat(), loss_reward.concat(), loss_done.concat()
-        # loss['total'] = loss['policy'] + loss['return'] + loss['reward'] + loss['done']
         loss['total'] = loss['action'] + loss['value'] + loss['policy'] + loss['return'] + loss['reward'] + loss['done']
         loss['advantages'] = advantages
         return loss
@@ -1034,11 +1003,11 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 2000
+max_episodes = 100
 learn_rate = 1e-5
-entropy_contrib = 1e-8
+entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
-value_cont = True
+value_cont = False
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
@@ -1047,12 +1016,12 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _e-9
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
-# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
-env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
+# env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
 # env_name, max_steps, env_render, env = 'Qbert', 1024, False, gym.make('QbertNoFrameskip-v4') # max_steps 400000
 
@@ -1068,9 +1037,9 @@ env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('Lunar
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
-arch = 'AC' # Actor Critic, PG and advantage loss
+# arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
