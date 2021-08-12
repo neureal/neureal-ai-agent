@@ -845,28 +845,41 @@ class GeneralAI(tf.keras.Model):
         loss = {}
         returns = inputs['returns']
 
-        if self.value_cont:
-            value_logits = self.value(inputs, training=False); value_dist = self.value.dist[0](value_logits[0])
-            values = value_dist.sample()
-        else: values = self.value(inputs, training=False)
-        returns = tf.cast(returns, self.compute_dtype)
-        returns = returns - values
+        # with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_entropy, tf.GradientTape(persistent=True) as tape_policy:
+        with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_entropy:
+            action_logits = self.action(inputs, training=training)
+            action_dist = [None]*self.action_spec_len
+            for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
-        action_logits = self.action(inputs, training=training)
-        action_dist = [None]*self.action_spec_len
-        for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-        loss['action'] = self.loss_PG(action_dist, inputs['actions'], returns)
+        with tape_action:
+            if self.value_cont:
+                value_logits = self.value(inputs, training=False); value_dist = self.value.dist[0](value_logits[0])
+                values = value_dist.sample()
+            else: values = self.value(inputs, training=False)
+            returns = tf.cast(returns, self.compute_dtype)
+            returns = returns - values
+            loss['action'] = self.loss_PG(action_dist, inputs['actions'], returns)
+        gradients = tape_action.gradient(loss['action'], self.action.trainable_variables)
+        self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
 
-        loss['entropy'] = self.loss_PG(action_dist, inputs['actions'], inputs['entropy'])
+        with tape_entropy:
+            loss['entropy'] = self.loss_PG(action_dist, inputs['actions'], inputs['entropy'])
+        gradients = tape_entropy.gradient(loss['entropy'], self.action.trainable_variables)
+        self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
 
-        action_logits = self.policy(inputs, training=False)
-        action_dist = [None]*self.action_spec_len
-        for i in range(self.action_spec_len): action_dist[i] = self.policy.dist[i](action_logits[i])
-        loss['policy'] = -self.loss_likelihood(action_dist, inputs['actions'])
+        # with tape_policy:
+        #     action = [None]*self.action_spec_len
+        #     for i in range(self.action_spec_len): action[i] = action_dist[i].sample()
+        #     action_logits = self.policy(inputs, training=False)
+        #     action_dist = [None]*self.action_spec_len
+        #     for i in range(self.action_spec_len): action_dist[i] = self.policy.dist[i](action_logits[i])
+        #     loss['policy'] = -self.loss_likelihood(action_dist, action)
+        # gradients = tape_policy.gradient(loss['policy'], self.action.trainable_variables)
+        # self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
 
         # loss['total'] = loss['action']
-        # loss['total'] = loss['action'] + loss['entropy']
-        loss['total'] = loss['action'] + loss['entropy'] + loss['policy']
+        loss['total'] = loss['action'] + loss['entropy']
+        # loss['total'] = loss['action'] + loss['entropy'] + loss['policy']
         return loss
 
     def MU_actor(self, inputs):
@@ -888,10 +901,7 @@ class GeneralAI(tf.keras.Model):
             entropy_first = -rep_dist.log_prob(inputs['obs'])
 
             outputs_img = self.MU_imagine(inputs, entropy_first)
-            with tf.GradientTape() as tape:
-                loss_img = self.MU_img_learner(outputs_img)
-            gradients = tape.gradient(loss_img['total'], self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
+            loss_img = self.MU_img_learner(outputs_img)
 
             action_logits = self.action(inputs)
             action = [None]*self.action_spec_len
@@ -1045,7 +1055,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 300
+max_episodes = 3000
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -1058,7 +1068,7 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks or big data
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '_MUimg-entropy-values-policy-Netoe' # _train _entropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe
+machine, device, extra = 'dev', 0, '_MUimg-entropy-values-Npolicy-Netoe' # _train _entropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
