@@ -36,7 +36,7 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 class RepNet(tf.keras.Model):
     def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
-        super(RepNet, self).__init__()
+        super(RepNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -76,8 +76,8 @@ class RepNet(tf.keras.Model):
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             data = tf.cast(inputs['obs'][i], self.compute_dtype)
-            out = self.layer_flatten(data)
-            out = self.layer_dense_in[i](out)
+            data = self.layer_flatten(data)
+            out = self.layer_dense_in[i](data)
             out = self.layer_dense_in_lat[i](out)
             # out = self.layer_attn_in[i](None, data)
             # out = self.layer_attn_in2[i](out, data)
@@ -102,7 +102,7 @@ class RepNet(tf.keras.Model):
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
     def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1): # spec_in=[] for no action conditioning
-        super(TransNet, self).__init__()
+        super(TransNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -168,7 +168,7 @@ class TransNet(tf.keras.Model):
 
 class GenNet(tf.keras.Model):
     def __init__(self, name, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=2, memory_size=1, force_det_out=False):
-        super(GenNet, self).__init__()
+        super(GenNet, self).__init__(name=name)
         inp, mid, evo, mixture_size = latent_size*4, latent_size*4, int(latent_size/2), int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -234,7 +234,7 @@ class GenNet(tf.keras.Model):
 
 class ValueNet(tf.keras.Model):
     def __init__(self, name, latent_size, net_blocks, net_attn, net_lstm, num_heads=2, memory_size=1):
-        super(ValueNet, self).__init__()
+        super(ValueNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*4, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
         self.layer_flatten = tf.keras.layers.Flatten()
@@ -300,7 +300,7 @@ class GeneralAI(tf.keras.Model):
 
         if latent_dist == 0: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':0}
         if latent_dist == 1: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size, latent_size), 'num_components':0}
-        if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/8)}
+        if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)}
         self.latent_spec = latent_spec
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
@@ -320,7 +320,7 @@ class GeneralAI(tf.keras.Model):
         if arch in ('AC','MU'):
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-                self.value = GenNet('VN', value_spec, False, int(latent_size/1), net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.value(inputs)
+                self.value = GenNet('VN', value_spec, False, int(latent_size/2), net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size, force_det_out=False); outputs = self.value(inputs)
             else: self.value = ValueNet('VN', int(latent_size/2), net_blocks=1, net_attn=False, net_lstm=False, num_heads=2, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU','TEST'):
@@ -1014,12 +1014,12 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 attn_mem_multi = 1
 
-device_type = 'GPU' # use GPU for large networks or big data
+device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
 machine, device, extra = 'dev', 0, '' # _train _entropy3 _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe
 
-env_async, env_async_clock, env_async_speed = False, 0.001, 1000.0
+env_async, env_async_clock, env_async_speed = False, 0.001, 160.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1'); env.observation_space.dtype = np.dtype('float64')
 env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
@@ -1032,7 +1032,7 @@ env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('Lunar
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; env_name, max_steps, env_render, env = 'Trader2', 4096, False, gym.make('Trader-v0', agent_id=device, env=1, speed=env_async_speed)
+# import gym_trader; tenv = 1; env_name, max_steps, env_render, env = 'Trader'+str(tenv), 1024*32, False, gym.make('Trader-v0', agent_id=device, env=tenv, speed=env_async_speed)
 
 # max_steps = 1 # max replay buffer or train interval or bootstrap
 
@@ -1109,7 +1109,8 @@ if __name__ == '__main__':
         total_steps = np.sum(metrics['steps'])
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
-        title += "     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps); print(title)
+        title += "     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps)
+        title += "     |     a-clk:{}    a-spd:{}".format(env_async_clock, env_async_speed); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
