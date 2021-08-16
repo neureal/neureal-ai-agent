@@ -664,69 +664,12 @@ class GeneralAI(tf.keras.Model):
         loss['advantages'] = advantages
         return loss
 
-    def AC_learner_onestep(self, inputs_, training=True):
-        print("tracing -> GeneralAI AC_learner_onestep")
-        loss = {}
-
-        loss_v = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_a = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        adv = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        # inputs = {'obs':inputs_['obs'][0:1], 'actions':inputs_['actions'][0:1]}
-        inputs = {'obs':self.obs_zero, 'actions':self.action_zero_out}
-        inputs_lat = {'obs':self.latent_zero}
-        for step in tf.range(tf.shape(inputs_['dones'])[0]):
-
-            obs = [None]*self.obs_spec_len
-            for i in range(self.obs_spec_len):
-                obs[i] = inputs_['obs'][i][step:step+1]
-                obs[i].set_shape(self.obs_spec[i]['step_shape'])
-            inputs['obs'] = obs
-            with tf.GradientTape(persistent=True) as tape_value, tf.GradientTape(persistent=True) as tape_action:
-                rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
-                inputs_lat['obs'] = rep_dist.sample()
-
-            returns = inputs_['returns'][step:step+1]
-            with tape_value:
-                if self.value_cont:
-                    value_logits = self.value(inputs_lat, training=training); value_dist = self.value.dist[0](value_logits[0])
-                    loss_value = self.loss_likelihood(value_dist, returns)
-                    values = value_dist.sample()
-                else:
-                    values = self.value(inputs_lat, training=training)
-                    loss_value = self.loss_diff(returns, values)
-            gradients = tape_value.gradient(loss_value, self.rep.trainable_variables + self.value.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
-            loss_v = loss_v.write(step, loss_value)
-
-            returns = tf.cast(returns, self.compute_dtype)
-            advantages = returns - values
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                action[i] = inputs_['actions'][i][step:step+1]
-                action[i].set_shape(self.action_spec[i]['step_shape'])
-            with tape_action:
-                action_logits = self.action(inputs_lat, training=training)
-                action_dist = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_PG(action_dist, action, advantages)
-            gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-            loss_a = loss_a.write(step, loss_action)
-            adv = adv.write(step, advantages[0])
-
-        loss['value'], loss['action'] = loss_v.concat(), loss_a.concat()
-        loss['total'] = loss['value'] + loss['action']
-        loss['advantages'] = adv.concat()
-        return loss
-
     def AC_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI AC_run_episode")
         while not inputs['dones'][-1][0]:
             # tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             outputs, inputs = self.AC_actor(inputs)
-            # loss = self.AC_learner(outputs)
-            loss = self.AC_learner_onestep(outputs)
+            loss = self.AC_learner(outputs)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['total']), tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
@@ -1060,8 +1003,8 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 6000
-learn_rate = 1e-7 # 5 = testing, 6 = more stable/slower
+max_episodes = 3000
+learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = False
@@ -1073,7 +1016,7 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-onestep
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 160.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
