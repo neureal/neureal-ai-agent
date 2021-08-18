@@ -335,24 +335,27 @@ class GeneralAI(tf.keras.Model):
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
 
-        metrics = {'rewards_total':np.float64,'rewards_final':np.float64,'steps':np.int64}
         metrics_loss = OrderedDict()
-        if arch in ('PG','AC','MU','TRANS'): metrics_loss['nets_a'] = {'loss_action':np.float64}
-        if arch in ('AC','MU'): metrics_loss['nets_v'] = {'loss_value':np.float64}
-        if arch in ('MU','TEST'):
-            metrics_loss['nets2'] = {'loss_policy':np.float64,'loss_return':np.float64}
-            metrics_loss['nets1'] = {'loss_rwd':np.float64,'loss_done':np.float64}
-        if arch in ('PG',): metrics_loss['extras'] = {'returns':np.float64}
-        if arch in ('AC','MU','TEST'): metrics_loss['extras'] = {'returns':np.float64,'advantages':np.float64}
+        metrics_loss['2rewards*'] = {'rewards_total+':np.float64, 'rewards_final=':np.float64}
+        metrics_loss['1steps'] = {'steps+':np.int64}
+        if arch in ('PG','TRANS',): metrics_loss['1nets'] = {'loss_action':np.float64}
+        if arch in ('AC','MU',): metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
+        if arch in ('MU',):
+            metrics_loss['1nets1'] = {'loss_policy':np.float64, 'loss_return':np.float64}
+            metrics_loss['1nets2'] = {'loss_rwd':np.float64, 'loss_done':np.float64}
+        if arch in ('PG',): metrics_loss['1extras'] = {'returns':np.float64}
+        if arch in ('AC','MU',): metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
         # if arch in ('MU','TEST'):
         #     metrics_loss['nets3'] = {'loss_total_img':np.float64,'returns_img':np.float64}
         #     # metrics_loss['extras1'] = {'steps_img':np.float64,'':np.float64}
         #     metrics_loss['extras1'] = {'steps_img':np.float64}
+        # metrics_loss['2trader*'] = {'balance_final=':np.float64, 'balance_avg':np.float64, 'equity':np.float64, 'margin_free':np.float64}
 
-        for k in metrics.keys(): metrics[k] = np.zeros((max_episodes), metrics[k])
         for loss_group in metrics_loss.values():
-            for k in loss_group.keys(): loss_group[k] = [[] for i in range(max_episodes)]
-        self.metrics_main, self.metrics_loss = metrics, metrics_loss
+            for k in loss_group.keys():
+                if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
+                else: loss_group[k] = [[] for i in range(max_episodes)]
+        self.metrics_loss = metrics_loss
         
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -364,12 +367,13 @@ class GeneralAI(tf.keras.Model):
         args = list(args)
         for i in range(len(args)): args[i] = args[i].item()
         episode = args[0]
-        self.metrics_main['rewards_total'][episode] += args[1]
-        self.metrics_main['rewards_final'][episode] = args[2]
-        self.metrics_main['steps'][episode] += args[3]
-        idx = 4
+        idx = 1
         for loss_group in self.metrics_loss.values():
-            for k in loss_group.keys(): loss_group[k][episode].append(args[idx]); idx += 1
+            for k in loss_group.keys():
+                if k.endswith('='): loss_group[k][episode] = args[idx]
+                elif k.endswith('+'): loss_group[k][episode] += args[idx]
+                else: loss_group[k][episode].append(args[idx])
+                idx += 1
         return np.asarray(0, np.int32) # dummy
 
 
@@ -626,11 +630,11 @@ class GeneralAI(tf.keras.Model):
         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
 
         returns = tf.cast(returns, self.compute_dtype)
-        advantages = returns - values # new chance of chosen action: if over predict = push away, if under predict = push closer, if can predict = stay
         # with tf.GradientTape() as tape_action:
         #     rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
         #     inputs_lat['obs'] = rep_dist.sample()
         with tape_action:
+            advantages = returns - values # new chance of chosen action: if over predict = push away, if under predict = push closer, if can predict = stay
             action_logits = self.action(inputs_lat, training=training)
             action_dist = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
@@ -651,7 +655,9 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
-                tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages'])]
+                tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
+                # tf.math.reduce_mean(outputs['obs'][3]), tf.math.reduce_mean(outputs['obs'][3]), tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),
+            ]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def AC(self):
@@ -1000,7 +1006,7 @@ attn_mem_multi = 1
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing
 
 env_async, env_async_clock, env_async_speed = False, 0.001, 160.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
@@ -1082,14 +1088,14 @@ if __name__ == '__main__':
 
 
         ## metrics
-        metrics, metrics_loss = model.metrics_main, model.metrics_loss
+        metrics_loss = model.metrics_loss
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
                 for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 100,000-200,000 episodes
 
         name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%Y_%m_%d-%H-%M"), extra)
-        total_steps = np.sum(metrics['steps'])
+        total_steps = np.sum(metrics_loss['1steps']['steps+'])
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
         title += "     |     lr:{}    dis:{}    en:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, attn_mem_multi, max_steps)
@@ -1098,25 +1104,16 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
         plt.figure(num=name, figsize=(34, 16), tight_layout=True)
-        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 3 + len(metrics_loss)
-
-        rows = 2; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        metric_name = 'rewards_total'; metric = np.asarray(metrics[metric_name], np.float64)
-        plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        metric_name = 'rewards_final'; metric = np.asarray(metrics[metric_name], np.float64)
-        plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left'); plt.title(title)
-        rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
-        metric_name = 'steps'; metric = np.asarray(metrics[metric_name], np.float64)
-        plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-        plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
+        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, len(metrics_loss) + 1
 
         for loss_group_name, loss_group in metrics_loss.items():
-            rows = 1; plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); i+=rows; plt.grid(axis='y',alpha=0.3)
+            rows, col = int(loss_group_name[0]), 0
+            if loss_group_name.endswith('*'): plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); plt.grid(axis='y',alpha=0.3)
             for metric_name, metric in loss_group.items():
+                if not loss_group_name.endswith('*'): plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows); col+=1; plt.grid(axis='y',alpha=0.3)
                 metric = np.asarray(metric, np.float64); plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-            plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
-
+                plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
+            i+=rows
         plt.show()
 
 
