@@ -349,7 +349,8 @@ class GeneralAI(tf.keras.Model):
         #     metrics_loss['nets3'] = {'loss_total_img':np.float64,'returns_img':np.float64}
         #     # metrics_loss['extras1'] = {'steps_img':np.float64,'':np.float64}
         #     metrics_loss['extras1'] = {'steps_img':np.float64}
-        # metrics_loss['2trader*'] = {'balance_final=':np.float64, 'balance_avg':np.float64, 'equity':np.float64, 'margin_free':np.float64}
+        # metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
+        # metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
 
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
@@ -656,7 +657,7 @@ class GeneralAI(tf.keras.Model):
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
                 tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
-                # tf.math.reduce_mean(outputs['obs'][3]), tf.math.reduce_mean(outputs['obs'][3]), tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),
+                # tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),
             ]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
@@ -1104,7 +1105,8 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
         plt.figure(num=name, figsize=(34, 16), tight_layout=True)
-        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, len(metrics_loss) + 1
+        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 0
+        for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
         for loss_group_name, loss_group in metrics_loss.items():
             rows, col = int(loss_group_name[0]), 0
@@ -1113,6 +1115,7 @@ if __name__ == '__main__':
                 if not loss_group_name.endswith('*'): plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows); col+=1; plt.grid(axis='y',alpha=0.3)
                 metric = np.asarray(metric, np.float64); plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
+            if i == 0: plt.title(title)
             i+=rows
         plt.show()
 
