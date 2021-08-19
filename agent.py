@@ -1103,18 +1103,20 @@ if __name__ == '__main__':
         title += "     |     a-clk:{}    a-spd:{}".format(env_async_clock, env_async_speed); print(title)
 
         import matplotlib as mpl
-        mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue', 'lightblue', 'green', 'lime', 'red', 'lavender', 'turquoise', 'cyan', 'magenta', 'salmon', 'yellow', 'gold', 'black', 'brown', 'purple', 'pink', 'orange', 'teal', 'coral', 'darkgreen', 'tan'])
+        mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
         plt.figure(num=name, figsize=(34, 16), tight_layout=True)
-        xrng, i, vplts = np.arange(0, max_episodes, 1), 0, 0
+        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.0
         for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
         for loss_group_name, loss_group in metrics_loss.items():
-            rows, col = int(loss_group_name[0]), 0
-            if loss_group_name.endswith('*'): plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); plt.grid(axis='y',alpha=0.3)
+            rows, col, m_min, m_max, combine = int(loss_group_name[0]), 0, [0]*len(loss_group), [0]*len(loss_group), loss_group_name.endswith('*')
+            if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows); plt.grid(axis='y',alpha=0.3)
             for metric_name, metric in loss_group.items():
-                if not loss_group_name.endswith('*'): plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows); col+=1; plt.grid(axis='y',alpha=0.3)
-                metric = np.asarray(metric, np.float64); plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-                plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left')
+                metric = np.asarray(metric, np.float64); m_min[col], m_max[col] = np.nanquantile(metric, lim), np.nanquantile(metric, 1.0-lim)
+                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, ylim=(m_min[col], m_max[col])); plt.grid(axis='y',alpha=0.3)
+                plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
+                plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left'); col+=1
+            if combine: spg.set_ylim(np.min(m_min), np.max(m_max))
             if i == 0: plt.title(title)
             i+=rows
         plt.show()
