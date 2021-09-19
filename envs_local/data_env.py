@@ -28,7 +28,7 @@ class DataEnv(gym.Env):
             space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
             space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
-            # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # limits rep learning
+            # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # combine to latent
             self.observation_space = space
 
             # space = gym.spaces.Dict()
@@ -94,9 +94,9 @@ class DataEnv(gym.Env):
         obs = OrderedDict()
         obs['timestamp'] = np.asarray([self.ds_idx], self.observation_space['timestamp'].dtype)
         obs['data'] = np.asarray(self.ds[self.ds_idx], self.observation_space['data'].dtype)
-        # latent = np.concatenate([self.ds[self.ds_idx]]) # limits rep learning
-        # latent = np.concatenate([self.ds[self.ds_idx],[self.ds_idx]]) # limits rep learning
-        # obs['data'] = np.asarray(latent, self.observation_space['data'].dtype) # limits rep learning
+        # latent = np.concatenate([self.ds[self.ds_idx]])
+        # latent = np.concatenate([self.ds[self.ds_idx],[self.ds_idx]]) # combine to latent
+        # obs['data'] = np.asarray(latent, self.observation_space['data'].dtype) # combine to latent
         if self.data_src == 'shkspr':
             if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]

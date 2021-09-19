@@ -2,7 +2,7 @@ from collections import OrderedDict
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
-import gym
+import gym, numba
 
 # TODO put this in seperate repo
 # TODO test to make sure looping constructs are working like I think, ie python loop only happens once on first trace and all refs are correct on subsequent runs
@@ -24,6 +24,30 @@ def discretize(inputs, spec, force_cont):
     # inputs = tf.dtypes.saturate_cast(inputs, spec['dtype'])
     inputs = tf.squeeze(inputs)
     return inputs
+
+@numba.jit((numba.float64[:], numba.int64), nopython=True, nogil=True)
+def ewma(arr_in, window):
+    n = arr_in.shape[0]
+    ewma = np.empty(n, dtype=numba.float64)
+    alpha = 2 / float(window + 1)
+    w = 1
+    ewma_old = arr_in[0]
+    ewma[0] = ewma_old
+    for i in range(1, n):
+        w += (1-alpha)**i
+        ewma_old = ewma_old*(1-alpha) + arr_in[i]
+        ewma[i] = ewma_old / w
+    return ewma
+
+@numba.jit((numba.float64[:], numba.int64), nopython=True, nogil=True)
+def ewma_ih(arr_in, window): # infinite history, faster
+    n = arr_in.shape[0]
+    ewma = np.empty(n, dtype=numba.float64)
+    alpha = 2 / float(window + 1)
+    ewma[0] = arr_in[0]
+    for i in range(1, n): ewma[i] = arr_in[i] * alpha + ewma[i-1] * (1 - alpha)
+    return ewma
+
 
 
 class EvoNormS0(tf.keras.layers.Layer):
@@ -179,8 +203,8 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         loc_params = tf.reshape(loc_params, output_shape)
         
         scale_params = tf.math.abs(scale_params)
-        scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
-        # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
+        scale_params = tf.clip_by_value(scale_params, eps, maxroot)
         scale_params = tf.reshape(scale_params, output_shape)
 
         dist_mixture = tfp.distributions.Categorical(logits=mixture_params)
@@ -202,58 +226,60 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, num_heads, latent_size, memory_size, **kwargs):
-        compute_dtype = tf.keras.backend.floatx()
+    def __init__(self, latent_size, num_heads=1, memory_size=1, residual=True, use_bias=False, **kwargs):
         key_dim = int(latent_size/num_heads)
-        super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=True, **kwargs)
+        super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
+        mem_zero = tf.constant(np.full((1, memory_size, latent_size), 0), tf.keras.backend.floatx())
+        self._mem_size, self._mem_zero, self._residual = tf.identity(memory_size), tf.identity(mem_zero), residual
 
-        mem_zero = tf.constant(np.full((1, memory_size, latent_size), 0), compute_dtype)
-        self._mem_size, self._mem_zero = tf.identity(memory_size), tf.identity(mem_zero)
+        # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
+        # self._query_scale = tf.identity(query_scale)
     
     def build(self, input_shape):
         self._mem_idx = tf.Variable(self._mem_size, trainable=False, name='mem_idx')
         self._memory = tf.Variable(self._mem_zero, trainable=False, name='memory')
-        self._residual = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
+        if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
-    def _compute_attention(self, query, key, value, attention_mask=None, training=None):
-        attention_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
-        attention_scores = self._masked_softmax(attention_scores, attention_mask)
-        attention_output = special_math_ops.einsum(self._combine_equation, attention_scores, value)
-        return attention_output, attention_scores
+    def _compute_attention(self, query, key, value, attention_mask=None):
+        # query = tf.math.multiply(query, self._query_scale)
+        attn_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
+        attn_scores = self._masked_softmax(attn_scores, attention_mask)
+        attn_output = special_math_ops.einsum(self._combine_equation, attn_scores, value)
+        return attn_output, attn_scores
 
-    def call(self, query, attention_mask=None, training=None):
+    def call(self, query, attention_mask=None, auto_mask=None, store_memory=True):
         if not self._built_from_signature: self._build_from_signature(query=query, value=query, key=None)
 
         time_size = tf.shape(query)[1]
-
-        drop_off = tf.roll(self._memory, shift=-time_size, axis=1)
-        self._memory.assign(drop_off)
-        self._memory[:,-time_size:].assign(query)
-
-        if self._mem_idx > 0:
-            mem_idx_next = self._mem_idx - time_size
-            if mem_idx_next < 0: mem_idx_next = 0
-            self._mem_idx.assign(mem_idx_next)
+        if store_memory:
+            drop_off = tf.roll(self._memory, shift=-time_size, axis=1)
+            self._memory.assign(drop_off)
+            self._memory[:,-time_size:].assign(query)
+            if self._mem_idx > 0:
+                mem_idx_next = self._mem_idx - time_size
+                if mem_idx_next < 0: mem_idx_next = 0
+                self._mem_idx.assign(mem_idx_next)
 
         value = self._memory[:,self._mem_idx:]
         seq_size = tf.shape(value)[1]
-
+        
         query_ = self._query_dense(query)
         key = self._key_dense(value)
         value = self._value_dense(value)
 
-        # if training: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
+        if auto_mask: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
 
-        attention_output, attention_scores = self._compute_attention(query_, key, value, attention_mask)
+        attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
         
-        scores = tf.math.reduce_sum(attention_scores, axis=(1,2))[0]
-        scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
-        scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
-        self._memory[:,self._mem_idx:].assign(scores)
+        if store_memory:
+            scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0]
+            scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
+            scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+            self._memory[:,self._mem_idx:].assign(scores)
 
-        attention_output = self._output_dense(attention_output)
-        attention_output = query + attention_output * self._residual # ReZero
-        return attention_output
+        attn_output = self._output_dense(attn_output)
+        if self._residual: attn_output = query + attn_output * self._residual_amt # ReZero
+        return attn_output
 
     def reset_states(self):
         self._mem_idx.assign(self._mem_size)
@@ -262,53 +288,76 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
 
 class CrossAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, num_heads, latent_size, init, **kwargs):
-        compute_dtype = tf.keras.backend.floatx()
-        key_dim = int(latent_size/num_heads)
-        super(CrossAttention, self).__init__(num_heads=tf.identity(num_heads), key_dim=tf.identity(key_dim), use_bias=False, **kwargs)
+    def __init__(self, latent_size, num_latents=1, num_heads=1, residual=True, norm=None, use_bias=False, init_zero=None, **kwargs):
+        super(CrossAttention, self).__init__(num_heads=tf.identity(num_heads), key_dim=tf.identity(latent_size), use_bias=use_bias, **kwargs)
+        self._latent_size, self._num_latents, self._residual = tf.identity(latent_size), tf.identity(num_latents), residual
 
-        init_zero = tf.constant(np.full((1, 1, latent_size), 1), compute_dtype)
-        self._init, self._init_zero, self._evo = init, tf.identity(init_zero), tf.identity(int(latent_size/2))
+        if init_zero is None:
+            init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
+            # init_zero = tf.clip_by_value(init_zero, -np.e, np.e)
+            init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
+        init_zero = tf.constant(init_zero, dtype=tf.keras.backend.floatx())
+        self._init_zero = tf.identity(init_zero)
+
+        self._norm = norm
+        if norm is not None:
+            float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
+            self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
+            self._layer_norm_value = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_value')
+
+        # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
+        # self._query_scale = tf.identity(query_scale)
+        
     
     def build(self, input_shape):
-        if self._init: self._init_latent = tf.Variable(self._init_zero, trainable=True, name='init_latent')
-        # self._residual = tf.Variable(0.0, trainable=True, name='residual') # ReZero
+        self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
+        if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
-    def _compute_attention(self, query, key, value, attention_mask=None, training=None):
-        attention_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
-        attention_scores = self._masked_softmax(attention_scores, attention_mask)
-        attention_output = special_math_ops.einsum(self._combine_equation, attention_scores, value)
-        return attention_output, attention_scores
+    def _compute_attention(self, query, key, value, attention_mask=None):
+        # query = tf.math.multiply(query, self._query_scale)
+        attn_scores = special_math_ops.einsum(self._dot_product_equation, key, query)
+        attn_scores = self._masked_softmax(attn_scores, attention_mask) # TODO can I replace softmax here with somthing more log likelihood related? (continuous attn)
+        attn_output = special_math_ops.einsum(self._combine_equation, attn_scores, value)
+        return attn_output, attn_scores
 
-    def call(self, query, value, attention_mask=None, training=None):
-        batch_size = tf.shape(value)[0]
-        if self._init: query = tf.broadcast_to(self._init_latent, (batch_size, 1, tf.shape(self._init_latent)[-1]))
-        else: query = tf.expand_dims(query, axis=1)
-        value = tf.reshape(value, (batch_size, -1, tf.shape(value)[-1]))
+    # value[0](batch) = time dim, value[1:-2] = space/feat dim, value[-1] = channel dim
+    def call(self, value, num_latents=None, attention_mask=None):
+        value = tf.reshape(value, (1, -1, tf.shape(value)[-1]))
+        query = self._init_latent if num_latents is None else self._init_latent[:,:num_latents]
 
-        if not self._built_from_signature:
-            self._build_from_signature(query=query, value=value, key=None)
-            with tf.init_scope():
-                self._query_dense.activation = EvoNormS0(self._evo)
-                self._key_dense.activation = EvoNormS0(self._evo)
-                self._value_dense.activation = EvoNormS0(self._evo)
+        if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
 
+        # TODO loop through value or query if too big for memory
         query_ = self._query_dense(query)
         key = self._key_dense(value)
+        if self._norm is not None: key = self._layer_norm_key(key)
         value = self._value_dense(value)
+        if self._norm is not None: value = self._layer_norm_value(value)
 
-        attention_output, attention_scores = self._compute_attention(query_, key, value, attention_mask)
+        attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
 
-        attention_output = self._output_dense(attention_output)
-        # attention_output = query + attention_output * self._residual # ReZero
-
-        attention_output = tf.squeeze(attention_output, axis=1)
-        return attention_output
-
-    # def reset_states(self):
-    #     if self._init: self._init_latent.assign(self._init_zero)
+        attn_output = self._output_dense(attn_output)
+        if self._residual: attn_output = query + attn_output * self._residual_amt # ReZero
+        attn_output = tf.squeeze(attn_output, axis=0)
+        return attn_output
 
 
+class MLPBlock(tf.keras.layers.Layer):
+    def __init__(self, hidden_size, latent_size, evo=None, residual=True, **kwargs):
+        super(MLPBlock, self).__init__(**kwargs)
+        if evo is None: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=tf.keras.activations.gelu, use_bias=False, name='dense')
+        else: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense')
+        self._layer_dense_logits = tf.keras.layers.Dense(latent_size, name='dense_logits')
+        self._residual = residual
+        
+    def build(self, input_shape):
+        if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
+
+    def call(self, input):
+        out = self._layer_dense(input)
+        out = self._layer_dense_logits(out)
+        if self._residual: out = input + out * self._residual_amt # Rezero
+        return out
 
 
 def gym_get_space_zero(space):
