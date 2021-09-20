@@ -53,39 +53,39 @@ def ewma_ih(arr_in, window): # infinite history, faster
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=None, axis=-1, name=None):
         super(EvoNormS0, self).__init__(name=name)
-        self.groups, self.axis = groups, axis
+        self._groups, self._axis = groups, axis
         if eps is None: eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
-        self.eps = tf.identity(tf.constant(eps, dtype=self.compute_dtype))
+        self._eps = tf.identity(tf.constant(eps, dtype=self.compute_dtype))
 
     def build(self, input_shape):
         inlen = len(input_shape)
         shape = [1] * inlen
-        shape[self.axis] = input_shape[self.axis]
-        self.gamma = self.add_weight(name="gamma", shape=shape, initializer=tf.keras.initializers.Ones())
-        self.beta = self.add_weight(name="beta", shape=shape, initializer=tf.keras.initializers.Zeros())
-        self.v1 = self.add_weight(name="v1", shape=shape, initializer=tf.keras.initializers.Ones())
+        shape[self._axis] = input_shape[self._axis]
+        self._gamma = self.add_weight(shape=shape, initializer=tf.keras.initializers.Ones(), name='gamma')
+        self._beta = self.add_weight(shape=shape, initializer=tf.keras.initializers.Zeros(), name='beta')
+        self._v1 = self.add_weight(shape=shape, initializer=tf.keras.initializers.Ones(), name='v1')
 
-        groups = min(input_shape[self.axis], self.groups)
+        groups = min(input_shape[self._axis], self._groups)
         group_shape = input_shape.as_list()
-        group_shape[self.axis] = input_shape[self.axis] // groups
-        group_shape.insert(self.axis, groups)
-        self.group_shape = tf.Variable(group_shape, trainable=False, name='group_shape')
+        group_shape[self._axis] = input_shape[self._axis] // groups
+        group_shape.insert(self._axis, groups)
+        self._group_shape = tf.Variable(group_shape, trainable=False, name='group_shape')
 
-        std_shape = list(range(1, inlen+self.axis))
+        std_shape = list(range(1, inlen + self._axis))
         std_shape.append(inlen)
-        self.std_shape = tf.identity(std_shape)
+        self._std_shape = tf.identity(std_shape)
 
     @tf.function
     def call(self, inputs, training=True):
         input_shape = tf.shape(inputs)
-        self.group_shape[0].assign(input_shape[0]) # use same learned parameters with different batch size
-        grouped_inputs = tf.reshape(inputs, self.group_shape)
-        _, var = tf.nn.moments(grouped_inputs, self.std_shape, keepdims=True)
-        std = tf.sqrt(var + self.eps)
-        std = tf.broadcast_to(std, self.group_shape)
+        self._group_shape[0].assign(input_shape[0]) # use same learned parameters with different batch size
+        grouped_inputs = tf.reshape(inputs, self._group_shape)
+        _, var = tf.nn.moments(grouped_inputs, self._std_shape, keepdims=True)
+        std = tf.sqrt(var + self._eps)
+        std = tf.broadcast_to(std, self._group_shape)
         group_std = tf.reshape(std, input_shape)
 
-        return (inputs * tf.math.sigmoid(self.v1 * inputs)) / group_std * self.gamma + self.beta
+        return (inputs * tf.math.sigmoid(self._v1 * inputs)) / group_std * self._gamma + self._beta
 
 
 
