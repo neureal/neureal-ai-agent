@@ -45,7 +45,7 @@ class RepNet(tf.keras.Model):
         # TODO how to loop through inputs?
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
-            if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=num_heads, residual=False, norm=True, name='attn_in_{:02d}'.format(i))]
+            if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=1, norm=True, residual=False, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         # TODO duplicate per net_ins for better conditioning?
@@ -106,7 +106,7 @@ class TransNet(tf.keras.Model):
         # self.net_inputs = ['actions']*len(spec_in)+['obs'] # action conditioning/embedding
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
-            if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=num_heads, residual=False, norm=True, name='attn_in_{:02d}'.format(i))]
+            if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=1, norm=True, residual=False, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -190,7 +190,7 @@ class GenNet(tf.keras.Model):
 
         self.layer_attn_out, self.layer_mlp_out_logits = [], []
         for i in range(self.net_outs):
-            if self.net_attn_io: self.layer_attn_out += [util.CrossAttention(latent_size=params_size[i], num_latents=max_steps, num_heads=num_heads, residual=False, name='attn_out_{:02d}'.format(i))]
+            if self.net_attn_io: self.layer_attn_out += [util.CrossAttention(latent_size=params_size[i], num_latents=max_steps, num_heads=1, norm=False, residual=False, name='attn_out_{:02d}'.format(i))]
             self.layer_mlp_out_logits += [util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{:02d}'.format(i))]
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -280,7 +280,7 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)} # continuous
         self.latent_spec = latent_spec
 
-        net_attn, net_lstm = False, False
+        net_attn, net_lstm = True, False
         memory_size = (attn_num_latents if attn_num_latents > 1 else max_steps) * attn_mem_multi
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
@@ -295,7 +295,7 @@ class GeneralAI(tf.keras.Model):
 
         # if arch in ('TEST',):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=16, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU',):
             if value_cont:
@@ -978,7 +978,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 3000
+max_episodes = 15000
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -997,8 +997,8 @@ machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
-env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
-# env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0')
+# env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
+env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
 # env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # max_steps 21600
 # env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0')
 # env_name, max_steps, env_render, env = 'ProcgenMiner', 1024, False, gym.make('procgen-miner-v0')
@@ -1017,8 +1017,8 @@ env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('Lunar
 # max_steps = 1 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG' # Policy Gradient agent, PG loss
-arch = 'AC' # Actor Critic, PG and advantage loss
+arch = 'PG' # Policy Gradient agent, PG loss
+# arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
@@ -1083,7 +1083,7 @@ if __name__ == '__main__':
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
                 for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
-        # TODO np.mean, reduce size if above 100,000-200,000 episodes
+        # TODO np.mean, reduce size if above 200,000 episodes
 
         name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%y-%m-%d-%H-%M-%S"), extra)
         total_steps = np.sum(metrics_loss['1steps']['steps+'])

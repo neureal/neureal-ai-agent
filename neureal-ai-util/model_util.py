@@ -226,11 +226,16 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, latent_size, num_heads=1, memory_size=1, residual=True, use_bias=False, **kwargs):
+    def __init__(self, latent_size, num_heads=1, memory_size=1, sort_memory=False, residual=True, use_bias=False, **kwargs):
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
+        self._mem_size, self._sort_memory, self._residual = tf.identity(memory_size), sort_memory, residual
+
         mem_zero = tf.constant(np.full((1, memory_size, latent_size), 0), tf.keras.backend.floatx())
-        self._mem_size, self._mem_zero, self._residual = tf.identity(memory_size), tf.identity(mem_zero), residual
+        self._mem_zero = tf.identity(mem_zero)
+        if sort_memory:
+            mem_score_zero = tf.constant(np.full((1, memory_size), 0), tf.keras.backend.floatx())
+            self._mem_score_zero = tf.identity(mem_score_zero)
 
         # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
         # self._query_scale = tf.identity(query_scale)
@@ -238,6 +243,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def build(self, input_shape):
         self._mem_idx = tf.Variable(self._mem_size, trainable=False, name='mem_idx')
         self._memory = tf.Variable(self._mem_zero, trainable=False, name='memory')
+        if self._sort_memory: self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
     def _compute_attention(self, query, key, value, attention_mask=None):
@@ -255,6 +261,13 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             drop_off = tf.roll(self._memory, shift=-time_size, axis=1)
             self._memory.assign(drop_off)
             self._memory[:,-time_size:].assign(query)
+
+            if self._sort_memory:
+                drop_off = tf.roll(self._mem_score, shift=-time_size, axis=1)
+                self._mem_score.assign(drop_off)
+                zero = self._mem_score_zero[:,-time_size:]
+                self._mem_score[:,-time_size:].assign(zero)
+
             if self._mem_idx > 0:
                 mem_idx_next = self._mem_idx - time_size
                 if mem_idx_next < 0: mem_idx_next = 0
@@ -271,11 +284,25 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
         
-        if store_memory:
-            scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0]
-            scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
-            scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
-            self._memory[:,self._mem_idx:].assign(scores)
+        if store_memory and self._sort_memory:
+            # scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0]
+            # scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
+            # scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+            # self._memory[:,self._mem_idx:].assign(scores)
+
+            scores = tf.math.reduce_mean(attn_scores, axis=(1,2))[0] # heads
+            # norm = tf.cast(tf.shape(scores)[0], dtype=self.compute_dtype)
+            # scores = tf.math.multiply(scores, norm)
+            scores = tf.math.add(self._mem_score[:,self._mem_idx:], scores)
+            self._mem_score[:,self._mem_idx:].assign(scores)
+
+            scores = tf.argsort(scores[0], axis=-1, direction='ASCENDING', stable=True)
+
+            mem_sorted = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+            self._memory[:,self._mem_idx:].assign(mem_sorted)
+
+            scores_sorted = tf.gather(self._mem_score[:,self._mem_idx:], scores, axis=1)
+            self._mem_score[:,self._mem_idx:].assign(scores_sorted)
 
         attn_output = self._output_dense(attn_output)
         if self._residual: attn_output = query + attn_output * self._residual_amt # ReZero
@@ -284,31 +311,33 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def reset_states(self):
         self._mem_idx.assign(self._mem_size)
         self._memory.assign(self._mem_zero)
+        if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
 
 
 
 class CrossAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, latent_size, num_latents=1, num_heads=1, residual=True, norm=None, use_bias=False, init_zero=None, **kwargs):
+    def __init__(self, latent_size, num_latents=1, num_heads=1, norm=False, residual=True, use_bias=False, init_zero=None, init_zero_axis=-1, **kwargs):
         super(CrossAttention, self).__init__(num_heads=tf.identity(num_heads), key_dim=tf.identity(latent_size), use_bias=use_bias, **kwargs)
-        self._latent_size, self._num_latents, self._residual = tf.identity(latent_size), tf.identity(num_latents), residual
+        self._latent_size, self._num_latents, self._norm, self._residual = tf.identity(latent_size), tf.identity(num_latents), norm, residual
 
         if init_zero is None:
-            init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
-            # init_zero = tf.clip_by_value(init_zero, -np.e, np.e)
-            init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
+            # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
+            # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
+            init_zero = np.linspace(-1.0, 1.0, num_latents)
+            init_zero = np.expand_dims(init_zero, axis=init_zero_axis)
+            init_zero = np.repeat(init_zero, latent_size, axis=init_zero_axis)
+            init_zero = np.expand_dims(init_zero, axis=0)
         init_zero = tf.constant(init_zero, dtype=tf.keras.backend.floatx())
         self._init_zero = tf.identity(init_zero)
 
-        self._norm = norm
-        if norm is not None:
+        if norm:
             float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
             self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
             self._layer_norm_value = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_value')
 
         # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
         # self._query_scale = tf.identity(query_scale)
-        
-    
+
     def build(self, input_shape):
         self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
@@ -330,9 +359,9 @@ class CrossAttention(tf.keras.layers.MultiHeadAttention):
         # TODO loop through value or query if too big for memory
         query_ = self._query_dense(query)
         key = self._key_dense(value)
-        if self._norm is not None: key = self._layer_norm_key(key)
+        if self._norm: key = self._layer_norm_key(key)
         value = self._value_dense(value)
-        if self._norm is not None: value = self._layer_norm_value(value)
+        if self._norm: value = self._layer_norm_value(value)
 
         attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
 
@@ -340,6 +369,7 @@ class CrossAttention(tf.keras.layers.MultiHeadAttention):
         if self._residual: attn_output = query + attn_output * self._residual_amt # ReZero
         attn_output = tf.squeeze(attn_output, axis=0)
         return attn_output
+
 
 
 class MLPBlock(tf.keras.layers.Layer):
@@ -358,6 +388,8 @@ class MLPBlock(tf.keras.layers.Layer):
         out = self._layer_dense_logits(out)
         if self._residual: out = input + out * self._residual_amt # Rezero
         return out
+
+
 
 
 def gym_get_space_zero(space):
