@@ -43,6 +43,7 @@ class RepNet(tf.keras.Model):
         self.layer_flatten = tf.keras.layers.Flatten()
 
         # TODO how to loop through inputs?
+        # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
             if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=1, norm=True, residual=False, name='attn_in_{:02d}'.format(i))]
@@ -607,7 +608,7 @@ class GeneralAI(tf.keras.Model):
                 values = value_dist.sample()
             else:
                 values = self.value(inputs_lat, training=training)
-                loss['value'] = self.loss_diff(returns, values)
+                loss['value'] = self.loss_diff(values, returns)
         gradients = tape_value.gradient(loss['value'], self.rep.trainable_variables + self.value.trainable_variables)
         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
 
@@ -882,7 +883,7 @@ class GeneralAI(tf.keras.Model):
                 values = value_dist.sample()
             else:
                 values = self.value(inputs, training=training)
-                loss['value'] = self.loss_diff(returns, values)
+                loss['value'] = self.loss_diff(values, returns)
         gradients = tape_value.gradient(loss['value'], self.rep.trainable_variables + self.value.trainable_variables)
         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
 
