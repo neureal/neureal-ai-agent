@@ -36,7 +36,7 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class RepNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None):
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1):
         super(RepNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, (num_latents > 1)
@@ -46,7 +46,8 @@ class RepNet(tf.keras.Model):
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
-            if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=1, norm=True, residual=False, name='attn_in_{:02d}'.format(i))]
+            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
+            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         # TODO duplicate per net_ins for better conditioning?
@@ -71,12 +72,13 @@ class RepNet(tf.keras.Model):
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
+        for layer in self.layer_attn_in: layer.reset_states()
     def call(self, inputs, training=None):
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
             if self.net_attn_io:
-                out = tf.expand_dims(out, axis=-1) # TODO
+                # out = tf.expand_dims(out, axis=-1) # TODO
                 out = self.layer_attn_in[i](out)
             else: out = self.layer_flatten(out)
             out = self.layer_mlp_in[i](out)
@@ -98,7 +100,7 @@ class RepNet(tf.keras.Model):
 
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None): # spec_in=[] for no action conditioning
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1): # spec_in=[] for no action conditioning
         super(TransNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, (num_latents > 1)
@@ -107,7 +109,8 @@ class TransNet(tf.keras.Model):
         # self.net_inputs = ['actions']*len(spec_in)+['obs'] # action conditioning/embedding
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
-            if self.net_attn_io: self.layer_attn_in += [util.CrossAttention(latent_size=latent_size, num_latents=num_latents, num_heads=1, norm=True, residual=False, name='attn_in_{:02d}'.format(i))]
+            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
+            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -131,6 +134,7 @@ class TransNet(tf.keras.Model):
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
+        for layer in self.layer_attn_in: layer.reset_states()
     def call(self, inputs, training=None):
         out_accu = [None]*(self.net_ins+1)
         for i in range(self.net_ins):
@@ -191,7 +195,7 @@ class GenNet(tf.keras.Model):
 
         self.layer_attn_out, self.layer_mlp_out_logits = [], []
         for i in range(self.net_outs):
-            if self.net_attn_io: self.layer_attn_out += [util.CrossAttention(latent_size=params_size[i], num_latents=max_steps, num_heads=1, norm=False, residual=False, name='attn_out_{:02d}'.format(i))]
+            if self.net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*num_latents, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
             self.layer_mlp_out_logits += [util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{:02d}'.format(i))]
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -200,6 +204,7 @@ class GenNet(tf.keras.Model):
     def reset_states(self):
         for layer in self.layer_attn: layer.reset_states()
         for layer in self.layer_lstm: layer.reset_states()
+        for layer in self.layer_attn_out: layer.reset_states()
     def call(self, inputs, batch_size=1, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
@@ -282,13 +287,12 @@ class GeneralAI(tf.keras.Model):
         self.latent_spec = latent_spec
 
         net_attn, net_lstm = True, False
-        memory_size = (attn_num_latents if attn_num_latents > 1 else max_steps) * attn_mem_multi
+        memory_size = (attn_num_latents * max_steps if attn_num_latents > 1 else max_steps) * attn_mem_multi
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size)
-            outputs = self.rep(inputs)
-            rep_dist = self.rep.dist(outputs)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps)
+            outputs = self.rep(inputs); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
             smpl = tf.zeros_like(smpl, latent_spec['dtype'])
             self.latent_zero = smpl
@@ -296,7 +300,7 @@ class GeneralAI(tf.keras.Model):
 
         # if arch in ('TEST',):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=16, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU',):
             if value_cont:
@@ -306,7 +310,7 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('TRANS','MU',):
             inputs['actions'] = self.action_zero_out
-            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
         if arch in ('MU',):
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             self.rwd = GenNet('RW', reward_spec, False, int(latent_size/2), net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
@@ -441,7 +445,7 @@ class GeneralAI(tf.keras.Model):
     def loss_PG(self, dist, targets, returns): # policy gradient, actor/critic
         returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
         loss = self.loss_likelihood(dist, targets, probs=False)
-        loss = loss -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
+        # loss = loss -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
         loss = loss * returns # / self.float_maxroot
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
@@ -460,7 +464,8 @@ class GeneralAI(tf.keras.Model):
         returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
         step = tf.constant(0)
-        while step < self.max_steps and not inputs['dones'][-1][0]:
+        # while step < self.max_steps and not inputs['dones'][-1][0]:
+        while not inputs['dones'][-1][0]:
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
             returns = returns.write(step, [self.float64_zero])
 
@@ -514,12 +519,49 @@ class GeneralAI(tf.keras.Model):
         # loss['entropy'] = self.loss_entropy(action_dist)
         return loss
 
+    def PG_learner_onestep(self, inputs, training=True):
+        print("tracing -> GeneralAI PG_learner_onestep")
+        loss = {}
+        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        for step in tf.range(tf.shape(inputs['dones'])[0]):
+            inputs_step = {}
+
+            obs = [None]*self.obs_spec_len
+            for i in range(self.obs_spec_len):
+                obs[i] = inputs['obs'][i][step:step+1]
+                obs[i].set_shape(self.obs_spec[i]['step_shape'])
+            inputs_step['obs'] = obs
+
+            with tf.GradientTape(persistent=True) as tape_action:
+                rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
+                inputs_step['obs'] = rep_dist.sample()
+
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action[i] = inputs['actions'][i][step:step+1]
+                action[i].set_shape(self.action_spec[i]['step_shape'])
+
+            returns = inputs['returns'][step:step+1]
+            with tape_action:
+                action_logits = self.action(inputs_step)
+                action_dist = [None]*self.action_spec_len
+                for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+                loss_action = self.loss_PG(action_dist, action, returns)
+            gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+
+            loss_actions = loss_actions.write(step, loss_action)
+
+        loss['action'] = loss_actions.concat()
+        return loss
+
     def PG_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI PG_run_episode")
         # TODO how unlimited length episodes without sacrificing returns signal?
         while not inputs['dones'][-1][0]:
-            outputs, inputs = self.PG_actor(inputs)
-            loss = self.PG_learner(outputs)
+            self.reset_states(); outputs, inputs = self.PG_actor(inputs)
+            self.reset_states(); loss = self.PG_learner_onestep(outputs)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
@@ -529,7 +571,6 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI PG")
         for episode in tf.range(self.max_episodes):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            self.reset_states()
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
@@ -979,7 +1020,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 15000
+max_episodes = 100
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -987,7 +1028,7 @@ value_cont = False
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-attn_num_latents = 1 # 1 = no attn io
+attn_num_latents = 128 # 1 = no attn io
 attn_mem_multi = 1
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
@@ -996,10 +1037,10 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
-# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
-env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
+# env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
 # env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # max_steps 21600
 # env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0')
 # env_name, max_steps, env_render, env = 'ProcgenMiner', 1024, False, gym.make('procgen-miner-v0')
