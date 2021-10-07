@@ -69,18 +69,23 @@ class RepNet(tf.keras.Model):
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
 
-    def reset_states(self):
-        for layer in self.layer_attn: layer.reset_states()
+    def reset_states(self, use_img=False):
+        for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
+        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-        for layer in self.layer_attn_in: layer.reset_states()
-    def call(self, inputs, training=None):
+    def call(self, inputs, use_img=False, step=None, training=None):
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
+            if not self.net_attn_io: out = self.layer_flatten(out)
+            if step is not None:
+                step = tf.cast(step, self.compute_dtype)
+                shape = tf.concat([tf.shape(out)[0:1], [1]], axis=0)
+                step = tf.broadcast_to(step, shape)
+                out = tf.concat([out, step], axis=-1)
             if self.net_attn_io:
                 # out = tf.expand_dims(out, axis=-1) # TODO
-                out = self.layer_attn_in[i](out)
-            else: out = self.layer_flatten(out)
+                out = self.layer_attn_in[i](out, use_img=use_img)
             out = self.layer_mlp_in[i](out)
             out_accu[i] = out
         # out = tf.math.accumulate_n(out_accu)
@@ -131,15 +136,15 @@ class TransNet(tf.keras.Model):
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
 
-    def reset_states(self):
-        for layer in self.layer_attn: layer.reset_states()
+    def reset_states(self, use_img=False):
+        for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
+        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-        for layer in self.layer_attn_in: layer.reset_states()
-    def call(self, inputs, training=None):
+    def call(self, inputs, use_img=False, training=None):
         out_accu = [None]*(self.net_ins+1)
         for i in range(self.net_ins):
             out = tf.cast(inputs['actions'][i], self.compute_dtype)
-            if self.net_attn_io: out = self.layer_attn_in[i](out)
+            if self.net_attn_io: out = self.layer_attn_in[i](out, use_img=use_img)
             else: out = self.layer_flatten(out)
             out = self.layer_mlp_in[i](out)
             out_accu[i] = out
@@ -148,7 +153,7 @@ class TransNet(tf.keras.Model):
         out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training)), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -201,21 +206,21 @@ class GenNet(tf.keras.Model):
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[{:02d}{}{}D{}-{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, arch_out, ('-hds'+str(num_heads) if self.net_attn else ''))
 
-    def reset_states(self):
-        for layer in self.layer_attn: layer.reset_states()
+    def reset_states(self, use_img=False):
+        for layer in self.layer_attn_out: layer.reset_states(use_img=use_img)
+        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-        for layer in self.layer_attn_out: layer.reset_states()
-    def call(self, inputs, batch_size=1, training=None):
+    def call(self, inputs, use_img=False, batch_size=1, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training)), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
-            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
+            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, use_img=use_img, num_latents=batch_size)
             out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
@@ -245,14 +250,14 @@ class ValueNet(tf.keras.Model):
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[{:02d}{}{}D{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''))
 
-    def reset_states(self):
-        for layer in self.layer_attn: layer.reset_states()
+    def reset_states(self, use_img=False):
+        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, training=None):
+    def call(self, inputs, use_img=False, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training)), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -291,31 +296,32 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps)
-            outputs = self.rep(inputs); rep_dist = self.rep.dist(outputs)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps)
+            outputs = self.rep(inputs, (0 if arch == 'MU' else None)); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
             smpl = tf.zeros_like(smpl, latent_spec['dtype'])
             self.latent_zero = smpl
             inputs['obs'] = self.latent_zero
 
         # if arch in ('TEST',):
-        #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU',):
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-                self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
-            else: self.value = ValueNet('VN', latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=1, memory_size=memory_size); outputs = self.value(inputs)
+                self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
+            else: self.value = ValueNet('VN', latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU',):
             inputs['actions'] = self.action_zero_out
             self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
+            # self.trans = TransNet('TN', self.action_spec, {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)}, 2, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
         if arch in ('MU',):
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.rwd = GenNet('RW', reward_spec, False, int(latent_size/2), net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
+            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.done = GenNet('DO', done_spec, False, int(latent_size/8), net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
+            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
@@ -382,9 +388,9 @@ class GeneralAI(tf.keras.Model):
         return rtn
 
 
-    def reset_states(self):
+    def reset_states(self, use_img=False):
         for net in self.layers:
-            if hasattr(net, 'reset_states'): net.reset_states()
+            if hasattr(net, 'reset_states'): net.reset_states(use_img=use_img)
 
 
     def loss_diff(self, out, targets=None): # deterministic difference
@@ -442,11 +448,12 @@ class GeneralAI(tf.keras.Model):
         if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
         return loss
 
-    def loss_PG(self, dist, targets, returns): # policy gradient, actor/critic
+    def loss_PG(self, dist, targets, returns, entropy=None): # policy gradient, actor/critic
         returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
-        loss = self.loss_likelihood(dist, targets, probs=False)
-        # loss = loss -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
-        loss = loss * returns # / self.float_maxroot
+        loss_lik = self.loss_likelihood(dist, targets, probs=False)
+        # loss_lik = loss_lik -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
+        loss = loss_lik * returns # / self.float_maxroot
+        if entropy is not None: loss = loss - loss_lik * entropy
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -1020,7 +1027,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 100
+max_episodes = 1000
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -1028,7 +1035,7 @@ value_cont = False
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-attn_num_latents = 128 # 1 = no attn io
+attn_num_latents = 1 # 1 = no attn io
 attn_mem_multi = 1
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
@@ -1056,7 +1063,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 1; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-# max_steps = 1 # max replay buffer or train interval or bootstrap
+max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 arch = 'PG' # Policy Gradient agent, PG loss
@@ -1136,7 +1143,7 @@ if __name__ == '__main__':
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
-        plt.figure(num=name, figsize=(34, 16), tight_layout=True)
+        plt.figure(num=name, figsize=(34, 18), tight_layout=True)
         xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.03
         for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
