@@ -66,10 +66,10 @@ class EvoNormS0(tf.keras.layers.Layer):
         self._v1 = self.add_weight(shape=shape, initializer=tf.keras.initializers.Ones(), name='v1')
 
         groups = min(input_shape[self._axis], self._groups)
-        group_shape = input_shape.as_list()
+        group_shape = input_shape[self._axis:].as_list()
         group_shape[self._axis] = input_shape[self._axis] // groups
         group_shape.insert(self._axis, groups)
-        self._group_shape = tf.Variable(group_shape, trainable=False, name='group_shape')
+        self._group_shape = tf.identity(group_shape)
 
         std_shape = list(range(1, inlen + self._axis))
         std_shape.append(inlen)
@@ -78,11 +78,11 @@ class EvoNormS0(tf.keras.layers.Layer):
     @tf.function
     def call(self, inputs, training=True):
         input_shape = tf.shape(inputs)
-        self._group_shape[0].assign(input_shape[0]) # use same learned parameters with different batch size
-        grouped_inputs = tf.reshape(inputs, self._group_shape)
+        group_shape = tf.concat([input_shape[:self._axis], self._group_shape], axis=0)
+        grouped_inputs = tf.reshape(inputs, group_shape)
         _, var = tf.nn.moments(grouped_inputs, self._std_shape, keepdims=True)
         std = tf.sqrt(var + self._eps)
-        std = tf.broadcast_to(std, self._group_shape)
+        std = tf.broadcast_to(std, group_shape)
         group_std = tf.reshape(std, input_shape)
 
         return (inputs * tf.math.sigmoid(self._v1 * inputs)) / group_std * self._gamma + self._beta
@@ -240,9 +240,11 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             self._mem_score_zero = tf.identity(mem_score_zero)
 
         if norm:
-            float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
-            self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
-            self._layer_norm_value = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_value')
+            # float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
+            # self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
+            # self._layer_norm_value = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_value')
+            self._layer_dense_key_in = tf.keras.layers.Dense(latent_size*2, activation=EvoNormS0(int(latent_size/2)), use_bias=False, name='dense_key_in')
+            self._layer_dense_value_in = tf.keras.layers.Dense(latent_size*2, activation=EvoNormS0(int(latent_size/2)), use_bias=False, name='dense_value_in')
 
         # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
         # self._query_scale = tf.identity(query_scale)
@@ -314,10 +316,16 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         # TODO loop through value or query if too big for memory
         query_ = self._query_dense(query)
-        key = self._key_dense(value_mem)
-        if self._norm: key = self._layer_norm_key(key)
-        value = self._value_dense(value_mem)
-        if self._norm: value = self._layer_norm_value(value)
+        if self._norm:
+            key = self._layer_dense_key_in(value_mem)
+            key = self._key_dense(key)
+        else: key = self._key_dense(value_mem)
+        # if self._norm: key = self._layer_norm_key(key)
+        if self._norm:
+            value = self._layer_dense_value_in(value_mem)
+            value = self._value_dense(value)
+        else: value = self._value_dense(value_mem)
+        # if self._norm: value = self._layer_norm_value(value)
 
         if auto_mask: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
 
