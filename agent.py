@@ -44,10 +44,17 @@ class RepNet(tf.keras.Model):
 
         # TODO how to loop through inputs?
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
-        self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
+        self.net_ins, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = len(spec_in), [], [], []
         for i in range(self.net_ins):
-            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
+            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]+1; event_size = int(np.prod(event_shape[:-1]).item())
+            if event_size <= 1: self.pos_idx_in += [None]
+            else:
+                pos_idx = np.indices(event_shape[:-1])
+                pos_idx = np.moveaxis(pos_idx, 0, -1)
+                # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
+                self.pos_idx_in += [tf.constant(pos_idx, dtype=self.compute_dtype)]
+                channels += pos_idx.shape[-1]
+            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         # TODO duplicate per net_ins for better conditioning?
@@ -74,18 +81,22 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, use_img=False, step=None, training=None):
+        if step is not None: step = tf.cast(step, self.compute_dtype)
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            if not self.net_attn_io: out = self.layer_flatten(out)
+            if self.pos_idx_in[i] is not None:
+                shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
+                pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
+                out = tf.concat([out, pos_idx], axis=-1)
             if step is not None:
-                step = tf.cast(step, self.compute_dtype)
-                shape = tf.concat([tf.shape(out)[0:1], [1]], axis=0)
-                step = tf.broadcast_to(step, shape)
-                out = tf.concat([out, step], axis=-1)
+                shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
+                step_idx = tf.broadcast_to(step, shape)
+                out = tf.concat([out, step_idx], axis=-1)
             if self.net_attn_io:
-                # out = tf.expand_dims(out, axis=-1) # TODO
+                # out = tf.expand_dims(out, axis=-1)
                 out = self.layer_attn_in[i](out, use_img=use_img)
+            else: out = self.layer_flatten(out)
             out = self.layer_mlp_in[i](out)
             out_accu[i] = out
         # out = tf.math.accumulate_n(out_accu)
@@ -296,8 +307,8 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps)
-            outputs = self.rep(inputs, (0 if arch == 'MU' else None)); rep_dist = self.rep.dist(outputs)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps)
+            outputs = self.rep(inputs, step=(0 if arch in ('MU','PG',) else None)); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
             smpl = tf.zeros_like(smpl, latent_spec['dtype'])
             self.latent_zero = smpl
@@ -305,7 +316,7 @@ class GeneralAI(tf.keras.Model):
 
         # if arch in ('TEST',):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU',):
             if value_cont:
@@ -476,7 +487,7 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
             returns = returns.write(step, [self.float64_zero])
 
-            rep_logits = self.rep(inputs); rep_dist = self.rep.dist(rep_logits)
+            rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
             inputs['obs'] = rep_dist.sample()
 
             action_logits = self.action(inputs)
@@ -541,7 +552,7 @@ class GeneralAI(tf.keras.Model):
             inputs_step['obs'] = obs
 
             with tf.GradientTape(persistent=True) as tape_action:
-                rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
+                rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
                 inputs_step['obs'] = rep_dist.sample()
 
             action = [None]*self.action_spec_len
@@ -1033,24 +1044,24 @@ entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = False
 force_cont_obs, force_cont_action = False, False
-latent_size = 128
+latent_size = 64
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-attn_num_latents = 1 # 1 = no attn io
+attn_num_latents = 64 # 1 = no attn io
 attn_mem_multi = 1
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
-# env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # max_steps 21600
 # env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0')
 # env_name, max_steps, env_render, env = 'ProcgenMiner', 1024, False, gym.make('procgen-miner-v0')
+# env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # max_steps 21600
 
 # env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2') # max_steps 1000
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker() # max_steps 1600

@@ -226,7 +226,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, latent_size, num_heads=1, memory_size=1, sort_memory=True, norm=False, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
+    def __init__(self, latent_size, num_heads=1, memory_size=1, sort_memory=True, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
         # key_dim = int(channels/num_heads) if cross_type == 2 else int(latent_size/num_heads)
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
@@ -243,8 +243,8 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             # float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
             # self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
             # self._layer_norm_value = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_value')
-            self._layer_dense_key_in = tf.keras.layers.Dense(latent_size*2, activation=EvoNormS0(int(latent_size/2)), use_bias=False, name='dense_key_in')
-            self._layer_dense_value_in = tf.keras.layers.Dense(latent_size*2, activation=EvoNormS0(int(latent_size/2)), use_bias=False, name='dense_value_in')
+            self._layer_dense_key_in = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense_key_in')
+            self._layer_dense_value_in = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense_value_in')
 
         # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
         # self._query_scale = tf.identity(query_scale)
