@@ -36,24 +36,27 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class RepNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1):
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1, aug_data_step=False, aug_data_pos=False):
         super(RepNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, (num_latents > 1)
+        self.aug_data_step, self.aug_data_pos = aug_data_step, aug_data_pos
         self.layer_flatten = tf.keras.layers.Flatten()
 
         # TODO how to loop through inputs?
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
         self.net_ins, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = len(spec_in), [], [], []
         for i in range(self.net_ins):
-            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]+1; event_size = int(np.prod(event_shape[:-1]).item())
-            if event_size <= 1: self.pos_idx_in += [None]
-            else:
-                pos_idx = np.indices(event_shape[:-1])
-                pos_idx = np.moveaxis(pos_idx, 0, -1)
-                # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
-                self.pos_idx_in += [tf.constant(pos_idx, dtype=self.compute_dtype)]
-                channels += pos_idx.shape[-1]
+            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
+            if aug_data_step: channels += 1
+            if aug_data_pos:
+                if event_size <= 1: self.pos_idx_in += [None]
+                else:
+                    pos_idx = np.indices(event_shape[:-1])
+                    pos_idx = np.moveaxis(pos_idx, 0, -1)
+                    # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
+                    self.pos_idx_in += [tf.constant(pos_idx, dtype=self.compute_dtype)]
+                    channels += pos_idx.shape[-1]
             if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
@@ -81,15 +84,15 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, use_img=False, step=None, training=None):
-        if step is not None: step = tf.cast(step, self.compute_dtype)
+        if self.aug_data_step: step = tf.cast(step, self.compute_dtype)
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            if self.pos_idx_in[i] is not None:
+            if self.aug_data_pos and self.pos_idx_in[i] is not None:
                 shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
                 pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
                 out = tf.concat([out, pos_idx], axis=-1)
-            if step is not None:
+            if self.aug_data_step:
                 shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
                 step_idx = tf.broadcast_to(step, shape)
                 out = tf.concat([out, step_idx], axis=-1)
@@ -277,7 +280,7 @@ class ValueNet(tf.keras.Model):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi):
+    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
@@ -307,8 +310,8 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps)
-            outputs = self.rep(inputs, step=(0 if arch in ('MU','PG',) else None)); rep_dist = self.rep.dist(outputs)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
             smpl = tf.zeros_like(smpl, latent_spec['dtype'])
             self.latent_zero = smpl
@@ -1048,6 +1051,7 @@ latent_size = 64
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 attn_num_latents = 64 # 1 = no attn io
 attn_mem_multi = 1
+aug_data_step, aug_data_pos = True, True
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
@@ -1074,7 +1078,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 1; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-max_steps = 32 # max replay buffer or train interval or bootstrap
+# max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 arch = 'PG' # Policy Gradient agent, PG loss
@@ -1098,7 +1102,7 @@ if __name__ == '__main__':
 
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi)
+        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi, aug_data_step, aug_data_pos)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
         ## debugging
@@ -1150,7 +1154,7 @@ if __name__ == '__main__':
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
         title += "     |     lr:{}    dis:{}    en:{}    al:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, attn_num_latents, attn_mem_multi, max_steps)
-        title += "     |     a-clk:{}    a-spd:{}".format(env_async_clock, env_async_speed); print(title)
+        title += "     |     a-clk:{}    a-spd:{}    aug:{}{}".format(env_async_clock, env_async_speed, ('S' if aug_data_step else ''), ('P' if aug_data_pos else '')); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
