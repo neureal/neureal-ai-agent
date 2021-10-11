@@ -356,14 +356,14 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         if self._cross_type: attn_output = tf.squeeze(attn_output, axis=0)
         return attn_output
 
-    def reset_states(self, use_img=False):
-        if use_img: mem_idx, memory = self._mem_idx_img, self._memory_img
-        else: mem_idx, memory = self._mem_idx, self._memory
-        mem_idx.assign(self._mem_size)
-        memory.assign(self._mem_zero)
-        if self._sort_memory:
-            mem_score = self._mem_score_img if use_img else self._mem_score
-            mem_score.assign(self._mem_score_zero)
+        if use_img:
+            self._mem_idx_img.assign(self._mem_idx)
+            self._memory_img.assign(self._memory)
+            if self._sort_memory: self._mem_score_img.assign(self._mem_score)
+        else:
+            self._mem_idx.assign(self._mem_size)
+            self._memory.assign(self._mem_zero)
+            if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
 
 
 
