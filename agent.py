@@ -129,7 +129,7 @@ class TransNet(tf.keras.Model):
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
             event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
+            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -343,16 +343,21 @@ class GeneralAI(tf.keras.Model):
         metrics_loss = OrderedDict()
         metrics_loss['2rewards*'] = {'rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
-        if arch in ('PG','TRANS',): metrics_loss['1nets'] = {'loss_action':np.float64}
-        if arch in ('AC','MU',): metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
-        if arch in ('MU',):
+        if arch == 'PG':
+            metrics_loss['1nets'] = {'loss_action':np.float64}
+            metrics_loss['1extras'] = {'returns':np.float64}
+        if arch == 'AC':
+            metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
+            metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
+        if arch == 'TRANS':
+            metrics_loss['1nets'] = {'loss_action':np.float64}
+        if arch == 'MU':
+            metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
             metrics_loss['1nets1'] = {'loss_policy':np.float64, 'loss_return':np.float64}
             metrics_loss['1nets2'] = {'loss_rwd':np.float64, 'loss_done':np.float64}
-        if arch in ('PG',): metrics_loss['1extras'] = {'returns':np.float64}
-        if arch in ('AC','MU',): metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
-        # if arch in ('MU','TEST'):
-        #     metrics_loss['nets3'] = {'loss_total_img':np.float64,'returns_img':np.float64}
-        #     metrics_loss['extras1'] = {'steps_img':np.float64}
+            metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
+            # metrics_loss['nets3'] = {'loss_total_img':np.float64,'returns_img':np.float64}
+            # metrics_loss['extras1'] = {'steps_img':np.float64}
         if trader:
             metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
             metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
@@ -1080,7 +1085,7 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 attn_num_latents = 1 # 1 = no attn io
 attn_mem_multi = 1
-aug_data_step, aug_data_pos = False, False
+aug_data_step, aug_data_pos = True, True
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'

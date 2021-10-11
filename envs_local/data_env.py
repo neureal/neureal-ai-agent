@@ -25,14 +25,14 @@ class DataEnv(gym.Env):
 
             # self.observation_space = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             space = gym.spaces.Dict()
-            space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
-            space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
-            # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
+            # space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
+            # space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
+            space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # combine to latent
             self.observation_space = space
 
-            # space = gym.spaces.Dict()
-            # space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
+            space = gym.spaces.Dict()
+            space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             self.action_space = space
 
@@ -92,7 +92,7 @@ class DataEnv(gym.Env):
 
         # obs = {'timestamp':np.asarray([self.ds_idx], np.float64), 'data':self.ds[self.ds_idx]}
         obs = OrderedDict()
-        obs['timestamp'] = np.asarray([self.ds_idx], self.observation_space['timestamp'].dtype)
+        # obs['timestamp'] = np.asarray([self.ds_idx], self.observation_space['timestamp'].dtype)
         obs['data'] = np.asarray(self.ds[self.ds_idx], self.observation_space['data'].dtype)
         # latent = np.concatenate([self.ds[self.ds_idx]])
         # latent = np.concatenate([self.ds[self.ds_idx],[self.ds_idx]]) # combine to latent
