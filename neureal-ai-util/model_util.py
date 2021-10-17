@@ -226,7 +226,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, latent_size, num_heads=1, memory_size=1, sort_memory=True, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
+    def __init__(self, latent_size, num_heads=1, memory_size=1, sort_memory=False, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
         # key_dim = int(channels/num_heads) if cross_type == 2 else int(latent_size/num_heads)
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
@@ -357,13 +357,14 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         return attn_output
 
     def reset_states(self, use_img=False):
-        if use_img: mem_idx, memory = self._mem_idx_img, self._memory_img
-        else: mem_idx, memory = self._mem_idx, self._memory
-        mem_idx.assign(self._mem_size)
-        memory.assign(self._mem_zero)
-        if self._sort_memory:
-            mem_score = self._mem_score_img if use_img else self._mem_score
-            mem_score.assign(self._mem_score_zero)
+        if use_img:
+            self._mem_idx_img.assign(self._mem_idx)
+            self._memory_img.assign(self._memory)
+            if self._sort_memory: self._mem_score_img.assign(self._mem_score)
+        else:
+            self._mem_idx.assign(self._mem_size)
+            self._memory.assign(self._mem_zero)
+            if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
 
 
 
