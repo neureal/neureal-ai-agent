@@ -309,7 +309,7 @@ class GeneralAI(tf.keras.Model):
         memory_size = (attn_num_latents * max_steps if attn_num_latents > 1 else max_steps) * attn_mem_multi
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
-        if arch in ('PG','AC','TRANS','MU','VPN','SPR','MU2',):
+        if arch in ('PG','AC','TRANS','MU','VPN','SPR','MU2','MU3',):
             self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
@@ -321,19 +321,19 @@ class GeneralAI(tf.keras.Model):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
         self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
-        if arch in ('AC','MU','VPN','MU2',):
+        if arch in ('AC','MU','VPN','MU2','MU3',):
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
                 self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
             else: self.value = ValueNet('VN', latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
 
-        if arch in ('TRANS','MU','VPN','SPR','MU2',):
+        if arch in ('TRANS','MU','VPN','SPR','MU2','MU3',):
             inputs['actions'] = self.action_zero_out
             self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
             # self.trans = TransNet('TN', self.action_spec, {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)}, 2, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
-        if arch in ('MU','MU2',):
+        if arch in ('MU','MU2','MU3',):
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
+            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
@@ -378,6 +378,11 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1nets3'] = {'loss_done':np.float64}
             # metrics_loss['1nets4'] = {'loss_return':np.float64}
             # metrics_loss['1nets5'] = {'loss_next_action':np.float64}
+        if arch == 'MU3':
+            metrics_loss['1extra'] = {'returns_pred':np.float64}
+            metrics_loss['1nets'] = {'actor_loss_action':np.float64}
+            metrics_loss['1extra2'] = {'return_entropy':np.float64}
+            metrics_loss['1nets1'] = {'loss_return':np.float64}
         if trader:
             metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
             metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
@@ -1627,6 +1632,155 @@ class GeneralAI(tf.keras.Model):
 
 
 
+    def MU3_actor(self, inputs):
+        print("tracing -> GeneralAI MU3_actor")
+        loss = {}
+        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+        for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+        for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        step = tf.constant(0)
+        # while step < self.max_steps and not inputs['dones'][-1][0]:
+        while not inputs['dones'][-1][0]:
+            inputs_step = {}
+            for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
+
+            with tf.GradientTape(persistent=True) as tape_action:
+                rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
+                inputs_step['obs'] = rep_dist.sample()
+
+            # outputs_img = self.MU3_imagine(inputs_step)
+            # loss_img = self.MU3_img_learner(outputs_img)
+            # action_rnd = [None]*self.action_spec_len
+            # for i in range(self.action_spec_len):
+            #     action_rnd[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+
+            with tape_action:
+                action_logits = self.action(inputs_step)
+                action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
+                for i in range(self.action_spec_len):
+                    action_dist[i] = self.action.dist[i](action_logits[i])
+                    action[i] = action_dist[i].sample()
+                    actions[i] = actions[i].write(step, action[i][-1])
+                    action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+            np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+
+            inputs_step['actions'] = action
+            trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+            inputs_step['obs'] = trans_dist.sample()
+            # entropy = trans_dist.entropy()
+            entropy = tf.constant([0.0], dtype=self.compute_dtype)
+
+            if self.value_cont:
+                value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+                values = value_dist.sample()
+                entropy = entropy + value_dist.entropy()
+            else: values = self.value(inputs_step)
+
+            with tape_action:
+                returns_pred = inputs['rewards'] + values
+                # returns_pred = inputs['rewards']
+                loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
+            gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            dones = dones.write(step, inputs['dones'][-1])
+            returns_updt = returns.stack()
+            returns_updt = returns_updt + inputs['rewards'][-1]
+            returns = returns.unstack(returns_updt)
+            returns = returns.write(step, [self.float64_zero])
+            
+            loss_actions = loss_actions.write(step, loss_action)
+            metric_entropy = metric_entropy.write(step, entropy)
+            metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
+
+            step += 1
+
+        outputs = {}
+        out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+        for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
+        for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
+        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
+
+        loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.concat(), metric_entropy.concat(), metric_returns_pred.concat()
+        return outputs, inputs, loss
+
+    def MU3_learner(self, inputs, training=True):
+        print("tracing -> GeneralAI MU3_learner")
+        loss = {}
+        loss_returns = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        for step in tf.range(tf.shape(inputs['dones'])[0]):
+            inputs_step = {}
+
+            obs = [None]*self.obs_spec_len
+            for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+            inputs_step['obs'] = obs
+            with tf.GradientTape(persistent=True) as tape_value:
+                rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
+                inputs_step['obs'] = rep_dist.sample()
+
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+            inputs_step['actions'] = action
+            with tape_value:
+                trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+                inputs_step['obs'] = trans_dist.sample()
+
+            returns = inputs['returns'][step:step+1]
+            with tape_value:
+                if self.value_cont:
+                    value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+                    loss_return = self.loss_likelihood(value_dist, returns)
+                else:
+                    values = self.value(inputs_step)
+                    loss_return = self.loss_diff(values, returns)
+            gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables))
+            
+            loss_returns = loss_returns.write(step, loss_return)
+
+        loss['return'] = loss_returns.concat()
+        return loss
+
+    def MU3_run_episode(self, inputs, episode, training=True):
+        print("tracing -> GeneralAI MU3_run_episode")
+        while not inputs['dones'][-1][0]:
+            self.reset_states(); outputs, inputs, loss_actor = self.MU3_actor(inputs)
+            self.reset_states(); loss = self.MU3_learner(outputs)
+
+            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss_actor['returns_pred']),
+                tf.math.reduce_mean(loss_actor['action']),
+                tf.math.reduce_mean(loss_actor['entropy']),
+                tf.math.reduce_mean(loss['return']),
+            ]
+            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    def MU3(self):
+        print("tracing -> GeneralAI MU3")
+        for episode in tf.range(self.max_episodes):
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            self.MU3_run_episode(inputs, episode)
+
+
+
+
+
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 10
@@ -1673,9 +1827,10 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
-arch = 'VPN' # Value Prediction Network
+# arch = 'VPN' # Value Prediction Network
 # arch = 'SPR' # Self Predictive Representations
-# arch = 'MU2' # Dreamer/planner w/imagination (DeepMind MuZero)
+# arch = 'MU2' # Dreamer/planner w/imagination
+arch = 'MU3' # Dreamer/planner w/imagination
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
