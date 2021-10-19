@@ -1636,28 +1636,31 @@ class GeneralAI(tf.keras.Model):
 
     def MU3_img_actor(self, inputs):
         print("tracing -> GeneralAI MU3_img_actor")
-        loss = {}
-        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # actions = [None]*self.action_spec_len
+        # for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+        returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        inputs_step, dones = {'obs':inputs['obs'], 'actions':self.action_zero_out}, tf.constant([[False]])
+        inputs_step, dones  = {'obs':inputs['obs'], 'actions':self.action_zero_out}, tf.constant([[False]])
+        action_first, values, entropy = self.action_zero_out, tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
+
         step = tf.constant(0)
         while step < 4 and not dones[-1][0]:
         # while not dones[-1][0]:
+            returns = returns.write(step, [self.float64_zero])
 
-            with tf.GradientTape(persistent=True) as tape_action:
-                action_logits = self.action(inputs_step, use_img=True)
-                action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
-                for i in range(self.action_spec_len):
-                    action_dist[i] = self.action.dist[i](action_logits[i])
-                    action[i] = action_dist[i].sample()
+            action_logits = self.action(inputs_step, use_img=True)
+            action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                # logits_rnd = tf.random.uniform(tf.shape(action_logits[i]), minval=-0.1, maxval=0.1, dtype=self.compute_dtype)
+                # logits_rnd += action_logits[i] * entropy
+                action_dist[i] = self.action.dist[i](action_logits[i])
+                action[i] = action_dist[i].sample()
+                # actions[i] = actions[i].write(step, action[i][-1])
+            if step == 0: action_first = action
 
             inputs_step['actions'] = action
             trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
             inputs_step['obs'] = trans_dist.sample()
-            # entropy = trans_dist.entropy()
-            # entropy = tf.constant([0.0], dtype=self.compute_dtype)
 
             rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
@@ -1666,24 +1669,26 @@ class GeneralAI(tf.keras.Model):
             if self.value_cont:
                 value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
                 values = value_dist.sample()
-                # entropy = entropy + value_dist.entropy()
             else: values = self.value(inputs_step, use_img=True)
 
-            returns_pred = rewards + values
-            with tape_action:
-                # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
-                loss_action = self.loss_PG(action_dist, action, returns_pred)
-            gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
-            loss_actions = loss_actions.write(step, loss_action)
-            # metric_entropy = metric_entropy.write(step, entropy)
-            # metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
+            returns_updt = returns.stack()
+            returns_updt = returns_updt + rewards[-1]
+            returns = returns.unstack(returns_updt)
 
             step += 1
 
-        # loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.stack(), metric_entropy.stack(), metric_returns_pred.stack()
-        loss['action'] = loss_actions.stack()
-        return loss
+        # returns = returns.write(step, [self.float64_zero])
+        # returns_updt = returns.stack()
+        # returns_updt = returns_updt + values[-1]
+        # returns = returns.unstack(returns_updt)
+        returns_first = returns.stack()[0] + values[-1]
+
+        outputs = {}
+        # out_actions = [None]*self.action_spec_len
+        # for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
+        # outputs['actions'], outputs['returns'] = out_actions, returns.stack()
+        outputs['actions'], outputs['returns'] = action_first, returns_first[0]
+        return outputs
 
     def MU3_actor(self, inputs):
         print("tracing -> GeneralAI MU3_actor")
@@ -1711,27 +1716,39 @@ class GeneralAI(tf.keras.Model):
                 rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
                 inputs_step['obs'] = rep_dist.sample()
 
-            # # for img_traj in tf.range(4):
-            # self.reset_states(use_img=True); outputs_img = self.MU3_img_actor(inputs_step)
-            # # action_rnd = [None]*self.action_spec_len
-            # # for i in range(self.action_spec_len):
-            # #     action_rnd[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+            # action, returns_max = self.action_zero_out, self.float_min
+            # for img_traj in tf.range(4):
+            #     self.reset_states(use_img=True); outputs_img = self.MU3_img_actor(inputs_step)
+            #     if outputs_img['returns'] > returns_max:
+            #         returns_max = outputs_img['returns']
+            #         action = outputs_img['actions']
 
-            # action = outputs_img['action']
-            with tape_action:
-                action_logits = self.action(inputs_step)
-                action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
-                # action_dist, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
-                for i in range(self.action_spec_len):
-                    action_dist[i] = self.action.dist[i](action_logits[i])
-                    action[i] = action_dist[i].sample()
-                    actions[i] = actions[i].write(step, action[i][-1])
-                    action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+
+            # with tape_action:
+            #     action_logits = self.action(inputs_step)
+            #     action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
+            #     for i in range(self.action_spec_len):
+            #         action_dist[i] = self.action.dist[i](action_logits[i])
+            #         action[i] = action_dist[i].sample()
+            #         actions[i] = actions[i].write(step, action[i][-1])
+            #         action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+            action_dis = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                actions[i] = actions[i].write(step, action[i][-1])
+                action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
 
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
 
+            with tape_action:
+                action_logits = self.action(inputs_step)
+                action_dist = [None]*self.action_spec_len
+                for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
             entropy = tf.constant([0.0], dtype=self.compute_dtype)
             inputs_step['actions'] = action
@@ -1750,6 +1767,7 @@ class GeneralAI(tf.keras.Model):
             with tape_action:
                 # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
                 loss_action = self.loss_PG(action_dist, action, returns_pred)
+                # loss_action = self.loss_likelihood(action_dist, action)
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
