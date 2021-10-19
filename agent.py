@@ -283,6 +283,7 @@ class GeneralAI(tf.keras.Model):
     def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
+        self.float_min = tf.constant(compute_dtype.min, compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         # self.float_log_min_prob = tf.constant(tf.math.log(self.float_eps), compute_dtype)
@@ -493,16 +494,17 @@ class GeneralAI(tf.keras.Model):
         if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
         return loss
 
-    def loss_PG(self, dist, targets, returns, entropy=None): # policy gradient, actor/critic
+    def loss_PG(self, dist, targets, returns, advantages=None): # policy gradient, actor/critic
         returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
         loss_lik = self.loss_likelihood(dist, targets, probs=False)
         # loss_lik = loss_lik -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
+        if advantages is not None: returns = returns - advantages
         loss = loss_lik * returns # / self.float_maxroot
-        # if entropy is not None: loss = loss * (-entropy)
-        if entropy is not None: loss = loss - loss_lik * entropy
-        # if entropy is not None: loss = loss - entropy
-        # if entropy is not None: loss = loss * (1.0 + entropy)
-        # if entropy is not None: loss = loss * entropy
+        # if advantages is not None: loss = loss * (-advantages)
+        # if advantages is not None: loss = loss - loss_lik * advantages
+        # if advantages is not None: loss = loss - advantages
+        # if advantages is not None: loss = loss * (1.0 + advantages)
+        # if advantages is not None: loss = loss * advantages
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -1275,18 +1277,18 @@ class GeneralAI(tf.keras.Model):
                 while step_img < step_img_max and step_img < steps:
 
                     inputs_step['actions'] = next_action
-                    with tf.GradientTape(persistent=True) as tape_img:
+                    with tf.GradientTape(persistent=True) as tape_next_action_img:
                         trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
                         inputs_step['obs'] = trans_dist.sample()
 
                     next_action = [None]*self.action_spec_len
                     for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step_img:step_img+1]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
-                    with tape_img:
+                    with tape_next_action_img:
                         next_action_logits = self.action(inputs_step, use_img=True)
                         next_action_dist = [None]*self.action_spec_len
                         for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
                         loss_next_action = self.loss_likelihood(next_action_dist, next_action)
-                    gradients = tape_img.gradient(loss_next_action, self.trans.trainable_variables + self.action.trainable_variables)
+                    gradients = tape_next_action_img.gradient(loss_next_action, self.trans.trainable_variables + self.action.trainable_variables)
                     self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.action.trainable_variables))
                     loss_next_action_img_accu = loss_next_action_img_accu.write(step_img-2, loss_next_action)
 
