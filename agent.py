@@ -83,7 +83,7 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, step=None, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, step=None, training=None):
         if self.aug_data_step: step = tf.cast(step, self.compute_dtype)
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
@@ -106,7 +106,7 @@ class RepNet(tf.keras.Model):
         out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -154,7 +154,7 @@ class TransNet(tf.keras.Model):
         for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, training=None):
         out_accu = [None]*(self.net_ins+1)
         for i in range(self.net_ins):
             out = tf.cast(inputs['actions'][i], self.compute_dtype)
@@ -167,7 +167,7 @@ class TransNet(tf.keras.Model):
         out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -224,11 +224,11 @@ class GenNet(tf.keras.Model):
         for layer in self.layer_attn_out: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, batch_size=1, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, batch_size=1, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -267,11 +267,11 @@ class ValueNet(tf.keras.Model):
     def reset_states(self, use_img=False):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -283,6 +283,7 @@ class GeneralAI(tf.keras.Model):
     def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
+        self.float_min = tf.constant(compute_dtype.min, compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         # self.float_log_min_prob = tf.constant(tf.math.log(self.float_eps), compute_dtype)
@@ -467,12 +468,12 @@ class GeneralAI(tf.keras.Model):
         if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
         return loss
 
-    def loss_PG(self, dist, targets, returns, entropy=None): # policy gradient, actor/critic
+    def loss_PG(self, dist, targets, returns, advantages=None): # policy gradient, actor/critic
         returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
         loss_lik = self.loss_likelihood(dist, targets, probs=False)
         # loss_lik = loss_lik -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
+        if advantages is not None: returns = returns - advantages
         loss = loss_lik * returns # / self.float_maxroot
-        if entropy is not None: loss = loss - loss_lik * entropy
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -487,7 +488,7 @@ class GeneralAI(tf.keras.Model):
         for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
         rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
         step = tf.constant(0)
         # while step < self.max_steps and not inputs['dones'][-1][0]:
@@ -515,6 +516,7 @@ class GeneralAI(tf.keras.Model):
             returns_updt = returns.stack()
             returns_updt = returns_updt + inputs['rewards'][-1]
             returns = returns.unstack(returns_updt)
+            # returns = returns.write(step, [self.float64_zero])
 
             step += 1
 
@@ -563,6 +565,7 @@ class GeneralAI(tf.keras.Model):
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             returns = inputs['returns'][step:step+1]
+            # returns = inputs['rewards'][step:step+1] + returns
             with tape_action:
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
