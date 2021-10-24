@@ -83,7 +83,7 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, step=None, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, step=None, training=None):
         if self.aug_data_step: step = tf.cast(step, self.compute_dtype)
         out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
@@ -106,7 +106,7 @@ class RepNet(tf.keras.Model):
         out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -129,7 +129,7 @@ class TransNet(tf.keras.Model):
         self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
         for i in range(self.net_ins):
             event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
+            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -154,7 +154,7 @@ class TransNet(tf.keras.Model):
         for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, training=None):
         out_accu = [None]*(self.net_ins+1)
         for i in range(self.net_ins):
             out = tf.cast(inputs['actions'][i], self.compute_dtype)
@@ -167,7 +167,7 @@ class TransNet(tf.keras.Model):
         out = tf.math.add_n(out_accu)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -224,11 +224,11 @@ class GenNet(tf.keras.Model):
         for layer in self.layer_attn_out: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, batch_size=1, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, batch_size=1, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -267,11 +267,11 @@ class ValueNet(tf.keras.Model):
     def reset_states(self, use_img=False):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, use_img=False, training=None):
+    def call(self, inputs, store_memory=True, use_img=False, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=(not training), use_img=use_img), axis=0)
+            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
@@ -336,7 +336,7 @@ class GeneralAI(tf.keras.Model):
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
+            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
@@ -384,7 +384,7 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets'] = {'actor_loss_action':np.float64}
             metrics_loss['1nets2'] = {'loss_rwd':np.float64, 'loss_done':np.float64}
             metrics_loss['1extra2'] = {'return_entropy':np.float64}
-            metrics_loss['1nets1'] = {'loss_return':np.float64}
+            # metrics_loss['1nets1'] = {'loss_return':np.float64}
         if trader:
             metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
             metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
@@ -1638,42 +1638,47 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI MU3_img_actor")
         # actions = [None]*self.action_spec_len
         # for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
-        returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        entropies = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        inputs_step, dones  = {'obs':inputs['obs'], 'actions':self.action_zero_out}, tf.constant([[False]])
-        action_first, values, entropy = self.action_zero_out, tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
+        inputs_step, dones  = {'obs':inputs['obs'], 'actions':inputs['actions']}, tf.constant([[False]])
+        # action_first, values, entropy = self.action_zero_out, tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
+        values, entropy = tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
 
         step = tf.constant(0)
-        while step < 4 and not dones[-1][0]:
-        # while not dones[-1][0]:
-            returns = returns.write(step, [self.float64_zero])
-
-            action_logits = self.action(inputs_step, use_img=True)
-            action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                # logits_rnd = tf.random.uniform(tf.shape(action_logits[i]), minval=-0.1, maxval=0.1, dtype=self.compute_dtype)
-                # logits_rnd += action_logits[i] * entropy
-                action_dist[i] = self.action.dist[i](action_logits[i])
-                action[i] = action_dist[i].sample()
-                # actions[i] = actions[i].write(step, action[i][-1])
-            if step == 0: action_first = action
-
-            inputs_step['actions'] = action
+        # while step < 4 and not dones[-1][0]:
+        while not dones[-1][0]:
             trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
             inputs_step['obs'] = trans_dist.sample()
 
             rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
             rewards, dones = rwd_dist.sample(), tf.cast(done_dist.sample(), tf.bool)
+            rwd_entropy, done_entropy = rwd_dist.entropy(), done_dist.entropy()
+            entropies = entropies.write(step, rwd_entropy)
 
-            if self.value_cont:
-                value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
-                values = value_dist.sample()
-            else: values = self.value(inputs_step, use_img=True)
+            # if self.value_cont:
+            #     value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
+            #     values = value_dist.sample()
+            # else: values = self.value(inputs_step, use_img=True)
 
             returns_updt = returns.stack()
             returns_updt = returns_updt + rewards[-1]
             returns = returns.unstack(returns_updt)
+            returns = returns.write(step, [self.float64_zero])
+
+            action = self.action_zero_out
+            if not dones[-1][0]:
+                action_logits = self.action(inputs_step, use_img=True)
+                action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
+                for i in range(self.action_spec_len):
+                    # logits_rnd = tf.random.uniform(tf.shape(action_logits[i]), minval=-0.1, maxval=0.1, dtype=self.compute_dtype)
+                    # logits_rnd += action_logits[i] * entropy
+                    action_dist[i] = self.action.dist[i](action_logits[i])
+                    action[i] = action_dist[i].sample()
+                    # actions[i] = actions[i].write(step, action[i][-1])
+                # if step == 0: action_first = action
+            inputs_step['actions'] = action
 
             step += 1
 
@@ -1681,13 +1686,16 @@ class GeneralAI(tf.keras.Model):
         # returns_updt = returns.stack()
         # returns_updt = returns_updt + values[-1]
         # returns = returns.unstack(returns_updt)
-        returns_first = returns.stack()[0] + values[-1]
+        # returns_first = returns.stack()[0] + values[-1]
+        returns_first = returns.stack()[:1]
 
         outputs = {}
         # out_actions = [None]*self.action_spec_len
         # for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
         # outputs['actions'], outputs['returns'] = out_actions, returns.stack()
-        outputs['actions'], outputs['returns'] = action_first, returns_first[0]
+        # outputs['actions'], outputs['returns'] = action_first, returns_first
+        outputs['returns'] = returns_first
+        outputs['entropy'] = tf.math.reduce_mean(entropies.stack(), axis=0)
         return outputs
 
     def MU3_actor(self, inputs):
@@ -1723,45 +1731,62 @@ class GeneralAI(tf.keras.Model):
             #         returns_max = outputs_img['returns']
             #         action = outputs_img['actions']
 
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+            # action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
+            # for i in range(self.action_spec_len):
+            #     action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+            #     actions[i] = actions[i].write(step, action[i][-1])
+            #     action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
 
             # with tape_action:
             #     action_logits = self.action(inputs_step)
-            #     action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
-            #     for i in range(self.action_spec_len):
-            #         action_dist[i] = self.action.dist[i](action_logits[i])
-            #         action[i] = action_dist[i].sample()
-            #         actions[i] = actions[i].write(step, action[i][-1])
-            #         action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+            #     action_dist = [None]*self.action_spec_len
+            #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
-            action_dis = [None]*self.action_spec_len
+            action_logits = self.action(inputs_step)
+            action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
             for i in range(self.action_spec_len):
-                actions[i] = actions[i].write(step, action[i][-1])
-                action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+                action_dist[i] = self.action.dist[i](action_logits[i])
+                action[i] = action_dist[i].sample()
+
+            inputs_step['actions'] = action
+            self.reset_states(use_img=True); outputs_img = self.MU3_img_actor(inputs_step)
+            # action, values = outputs_img['actions'], outputs_img['returns']
+            values = outputs_img['returns']
+            entropy = outputs_img['entropy']
+
+            with tape_action:
+                action_logits = self.action(inputs_step, store_memory=False, use_img=True)
+                action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
+                for i in range(self.action_spec_len):
+                    action_dist[i] = self.action.dist[i](action_logits[i])
+                    action[i] = action_dist[i].sample()
+                    actions[i] = actions[i].write(step, action[i][-1])
+                    action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+            inputs_step['actions'] = action
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True);
+            outputs_img = self.MU3_img_actor(inputs_step)
+            # action, values = outputs_img['actions'], outputs_img['returns']
+            values = outputs_img['returns']
+            entropy = outputs_img['entropy']
+
 
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
 
-            with tape_action:
-                action_logits = self.action(inputs_step)
-                action_dist = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-
-            entropy = tf.constant([0.0], dtype=self.compute_dtype)
-            inputs_step['actions'] = action
+            # entropy = tf.constant([0.0], dtype=self.compute_dtype)
+            # inputs_step['actions'] = action
             with tape_reward, tape_done:
                 trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
                 inputs_step['obs'] = trans_dist.sample()
             # entropy += trans_dist.entropy()
 
-            if self.value_cont:
-                value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
-                values = value_dist.sample()
-                entropy += value_dist.entropy()
-            else: values = self.value(inputs_step)
+            # if self.value_cont:
+            #     value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+            #     values = value_dist.sample()
+            #     entropy += value_dist.entropy()
+            # else: values = self.value(inputs_step)
 
             returns_pred = inputs['rewards'] + values
             with tape_action:
@@ -1812,14 +1837,15 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI MU3_run_episode")
         while not inputs['dones'][-1][0]:
             self.reset_states(); outputs, inputs, loss_actor = self.MU3_actor(inputs)
-            self.reset_states(); loss_return = self.VPN_return_learner(outputs)
+            # self.reset_states(); loss_return = self.VPN_return_learner(outputs)
+            self.reset_states(); loss = self.MU2_learner(outputs, num_img_steps=4)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss_actor['returns_pred']),
                 tf.math.reduce_mean(loss_actor['action']),
                 tf.math.reduce_mean(loss_actor['reward']), tf.math.reduce_mean(loss_actor['done']),
                 tf.math.reduce_mean(loss_actor['entropy']),
-                tf.math.reduce_mean(loss_return['return']),
+                # tf.math.reduce_mean(loss_return['return']),
             ]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
@@ -1837,9 +1863,9 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
-load_model, save_model = False, False
-max_episodes = 10
-learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
+load_model, save_model = True, True
+max_episodes = 400
+learn_rate = 1e-6 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
@@ -1848,15 +1874,15 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 attn_num_latents = 1 # 1 = no attn io
 attn_mem_multi = 1
-aug_data_step, aug_data_pos = False, False
+aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '_img4x4' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
@@ -1871,11 +1897,11 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 1; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-# max_steps = 64 # max replay buffer or train interval or bootstrap
+max_steps = 256 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss

@@ -311,7 +311,10 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 mem_idx.assign(mem_idx_next)
 
         # value_mem = memory[:,mem_idx:] # gradients not always working with this
-        value_mem = tf.concat([memory[:,mem_idx:-time_size], value], axis=1)
+        if not store_memory and use_img and mem_idx != self._mem_idx:
+            now_idx = mem_idx - self._mem_idx
+            value_mem = tf.concat([memory[:,mem_idx:now_idx-time_size], value, memory[:,now_idx:]], axis=1)
+        else: value_mem = tf.concat([memory[:,mem_idx:-time_size], value], axis=1)
         seq_size = tf.shape(value_mem)[1]
 
         # TODO loop through value or query if too big for memory
