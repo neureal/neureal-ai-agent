@@ -86,7 +86,7 @@ class DataEnv(gym.Env):
             self.item_accu.append(action)
 
     def _request(self, action):
-        reward, done, info = np.float64(0.0), False, {}
+        reward, done, info = np.float64(-1.0), False, {}
         # obs = self.observation_space.sample()
         # reward = np.float64(np.random.standard_normal())
 
