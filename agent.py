@@ -322,7 +322,7 @@ class GeneralAI(tf.keras.Model):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
         self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
-        if arch in ('AC','MU','VPN','MU2','MU3',):
+        if arch in ('AC','MU','VPN','MU2',):
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
                 self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
@@ -1641,9 +1641,9 @@ class GeneralAI(tf.keras.Model):
         entropies = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        inputs_step, dones  = {'obs':inputs['obs'], 'actions':inputs['actions']}, tf.constant([[False]])
-        # action_first, values, entropy = self.action_zero_out, tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
-        values, entropy = tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
+        inputs_step  = {'obs':inputs['obs'], 'actions':inputs['actions']}
+        dones, values, entropy = tf.constant([[False]]), tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
+        # action_first = self.action_zero_out
 
         step = tf.constant(0)
         # while step < 4 and not dones[-1][0]:
@@ -1788,7 +1788,11 @@ class GeneralAI(tf.keras.Model):
             #     entropy += value_dist.entropy()
             # else: values = self.value(inputs_step)
 
+            # if action[0] == tf.cast(inputs['obs'][0], dtype=tf.int32):
+            #     tf.print('test')
+
             returns_pred = inputs['rewards'] + values
+            # returns_pred = inputs['rewards']
             with tape_action:
                 # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
                 loss_action = self.loss_PG(action_dist, action, returns_pred)
@@ -1838,7 +1842,7 @@ class GeneralAI(tf.keras.Model):
         while not inputs['dones'][-1][0]:
             self.reset_states(); outputs, inputs, loss_actor = self.MU3_actor(inputs)
             # self.reset_states(); loss_return = self.VPN_return_learner(outputs)
-            self.reset_states(); loss = self.MU2_learner(outputs, num_img_steps=4)
+            # self.reset_states(); loss = self.MU2_learner(outputs, num_img_steps=4)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss_actor['returns_pred']),
@@ -1863,9 +1867,9 @@ class GeneralAI(tf.keras.Model):
 
 
 def params(): pass
-load_model, save_model = True, True
-max_episodes = 400
-learn_rate = 1e-6 # 5 = testing, 6 = more stable/slower
+load_model, save_model = False, False
+max_episodes = 100
+learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
