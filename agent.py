@@ -1641,9 +1641,9 @@ class GeneralAI(tf.keras.Model):
         entropies = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        inputs_step  = {'obs':inputs['obs'], 'actions':inputs['actions']}
-        dones, values, entropy = tf.constant([[False]]), tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
-        # action_first = self.action_zero_out
+        inputs_step = {'obs':inputs['obs'], 'actions':inputs['actions']}
+        dones = tf.constant([[False]])
+        # action_first, values, entropy = self.action_zero_out, tf.constant([[0.0]], dtype=self.compute_dtype), tf.constant(0.0, dtype=self.compute_dtype)
 
         step = tf.constant(0)
         # while step < 4 and not dones[-1][0]:
@@ -1717,7 +1717,7 @@ class GeneralAI(tf.keras.Model):
         step = tf.constant(0)
         # while step < self.max_steps and not inputs['dones'][-1][0]:
         while not inputs['dones'][-1][0]:
-            inputs_step = {}
+            inputs_step = {'obs':self.latent_zero, 'actions':self.action_zero_out}
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
 
             with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
@@ -1742,34 +1742,53 @@ class GeneralAI(tf.keras.Model):
             #     action_dist = [None]*self.action_spec_len
             #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
-            action_logits = self.action(inputs_step)
-            action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                action_dist[i] = self.action.dist[i](action_logits[i])
-                action[i] = action_dist[i].sample()
-
-            inputs_step['actions'] = action
-            self.reset_states(use_img=True); outputs_img = self.MU3_img_actor(inputs_step)
-            # action, values = outputs_img['actions'], outputs_img['returns']
-            values = outputs_img['returns']
-            entropy = outputs_img['entropy']
-
             with tape_action:
-                action_logits = self.action(inputs_step, store_memory=False, use_img=True)
-                action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
+                action_logits = self.action(inputs_step)
+                action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
                 for i in range(self.action_spec_len):
                     action_dist[i] = self.action.dist[i](action_logits[i])
                     action[i] = action_dist[i].sample()
-                    actions[i] = actions[i].write(step, action[i][-1])
-                    action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
-
+            self.action.reset_states(use_img=True)
             inputs_step['actions'] = action
-            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True);
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
             outputs_img = self.MU3_img_actor(inputs_step)
-            # action, values = outputs_img['actions'], outputs_img['returns']
-            values = outputs_img['returns']
-            entropy = outputs_img['entropy']
 
+            # action_logits = self.action(inputs_step, store_memory=False, use_img=True)
+            # # action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
+            # for i in range(self.action_spec_len):
+            #     action_dist[i] = self.action.dist[i](action_logits[i])
+            #     # action[i] = action_dist[i].sample(); action[i].set_shape(self.action_spec[i]['step_shape'])
+            #     action[i] = action_dist[i].sample()
+            # inputs_step['actions'] = action
+            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            # outputs_img = self.MU3_img_actor(inputs_step)
+
+            # action_logits = self.action(inputs_step, store_memory=False, use_img=True)
+            # # action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
+            # for i in range(self.action_spec_len):
+            #     action_dist[i] = self.action.dist[i](action_logits[i])
+            #     # action[i] = action_dist[i].sample(); action[i].set_shape(self.action_spec[i]['step_shape'])
+            #     action[i] = action_dist[i].sample()
+            # inputs_step['actions'] = action
+            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            # outputs_img = self.MU3_img_actor(inputs_step)
+
+            # with tape_action:
+            #     action_logits = self.action(inputs_step, store_memory=False, use_img=True)
+            #     # action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
+            #     for i in range(self.action_spec_len):
+            #         action_dist[i] = self.action.dist[i](action_logits[i])
+            #         # action[i] = action_dist[i].sample(); action[i].set_shape(self.action_spec[i]['step_shape'])
+            #         action[i] = action_dist[i].sample()
+            # inputs_step['actions'] = action
+            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            # outputs_img = self.MU3_img_actor(inputs_step)
+
+
+            action_dis = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                actions[i] = actions[i].write(step, action[i][-1])
+                action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
 
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
@@ -1791,6 +1810,7 @@ class GeneralAI(tf.keras.Model):
             # if action[0] == tf.cast(inputs['obs'][0], dtype=tf.int32):
             #     tf.print('test')
 
+            values, entropy = outputs_img['returns'], outputs_img['entropy']
             returns_pred = inputs['rewards'] + values
             # returns_pred = inputs['rewards']
             with tape_action:
@@ -1868,7 +1888,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 100
+max_episodes = 10
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
