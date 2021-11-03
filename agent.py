@@ -1722,6 +1722,7 @@ class GeneralAI(tf.keras.Model):
 
             with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
                 rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
+                # if step != 0:
                 inputs_step['obs'] = rep_dist.sample()
 
             # action, returns_max = self.action_zero_out, self.float_min
@@ -1730,17 +1731,16 @@ class GeneralAI(tf.keras.Model):
             #     if outputs_img['returns'] > returns_max:
             #         returns_max = outputs_img['returns']
             #         action = outputs_img['actions']
-
-            # action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len
-            # for i in range(self.action_spec_len):
-            #     action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
-            #     actions[i] = actions[i].write(step, action[i][-1])
-            #     action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
-
             # with tape_action:
             #     action_logits = self.action(inputs_step)
             #     action_dist = [None]*self.action_spec_len
             #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+
+
+            # action = [None]*self.action_spec_len
+            # for i in range(self.action_spec_len):
+            #     action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+
 
             with tape_action:
                 action_logits = self.action(inputs_step)
