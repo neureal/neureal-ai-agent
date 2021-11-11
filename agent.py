@@ -23,6 +23,10 @@ import gym, ale_py, gym_algorithmic, procgen, pybulletgym
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
+# TODO add Fourier prior like PercieverIO or https://github.com/zongyi-li/fourier_neural_operator
+# TODO add S4 layer https://github.com/HazyResearch/state-spaces
+# TODO how does CLIP quantize latents? https://github.com/openai/CLIP
+
 # TODO try out MuZero-ish architecture
 # TODO add Perciever, maybe ReZero
 
@@ -48,7 +52,7 @@ class RepNet(tf.keras.Model):
         self.net_ins, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = len(spec_in), [], [], []
         for i in range(self.net_ins):
             event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            if aug_data_step: channels += 1
+            # if aug_data_step: channels += 1
             if aug_data_pos:
                 if event_size <= 1: self.pos_idx_in += [None]
                 else:
@@ -59,6 +63,7 @@ class RepNet(tf.keras.Model):
                     channels += pos_idx.shape[-1]
             if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
+        self.layer_step_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_in_{:02d}'.format(i))
 
         # TODO duplicate per net_ins for better conditioning?
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -84,24 +89,29 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, step=None, training=None):
-        if self.aug_data_step: step = tf.cast(step, self.compute_dtype)
-        out_accu = [None]*self.net_ins
+        if self.aug_data_step:
+            step = tf.cast(step, self.compute_dtype)
+            out_accu = [None]*(self.net_ins+1)
+        else: out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
             if self.aug_data_pos and self.pos_idx_in[i] is not None:
                 shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
                 pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
                 out = tf.concat([out, pos_idx], axis=-1)
-            if self.aug_data_step:
-                shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
-                step_idx = tf.broadcast_to(step, shape)
-                out = tf.concat([out, step_idx], axis=-1)
+            # if self.aug_data_step:
+            #     shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
+            #     step_idx = tf.broadcast_to(step, shape)
+            #     out = tf.concat([out, step_idx], axis=-1)
             if self.net_attn_io:
                 # out = tf.expand_dims(out, axis=-1)
                 out = self.layer_attn_in[i](out, use_img=use_img)
             else: out = self.layer_flatten(out)
             out = self.layer_mlp_in[i](out)
             out_accu[i] = out
+        if self.aug_data_step:
+            step = tf.reshape(step, [1,1])
+            out_accu[-1] = self.layer_step_in(step)
         # out = tf.math.accumulate_n(out_accu)
         out = tf.math.add_n(out_accu)
         
@@ -311,7 +321,7 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             smpl = rep_dist.sample()
             smpl = tf.zeros_like(smpl, latent_spec['dtype'])
@@ -320,7 +330,7 @@ class GeneralAI(tf.keras.Model):
 
         # if arch in ('TEST',):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU',):
             if value_cont:
@@ -1078,7 +1088,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 3000
+max_episodes = 1000
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -1088,15 +1098,15 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 attn_num_latents = 1 # 1 = no attn io
 attn_mem_multi = 1
-aug_data_step, aug_data_pos = True, True
+aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
-# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
+env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
@@ -1111,16 +1121,16 @@ trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 # from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 1; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG' # Policy Gradient agent, PG loss
+arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
-arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
+# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
