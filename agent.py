@@ -48,7 +48,7 @@ class RepNet(tf.keras.Model):
         self.net_ins, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = len(spec_in), [], [], []
         for i in range(self.net_ins):
             event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            if aug_data_step: channels += 1
+            # if aug_data_step: channels += 1
             if aug_data_pos:
                 if event_size <= 1: self.pos_idx_in += [None]
                 else:
@@ -59,6 +59,7 @@ class RepNet(tf.keras.Model):
                     channels += pos_idx.shape[-1]
             if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
             self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
+        self.layer_step_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_in_{:02d}'.format(i))
 
         # TODO duplicate per net_ins for better conditioning?
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -84,24 +85,29 @@ class RepNet(tf.keras.Model):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, step=None, training=None):
-        if self.aug_data_step: step = tf.cast(step, self.compute_dtype)
-        out_accu = [None]*self.net_ins
+        if self.aug_data_step:
+            step = tf.cast(step, self.compute_dtype)
+            out_accu = [None]*(self.net_ins+1)
+        else: out_accu = [None]*self.net_ins
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
             if self.aug_data_pos and self.pos_idx_in[i] is not None:
                 shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
                 pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
                 out = tf.concat([out, pos_idx], axis=-1)
-            if self.aug_data_step:
-                shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
-                step_idx = tf.broadcast_to(step, shape)
-                out = tf.concat([out, step_idx], axis=-1)
+            # if self.aug_data_step:
+            #     shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
+            #     step_idx = tf.broadcast_to(step, shape)
+            #     out = tf.concat([out, step_idx], axis=-1)
             if self.net_attn_io:
                 # out = tf.expand_dims(out, axis=-1)
                 out = self.layer_attn_in[i](out, use_img=use_img)
             else: out = self.layer_flatten(out)
             out = self.layer_mlp_in[i](out)
             out_accu[i] = out
+        if self.aug_data_step:
+            step = tf.reshape(step, [1,1])
+            out_accu[-1] = self.layer_step_in(step)
         # out = tf.math.accumulate_n(out_accu)
         out = tf.math.add_n(out_accu)
         
@@ -619,6 +625,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
+            if self.trader: metrics += [tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def PG(self):
@@ -1903,7 +1910,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 # env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
