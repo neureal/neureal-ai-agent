@@ -113,7 +113,8 @@ class RepNet(tf.keras.Model):
             step = tf.reshape(step, [1,1])
             out_accu[-1] = self.layer_step_in(step)
         # out = tf.math.accumulate_n(out_accu)
-        out = tf.math.add_n(out_accu)
+        # out = tf.math.add_n(out_accu)
+        out = tf.concat(out_accu, axis=0)
         
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
@@ -244,7 +245,7 @@ class GenNet(tf.keras.Model):
 
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
-            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, use_img=use_img, num_latents=batch_size)
+            out_logits[i] = tf.reshape(out, (batch_size, -1)) if not self.net_attn_io else self.layer_attn_out[i](out, use_img=use_img, num_latents=batch_size)
             out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
@@ -317,7 +318,8 @@ class GeneralAI(tf.keras.Model):
         self.latent_spec = latent_spec
 
         net_attn, net_lstm = True, False
-        memory_size = (attn_num_latents * max_steps if attn_num_latents > 1 else max_steps) * attn_mem_multi
+        latent_batch_size = attn_num_latents if attn_num_latents > 1 else self.obs_spec_len + (1 if aug_data_step else 0)
+        memory_size = latent_batch_size * max_steps * attn_mem_multi
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
@@ -598,6 +600,7 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
+            if self.trader: metrics += [tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def PG(self):
