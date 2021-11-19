@@ -226,18 +226,19 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, latent_size, num_heads=1, memory_size=1, sort_memory=False, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
+    def __init__(self, latent_size, num_heads=1, memory_size=None, sort_memory=False, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
         # key_dim = int(channels/num_heads) if cross_type == 2 else int(latent_size/num_heads)
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
-        self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = tf.identity(memory_size), sort_memory, norm, residual, cross_type # (None if cross_type is None else True)
+        self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = memory_size, sort_memory, norm, residual, cross_type
 
-        mem_channels = latent_size if cross_type != 1 else channels
-        mem_zero = tf.constant(np.full((1, memory_size, mem_channels), 0), tf.keras.backend.floatx())
-        self._mem_zero = tf.identity(mem_zero)
-        if sort_memory:
-            mem_score_zero = tf.constant(np.full((1, memory_size), 0), tf.keras.backend.floatx())
-            self._mem_score_zero = tf.identity(mem_score_zero)
+        if memory_size is not None:
+            mem_channels = latent_size if cross_type != 1 else channels
+            mem_zero = tf.constant(np.full((1, memory_size, mem_channels), 0), tf.keras.backend.floatx())
+            self._mem_zero = tf.identity(mem_zero)
+            if sort_memory:
+                mem_score_zero = tf.constant(np.full((1, memory_size), 0), tf.keras.backend.floatx())
+                self._mem_score_zero = tf.identity(mem_score_zero)
 
         if norm:
             # float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
@@ -253,11 +254,11 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             if init_zero is None:
                 # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
                 # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
-                if cross_type == 1:
+                if cross_type == 1: # input, batch = different latents
                     init_zero = np.linspace(-1.0, 1.0, num_latents) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=-1)
                     init_zero = np.repeat(init_zero, latent_size, axis=-1)
-                if cross_type == 2:
+                if cross_type == 2: # output, batch = actual batch
                     init_zero = np.linspace(-1.0, 1.0, channels) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=0)
                     init_zero = np.repeat(init_zero, num_latents, axis=0)
@@ -266,8 +267,9 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             self._init_zero = tf.identity(init_zero)
 
     def build(self, input_shape):
-        self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
-        self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
+        if self._mem_size is not None:
+            self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
+            self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
         if self._sort_memory:
             self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
             self._mem_score_img = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score_img')
@@ -287,14 +289,15 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             value = tf.reshape(value, (1, -1, tf.shape(value)[-1]))
             query = self._init_latent if num_latents is None else self._init_latent[:,:num_latents]
         else: query = value
-
-        if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
-        if use_img: mem_idx, memory = self._mem_idx_img, self._memory_img
-        else: mem_idx, memory = self._mem_idx, self._memory
-        if self._sort_memory: mem_score = self._mem_score_img if use_img else self._mem_score
-
         time_size = tf.shape(value)[1]
-        if store_memory:
+        if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
+
+        if self._mem_size is not None:
+            if use_img: mem_idx, memory = self._mem_idx_img, self._memory_img
+            else: mem_idx, memory = self._mem_idx, self._memory
+            if self._sort_memory: mem_score = self._mem_score_img if use_img else self._mem_score
+
+        if self._mem_size is not None and store_memory:
             drop_off = tf.roll(memory, shift=-time_size, axis=1)
             memory.assign(drop_off)
             memory[:,-time_size:].assign(value)
@@ -310,12 +313,13 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 if mem_idx_next < 0: mem_idx_next = 0
                 mem_idx.assign(mem_idx_next)
 
-        # value_mem = memory[:,mem_idx:] # gradients not always working with this
-        if not store_memory and use_img and mem_idx != self._mem_idx:
-            now_idx = mem_idx - self._mem_idx
-            value_mem = tf.concat([memory[:,mem_idx:now_idx-time_size], value, memory[:,now_idx:]], axis=1)
-        else: value_mem = tf.concat([memory[:,mem_idx:-time_size], value], axis=1)
-        seq_size = tf.shape(value_mem)[1]
+        if self._mem_size is not None:
+            # value_mem = memory[:,mem_idx:] # gradients not always working with this
+            if not store_memory and use_img and mem_idx != self._mem_idx:
+                now_idx = mem_idx - self._mem_idx
+                value_mem = tf.concat([memory[:,mem_idx:now_idx-time_size], value, memory[:,now_idx:]], axis=1)
+            else: value_mem = tf.concat([memory[:,mem_idx:-time_size], value], axis=1)
+        else: value_mem = value
 
         # TODO loop through value or query if too big for memory
         query_ = self._query_dense(query)
@@ -330,11 +334,12 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         else: value = self._value_dense(value_mem)
         # if self._norm: value = self._layer_norm_value(value)
 
+        seq_size = tf.shape(query)[1]
         if auto_mask: attention_mask = tf.linalg.band_part(tf.ones((time_size,seq_size)), -1, seq_size - time_size)
 
         attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
-        
-        if store_memory and self._sort_memory:
+
+        if self._mem_size is not None and store_memory and self._sort_memory:
             # scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0]
             # scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
             # scores = tf.gather(memory[:,mem_idx:], scores, axis=1)
@@ -360,14 +365,15 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         return attn_output
 
     def reset_states(self, use_img=False):
-        if use_img:
-            self._mem_idx_img.assign(self._mem_idx)
-            self._memory_img.assign(self._memory)
-            if self._sort_memory: self._mem_score_img.assign(self._mem_score)
-        else:
-            self._mem_idx.assign(self._mem_size)
-            self._memory.assign(self._mem_zero)
-            if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
+        if self._mem_size is not None:
+            if use_img:
+                self._mem_idx_img.assign(self._mem_idx)
+                self._memory_img.assign(self._memory)
+                if self._sort_memory: self._mem_score_img.assign(self._mem_score)
+            else:
+                self._mem_idx.assign(self._mem_size)
+                self._memory.assign(self._mem_zero)
+                if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
 
 
 
@@ -409,12 +415,12 @@ def gym_get_spec(space, compute_dtype='float64', force_cont=False):
         dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = compute_dtype if force_cont else 'int32'
         dtype_out = tf.dtypes.as_dtype(dtype_out)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1))}]
         zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
     elif isinstance(space, gym.spaces.Box):
         dtype = tf.dtypes.as_dtype(space.dtype)
         dtype_out = tf.dtypes.as_dtype(compute_dtype)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':np.prod(space.shape).item(), 'event_shape':space.shape, 'step_shape':tf.TensorShape([1]+list(space.shape))}]
+        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':int(np.prod(space.shape).item()), 'event_shape':space.shape, 'event_size':int(np.prod(space.shape[:-1]).item()), 'channels':space.shape[-1], 'step_shape':tf.TensorShape([1]+list(space.shape))}]
         zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
     elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
         spec, zero, zero_out = [], [], []
