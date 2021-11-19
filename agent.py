@@ -40,30 +40,32 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class RepNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1, aug_data_step=False, aug_data_pos=False):
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io2=False, num_heads=1, memory_size=None, max_steps=1, aug_data_step=False, aug_data_pos=False):
         super(RepNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, (num_latents > 1)
-        self.aug_data_step, self.aug_data_pos = aug_data_step, aug_data_pos
+        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io2, self.aug_data_step = net_blocks, net_attn, net_lstm, net_attn_io2, aug_data_step
         self.layer_flatten = tf.keras.layers.Flatten()
 
         # TODO how to loop through inputs?
         # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
-        self.net_ins, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = len(spec_in), [], [], []
+        self.net_ins = len(spec_in); self.net_ins_all, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = self.net_ins, [None]*self.net_ins, [None]*self.net_ins, [None]*self.net_ins
         for i in range(self.net_ins):
-            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            # if aug_data_step: channels += 1
-            if aug_data_pos:
-                if event_size <= 1: self.pos_idx_in += [None]
-                else:
-                    pos_idx = np.indices(event_shape[:-1])
+            event_shape, event_size, channels, num_latents = spec_in[i]['event_shape'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['num_latents']
+            if aug_data_pos and event_size > 1:
+                    pos_idx = np.indices(spec_in[i]['event_shape'][:-1])
                     pos_idx = np.moveaxis(pos_idx, 0, -1)
                     # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
-                    self.pos_idx_in += [tf.constant(pos_idx, dtype=self.compute_dtype)]
+                    self.pos_idx_in[i] = tf.constant(pos_idx, dtype=self.compute_dtype)
                     channels += pos_idx.shape[-1]
-            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
-            self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
-        self.layer_step_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_in_{:02d}'.format(i))
+            if net_attn_io and event_size > 1:
+                self.layer_attn_in[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))
+            self.layer_mlp_in[i] = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))
+        if aug_data_step:
+            self.net_ins_all += 1
+            # self.layer_rwd_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='rwd_in')
+            # self.layer_done_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='done_in')
+            self.layer_step_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_in')
+        if net_attn_io2: self.layer_attn_io2 = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=latent_spec['num_latents'], channels=latent_size, name='attn_io2')
 
         # TODO duplicate per net_ins for better conditioning?
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -85,36 +87,30 @@ class RepNet(tf.keras.Model):
         self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
 
     def reset_states(self, use_img=False):
-        for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, step=None, training=None):
-        if self.aug_data_step:
-            step = tf.cast(step, self.compute_dtype)
-            out_accu = [None]*(self.net_ins+1)
-        else: out_accu = [None]*self.net_ins
+        out_accu = [None]*self.net_ins_all
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            if self.aug_data_pos and self.pos_idx_in[i] is not None:
+            if self.pos_idx_in[i] is not None:
                 shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
                 pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
                 out = tf.concat([out, pos_idx], axis=-1)
-            # if self.aug_data_step:
-            #     shape = tf.concat([tf.shape(out)[:-1], [1]], axis=0)
-            #     step_idx = tf.broadcast_to(step, shape)
-            #     out = tf.concat([out, step_idx], axis=-1)
-            if self.net_attn_io:
-                # out = tf.expand_dims(out, axis=-1)
-                out = self.layer_attn_in[i](out, use_img=use_img)
+            if self.layer_attn_in[i] is not None: out = self.layer_attn_in[i](out)
             else: out = self.layer_flatten(out)
-            out = self.layer_mlp_in[i](out)
-            out_accu[i] = out
+            out_accu[i] = self.layer_mlp_in[i](out)
         if self.aug_data_step:
+            # out = tf.cast(inputs['rewards'], self.compute_dtype)
+            # out_accu[-3] = self.layer_rwd_in(out)
+            # out = tf.cast(inputs['dones'], self.compute_dtype)
+            # out_accu[-2] = self.layer_done_in(out)
+            step = tf.cast(step, self.compute_dtype)
             step = tf.reshape(step, [1,1])
             out_accu[-1] = self.layer_step_in(step)
-        # out = tf.math.accumulate_n(out_accu)
-        # out = tf.math.add_n(out_accu)
+        # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
         out = tf.concat(out_accu, axis=0)
+        if self.net_attn_io2: out = self.layer_attn_io2(out)
         
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
@@ -130,18 +126,21 @@ class RepNet(tf.keras.Model):
 
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1): # spec_in=[] for no action conditioning
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, max_steps=1): # spec_in=[] for no action conditioning
         super(TransNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, (num_latents > 1)
+        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io, self.lat_batch_size = net_blocks, net_attn, net_lstm, net_attn_io, latent_spec['num_latents']
         self.layer_flatten = tf.keras.layers.Flatten()
 
         # self.net_inputs = ['actions']*len(spec_in)+['obs'] # action conditioning/embedding
-        self.net_ins, self.layer_attn_in, self.layer_mlp_in = len(spec_in), [], []
+        self.net_ins = len(spec_in); self.net_ins_all, self.layer_attn_in, self.layer_mlp_in = self.net_ins+1, [None]*self.net_ins, [None]*self.net_ins
         for i in range(self.net_ins):
-            event_shape = spec_in[i]['event_shape']; channels = event_shape[-1]; event_size = int(np.prod(event_shape[:-1]).item())
-            if self.net_attn_io: self.layer_attn_in += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*event_size, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))]
-            self.layer_mlp_in += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))]
+            event_shape, event_size, channels, num_latents = spec_in[i]['event_shape'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['num_latents']
+            # TODO add aug_data_pos?
+            if net_attn_io and event_size > 1:
+                self.layer_attn_in[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))
+            self.layer_mlp_in[i] = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))
+        # TODO add net_attn_io2
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
         for i in range(net_blocks):
@@ -156,33 +155,37 @@ class TransNet(tf.keras.Model):
         if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
         if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
         if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
-        self.layer_dense_out_logits = tf.keras.layers.Dense(params_size, name='dense_out_logits')
+        # if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=mid, evo=evo, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
+        if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
+        self.layer_dense_out_logits = tf.keras.layers.Dense(self.lat_batch_size*params_size, name='dense_out_logits')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
 
     def reset_states(self, use_img=False):
-        for layer in self.layer_attn_in: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, training=None):
-        out_accu = [None]*(self.net_ins+1)
+        out_accu = [None]*self.net_ins_all
         for i in range(self.net_ins):
             out = tf.cast(inputs['actions'][i], self.compute_dtype)
-            if self.net_attn_io: out = self.layer_attn_in[i](out, use_img=use_img)
+            if self.layer_attn_in[i] is not None: out = self.layer_attn_in[i](out)
             else: out = self.layer_flatten(out)
-            out = self.layer_mlp_in[i](out)
-            out_accu[i] = out
+            out_accu[i] = self.layer_mlp_in[i](out)
         out_accu[-1] = tf.cast(inputs['obs'], self.compute_dtype)
-        # out = tf.math.accumulate_n(out_accu)
-        out = tf.math.add_n(out_accu)
+        # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
+        out = tf.concat(out_accu, axis=0)
         
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
-        out = self.layer_dense_out_logits(out)
+        if not self.net_attn_io:
+            out = self.layer_flatten(tf.expand_dims(out, axis=0))
+            out = self.layer_dense_out_logits(out)
+            out = tf.reshape(out, (self.lat_batch_size, -1))
+        else: out = self.layer_attn_out(out)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('trans net out:', out)
@@ -190,10 +193,10 @@ class TransNet(tf.keras.Model):
 
 
 class GenNet(tf.keras.Model):
-    def __init__(self, name, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_latents=1, num_heads=1, memory_size=None, max_steps=1, force_det_out=False):
+    def __init__(self, name, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, max_steps=1, force_det_out=False):
         super(GenNet, self).__init__(name=name)
         outp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, (num_latents > 1)
+        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, net_attn_io
         self.layer_flatten = tf.keras.layers.Flatten()
         mixture_size = 8 # int(latent_size/2)
 
@@ -208,7 +211,7 @@ class GenNet(tf.keras.Model):
                 self.layer_mlp += [tf.keras.layers.Dense(latent_size, name='dense_{:02d}'.format(i))]
             else: self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=evo, residual=False, name='mlp_{:02d}'.format(i))]
 
-        self.net_outs, params_size, self.dist, self.logits_step_shape, arch_out = len(spec_out), [], [], [], "O"
+        self.net_outs = len(spec_out); params_size, self.dist, self.logits_step_shape, arch_out = [], [], [], "O"
         for i in range(self.net_outs):
             num_components, event_shape = spec_out[i]['num_components'], spec_out[i]['event_shape']
             if force_det_out:
@@ -225,14 +228,13 @@ class GenNet(tf.keras.Model):
 
         self.layer_attn_out, self.layer_mlp_out_logits = [], []
         for i in range(self.net_outs):
-            if self.net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, memory_size=max_steps*num_latents, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
+            if net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
             self.layer_mlp_out_logits += [util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{:02d}'.format(i))]
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[{:02d}{}{}D{}-{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, arch_out, ('-hds'+str(num_heads) if self.net_attn else ''))
 
     def reset_states(self, use_img=False):
-        for layer in self.layer_attn_out: layer.reset_states(use_img=use_img)
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, batch_size=1, training=None):
@@ -243,9 +245,10 @@ class GenNet(tf.keras.Model):
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
+        if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
-            out_logits[i] = tf.reshape(out, (batch_size, -1)) if not self.net_attn_io else self.layer_attn_out[i](out, use_img=use_img, num_latents=batch_size)
+            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
             out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
@@ -291,7 +294,7 @@ class ValueNet(tf.keras.Model):
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi, aug_data_step, aug_data_pos):
+    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, net_attn_io, aio_max_latents, attn_mem_multi, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_min = tf.constant(compute_dtype.min, compute_dtype)
@@ -312,43 +315,61 @@ class GeneralAI(tf.keras.Model):
         self.gym_step_dtypes = [feat['dtype'] for feat in self.obs_spec] + [tf.float64, tf.bool]
         self.rewards_zero, self.dones_zero = tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
 
-        if latent_dist == 0: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':0} # deterministic
-        if latent_dist == 1: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size, latent_size), 'num_components':0} # categorical
-        if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)} # continuous
-        self.latent_spec = latent_spec
-
         net_attn, net_lstm = True, False
-        latent_batch_size = attn_num_latents if attn_num_latents > 1 else self.obs_spec_len + (1 if aug_data_step else 0)
-        memory_size = latent_batch_size * max_steps * attn_mem_multi
+
+        lat_batch_size = 0
+        for i in range(self.obs_spec_len):
+            if net_attn_io:
+                event_size = self.obs_spec[i]['event_size']
+                num_latents = aio_max_latents if event_size > aio_max_latents else event_size
+            else: num_latents = 1
+            self.obs_spec[i]['num_latents'] = num_latents
+            lat_batch_size += num_latents
+        lat_batch_size += (1 if aug_data_step else 0)
+        net_attn_io2 = (net_attn_io and lat_batch_size > aio_max_latents)
+        if net_attn_io2: lat_batch_size = aio_max_latents
+        memory_size = lat_batch_size * max_steps * attn_mem_multi
+
+        lat_batch_size_trans = lat_batch_size
+        for i in range(self.action_spec_len):
+            if net_attn_io:
+                event_size = self.action_spec[i]['event_size']
+                num_latents = aio_max_latents if event_size > aio_max_latents else event_size
+            else: num_latents = 1
+            self.action_spec[i]['num_latents'] = num_latents
+            lat_batch_size_trans += num_latents
+        memory_size_trans = lat_batch_size_trans * max_steps * attn_mem_multi
+
+        if latent_dist == 0: latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'event_shape':(latent_size,), 'num_components':0} # deterministic
+        if latent_dist == 1: latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'event_shape':(latent_size, latent_size), 'num_components':0} # categorical
+        if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)} # continuous
+        self.latent_spec = latent_spec
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
-            smpl = rep_dist.sample()
-            smpl = tf.zeros_like(smpl, latent_spec['dtype'])
-            self.latent_zero = smpl
+            self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
 
         # if arch in ('TEST',):
-        #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU',):
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-                self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
+                self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
             else: self.value = ValueNet('VN', latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU',):
             inputs['actions'] = self.action_zero_out
-            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
-            # self.trans = TransNet('TN', self.action_spec, {'dtype':compute_dtype, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)}, 2, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=4, memory_size=memory_size, max_steps=max_steps); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans, max_steps=max_steps); outputs = self.trans(inputs)
         if arch in ('MU',):
-            reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=1, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
+            reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':16, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, num_latents=attn_num_latents, num_heads=1, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
+            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
@@ -1091,7 +1112,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 1000
+max_episodes = 3000
 learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -1099,17 +1120,18 @@ value_cont = False
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-attn_num_latents = 1 # 1 = no attn io
+net_attn_io = True
+aio_max_latents = 64
 attn_mem_multi = 1
 aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE
+machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
+# env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
@@ -1124,16 +1146,16 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
-# import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
+import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 1; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-arch = 'PG' # Policy Gradient agent, PG loss
+# arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
-# arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
+arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
@@ -1152,7 +1174,7 @@ if __name__ == '__main__':
 
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     with tf.device("/device:{}:{}".format(device_type,device)):
-        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, attn_num_latents, attn_mem_multi, aug_data_step, aug_data_pos)
+        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, net_attn_io, aio_max_latents, attn_mem_multi, aug_data_step, aug_data_pos)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
         ## debugging
@@ -1203,8 +1225,8 @@ if __name__ == '__main__':
         total_steps = np.sum(metrics_loss['1steps']['steps+'])
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
-        title += "     |     lr:{}    dis:{}    en:{}    al:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, attn_num_latents, attn_mem_multi, max_steps)
-        title += "     |     a-clk:{}    a-spd:{}    aug:{}{}".format(env_async_clock, env_async_speed, ('S' if aug_data_step else ''), ('P' if aug_data_pos else '')); print(title)
+        title += "     |     lr:{}    dis:{}    en:{}    al:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, aio_max_latents, attn_mem_multi, max_steps)
+        title += "     |     a-clk:{}    a-spd:{}    aug:{}{}    aio:{}".format(env_async_clock, env_async_speed, ('S' if aug_data_step else ''), ('P' if aug_data_pos else ''), ('Y' if net_attn_io else 'N')); print(title)
 
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
