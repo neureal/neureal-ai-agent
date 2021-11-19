@@ -416,8 +416,8 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1extra'] = {'returns_pred':np.float64}
             metrics_loss['1nets'] = {'actor_loss_action':np.float64}
             metrics_loss['1nets2'] = {'loss_rwd':np.float64, 'loss_done':np.float64}
+            metrics_loss['1nets3'] = {'loss_rwd_dyn':np.float64, 'loss_done_dyn':np.float64}
             metrics_loss['1extra2'] = {'return_entropy':np.float64}
-            # metrics_loss['1nets1'] = {'loss_return':np.float64}
         if trader:
             metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
             metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
@@ -1771,6 +1771,7 @@ class GeneralAI(tf.keras.Model):
             #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
 
+            # # TODO can I add ARS here?
             # action = [None]*self.action_spec_len
             # for i in range(self.action_spec_len):
             #     action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
@@ -1891,20 +1892,57 @@ class GeneralAI(tf.keras.Model):
         loss['action'], loss['reward'], loss['done'], loss['entropy'], loss['returns_pred'] = loss_actions.concat(), loss_rewards.concat(), loss_dones.concat(), metric_entropy.concat(), metric_returns_pred.concat()
         return outputs, inputs, loss
 
+    def MU3_dyn_learner(self, inputs, training=True):
+        print("tracing -> GeneralAI MU3_dyn_learner")
+        loss = {}
+        loss_rewards = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        loss_dones = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+        obs = [None]*self.obs_spec_len
+        for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][0:1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+        inputs_step = {'obs':obs, 'actions':self.action_zero_out}
+        rep_logits = self.rep(inputs_step, step=0); rep_dist = self.rep.dist(rep_logits)
+        inputs_step['obs'] = rep_dist.sample()
+
+        for step in tf.range(tf.shape(inputs['dones'])[0]):
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+            inputs_step['actions'] = action
+            with tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
+                trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+                inputs_step['obs'] = trans_dist.sample()
+
+            with tape_reward:
+                rwd_logits = self.rwd(inputs_step); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+                loss_reward = self.loss_likelihood(rwd_dist, inputs['rewards'][step:step+1])
+            gradients = tape_reward.gradient(loss_reward, self.trans.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables))
+            loss_rewards = loss_rewards.write(step, loss_reward)
+
+            with tape_done:
+                done_logits = self.done(inputs_step); done_dist = self.done.dist[0](done_logits[0])
+                loss_done = self.loss_likelihood(done_dist, inputs['dones'][step:step+1])
+            gradients = tape_done.gradient(loss_done, self.trans.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables))
+            loss_dones = loss_dones.write(step, loss_done)
+
+        loss['reward'], loss['done'] = loss_rewards.concat(), loss_dones.concat()
+        return loss
+
     def MU3_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI MU3_run_episode")
         while not inputs['dones'][-1][0]:
             self.reset_states(); outputs, inputs, loss_actor = self.MU3_actor(inputs)
-            # self.reset_states(); loss_return = self.VPN_return_learner(outputs)
-            # self.reset_states(); loss = self.MU2_learner(outputs, num_img_steps=4)
+            self.reset_states(); loss_dyn = self.MU3_dyn_learner(outputs)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss_actor['returns_pred']),
                 tf.math.reduce_mean(loss_actor['action']),
                 tf.math.reduce_mean(loss_actor['reward']), tf.math.reduce_mean(loss_actor['done']),
+                tf.math.reduce_mean(loss_dyn['reward']), tf.math.reduce_mean(loss_dyn['done']),
                 tf.math.reduce_mean(loss_actor['entropy']),
-                # tf.math.reduce_mean(loss_return['return']),
             ]
+            if self.trader: metrics += [tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def MU3(self):
@@ -1963,14 +2001,14 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # max_steps = 256 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-arch = 'PG' # Policy Gradient agent, PG loss
+# arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'VPN' # Value Prediction Network
 # arch = 'SPR' # Self Predictive Representations
 # arch = 'MU2' # Dreamer/planner w/imagination
-# arch = 'MU3' # Dreamer/planner w/imagination
+arch = 'MU3' # Dreamer/planner w/imagination
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
