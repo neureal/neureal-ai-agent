@@ -67,7 +67,6 @@ class RepNet(tf.keras.Model):
             self.layer_step_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_in')
         if net_attn_io2: self.layer_attn_io2 = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=latent_spec['num_latents'], channels=latent_size, name='attn_io2')
 
-        # TODO duplicate per net_ins for better conditioning?
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
         for i in range(net_blocks):
             if self.net_attn:
@@ -84,7 +83,7 @@ class RepNet(tf.keras.Model):
         self.layer_dense_out_logits = tf.keras.layers.Dense(params_size, name='dense_out_logits')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
+        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}x{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_spec['num_latents'], latent_size, latent_spec['num_components'])
 
     def reset_states(self, use_img=False):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
@@ -160,7 +159,7 @@ class TransNet(tf.keras.Model):
         self.layer_dense_out_logits = tf.keras.layers.Dense(self.lat_batch_size*params_size, name='dense_out_logits')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_size, latent_spec['num_components'])
+        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}x{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_spec['num_latents_trans'], latent_size, latent_spec['num_components'])
 
     def reset_states(self, use_img=False):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
@@ -340,9 +339,10 @@ class GeneralAI(tf.keras.Model):
             lat_batch_size_trans += num_latents
         memory_size_trans = lat_batch_size_trans * max_steps * attn_mem_multi
 
-        if latent_dist == 0: latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'event_shape':(latent_size,), 'num_components':0} # deterministic
-        if latent_dist == 1: latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'event_shape':(latent_size, latent_size), 'num_components':0} # categorical
-        if latent_dist == 2: latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'event_shape':(latent_size,), 'num_components':int(latent_size/16)} # continuous
+        latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans}
+        if latent_dist == 0: latent_spec.update({'event_shape':(latent_size,), 'num_components':0}) # deterministic
+        if latent_dist == 1: latent_spec.update({'event_shape':(latent_size, latent_size), 'num_components':0}) # categorical
+        if latent_dist == 2: latent_spec.update({'event_shape':(latent_size,), 'num_components':int(latent_size/16)}) # continuous
         self.latent_spec = latent_spec
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
