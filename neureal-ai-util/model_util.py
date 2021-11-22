@@ -270,9 +270,9 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         if self._mem_size is not None:
             self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
             self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
-        if self._sort_memory:
-            self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
-            self._mem_score_img = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score_img')
+            if self._sort_memory:
+                self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
+                self._mem_score_img = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score_img')
         if self._cross_type: self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
