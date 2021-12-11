@@ -92,6 +92,7 @@ class RepNet(tf.keras.Model):
         out_accu = [None]*self.net_ins_all
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
+            # out = tf.expand_dims(out, axis=-1) # TODO try splitting down to individual scaler level
             if self.pos_idx_in[i] is not None:
                 shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
                 pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
@@ -347,14 +348,14 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
         if arch in ('PG','AC','TRANS','MU','VPN','SPR','MU2','MU3',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
 
         # if arch in ('TEST',):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
-        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
 
         if arch in ('AC','MU','VPN','MU2',):
             if value_cont:
@@ -364,12 +365,12 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('TRANS','MU','VPN','SPR','MU2','MU3',):
             inputs['actions'] = self.action_zero_out
-            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans, max_steps=max_steps); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=8, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans, max_steps=max_steps); outputs = self.trans(inputs)
         if arch in ('MU','MU2','MU3',):
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':16, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
+            self.rwd = GenNet('RW', reward_spec, False, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
+            self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
 
@@ -421,6 +422,7 @@ class GeneralAI(tf.keras.Model):
         if trader:
             metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
             metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
+            metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
 
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
@@ -652,7 +654,9 @@ class GeneralAI(tf.keras.Model):
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
-            if self.trader: metrics += [tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),]
+            if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
+                tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
+                inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def PG(self):
@@ -769,7 +773,9 @@ class GeneralAI(tf.keras.Model):
     #             tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
     #             tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
     #         ]
-    #         if self.trader: metrics += [tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),]
+    #        if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
+    #            tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
+    #            inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
     #         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     # def AC(self):
@@ -1771,22 +1777,22 @@ class GeneralAI(tf.keras.Model):
             #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
 
 
-            # # TODO can I add ARS here?
-            # action = [None]*self.action_spec_len
+            # TODO can I add ARS/MCTS here?
+            action = [None]*self.action_spec_len
+            for i in range(self.action_spec_len):
+                action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+
+
+            # # with tape_action:
+            # action_logits = self.action(inputs_step)
+            # action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
             # for i in range(self.action_spec_len):
-            #     action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
-
-
-            with tape_action:
-                action_logits = self.action(inputs_step)
-                action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
-                for i in range(self.action_spec_len):
-                    action_dist[i] = self.action.dist[i](action_logits[i])
-                    action[i] = action_dist[i].sample()
-            self.action.reset_states(use_img=True)
-            inputs_step['actions'] = action
-            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            outputs_img = self.MU3_img_actor(inputs_step)
+            #     action_dist[i] = self.action.dist[i](action_logits[i])
+            #     action[i] = action_dist[i].sample()
+            # self.action.reset_states(use_img=True)
+            # inputs_step['actions'] = action
+            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            # outputs_img = self.MU3_img_actor(inputs_step)
 
             # action_logits = self.action(inputs_step, store_memory=False, use_img=True)
             # # action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
@@ -1845,18 +1851,18 @@ class GeneralAI(tf.keras.Model):
             # if action[0] == tf.cast(inputs['obs'][0], dtype=tf.int32):
             #     tf.print('test')
 
-            values, entropy = outputs_img['returns'], outputs_img['entropy']
-            returns_pred = inputs['rewards'] + values
-            # returns_pred = inputs['rewards']
-            with tape_action:
-                # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
-                loss_action = self.loss_PG(action_dist, action, returns_pred)
-                # loss_action = self.loss_likelihood(action_dist, action)
-            gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-            loss_actions = loss_actions.write(step, loss_action)
-            metric_entropy = metric_entropy.write(step, entropy)
-            metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
+            # values, entropy = outputs_img['returns'], outputs_img['entropy']
+            # returns_pred = inputs['rewards'] + values
+            # # returns_pred = inputs['rewards']
+            # with tape_action:
+            #     # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
+            #     loss_action = self.loss_PG(action_dist, action, returns_pred)
+            #     # loss_action = self.loss_likelihood(action_dist, action)
+            # gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
+            # self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+            # loss_actions = loss_actions.write(step, loss_action)
+            # metric_entropy = metric_entropy.write(step, entropy)
+            # metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
 
 
             with tape_reward:
@@ -1943,7 +1949,9 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss_actor['entropy']),
             ]
             # TODO add simulation episode time
-            if self.trader: metrics += [tf.math.reduce_mean(outputs['obs'][3]), outputs['obs'][3][-1][0], tf.math.reduce_mean(outputs['obs'][4]), tf.math.reduce_mean(outputs['obs'][5]),]
+            if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
+                tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
+                inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
     def MU3(self):
@@ -1962,7 +1970,7 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 10
-learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
+learn_rate = 1e-6 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
@@ -1970,14 +1978,14 @@ force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 net_attn_io = True
-aio_max_latents = 64
+aio_max_latents = 32
 attn_mem_multi = 1
 aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
-device_type = 'CPU'
+# device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _dyn _img2 _stepE _cncat
+machine, device, extra = 'dev', 0, '_dyn' # _prs2 _RfB _dyn _img2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
@@ -1997,7 +2005,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; tenv = 3; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*32, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
+# import gym_trader; tenv = 3; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
 # max_steps = 256 # max replay buffer or train interval or bootstrap
 
