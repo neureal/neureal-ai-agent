@@ -226,7 +226,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
-    def __init__(self, latent_size, num_heads=1, memory_size=None, sort_memory=True, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
+    def __init__(self, latent_size, num_heads=1, memory_size=None, sort_memory=False, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
         # key_dim = int(channels/num_heads) if cross_type == 2 else int(latent_size/num_heads)
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
@@ -315,9 +315,12 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         if self._mem_size is not None:
             # value_mem = memory[:,mem_idx:] # gradients not always working with this
-            if not store_memory and use_img and mem_idx != self._mem_idx:
+            if not store_memory and use_img and mem_idx < self._mem_idx: # doesnt work with sort!!!
                 now_idx = mem_idx - self._mem_idx
-                value_mem = tf.concat([memory[:,mem_idx:now_idx-time_size], value, memory[:,now_idx:]], axis=1)
+                # value_mem = tf.concat([memory[:,mem_idx:now_idx-time_size], value, memory[:,now_idx:]], axis=1)
+                next_idx = now_idx + time_size
+                if next_idx >= 0: value_mem = tf.concat([memory[:,mem_idx:now_idx], value], axis=1)
+                else: value_mem = tf.concat([memory[:,mem_idx:now_idx], value, memory[:,next_idx:]], axis=1)
             else: value_mem = tf.concat([memory[:,mem_idx:-time_size], value], axis=1)
         else: value_mem = value
 
