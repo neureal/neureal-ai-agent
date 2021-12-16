@@ -141,6 +141,7 @@ class TransNet(tf.keras.Model):
                 self.layer_attn_in[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))
             self.layer_mlp_in[i] = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))
         # TODO add net_attn_io2
+        # TODO add aug_data_step
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
         for i in range(net_blocks):
@@ -341,7 +342,7 @@ class GeneralAI(tf.keras.Model):
         memory_size_trans = lat_batch_size_trans * max_steps * attn_mem_multi
 
         latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans}
-        if latent_dist == 0: latent_spec.update({'event_shape':(latent_size,), 'num_components':0}) # deterministic
+        if latent_dist == 0: latent_spec.update({'event_shape':(latent_size,), 'num_components':0, 'step_shape':tf.TensorShape((lat_batch_size,latent_size))}) # deterministic
         if latent_dist == 1: latent_spec.update({'event_shape':(latent_size, latent_size), 'num_components':0}) # categorical
         if latent_dist == 2: latent_spec.update({'event_shape':(latent_size,), 'num_components':int(latent_size/16)}) # continuous
         self.latent_spec = latent_spec
@@ -1676,10 +1677,13 @@ class GeneralAI(tf.keras.Model):
 
     def MU3_img_actor(self, inputs):
         print("tracing -> GeneralAI MU3_img_actor")
+        obs = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
         # actions = [None]*self.action_spec_len
         # for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
-        entropies = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        metric_entropy_rwd = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        metric_entropy_done = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
         inputs_step = {'obs':inputs['obs'], 'actions':inputs['actions']}
         dones = tf.constant([[False]])
@@ -1688,22 +1692,25 @@ class GeneralAI(tf.keras.Model):
         step = tf.constant(0)
         # while step < 4 and not dones[-1][0]:
         while not dones[-1][0]:
+            obs = obs.write(step, inputs_step['obs'])
             trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
             inputs_step['obs'] = trans_dist.sample()
 
             rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
-            rewards, dones = rwd_dist.sample(), tf.cast(done_dist.sample(), tf.bool)
-            rwd_entropy, done_entropy = rwd_dist.entropy(), done_dist.entropy()
-            entropies = entropies.write(step, rwd_entropy)
+            reward, dones = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
+            entropy_rwd, entropy_done = rwd_dist.entropy(), done_dist.entropy()
+            metric_entropy_rwd = metric_entropy_rwd.write(step, entropy_rwd)
+            metric_entropy_done = metric_entropy_done.write(step, entropy_done)
 
             # if self.value_cont:
             #     value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
             #     values = value_dist.sample()
             # else: values = self.value(inputs_step, use_img=True)
 
+            rewards = rewards.write(step, reward[-1])
             returns_updt = returns.stack()
-            returns_updt = returns_updt + rewards[-1]
+            returns_updt = returns_updt + reward[-1]
             returns = returns.unstack(returns_updt)
             returns = returns.write(step, [self.float64_zero])
 
@@ -1727,15 +1734,16 @@ class GeneralAI(tf.keras.Model):
         # returns_updt = returns_updt + values[-1]
         # returns = returns.unstack(returns_updt)
         # returns_first = returns.stack()[0] + values[-1]
-        returns_first = returns.stack()[:1]
+        # returns_first = returns.stack()[:1]
 
         outputs = {}
         # out_actions = [None]*self.action_spec_len
         # for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
         # outputs['actions'], outputs['returns'] = out_actions, returns.stack()
         # outputs['actions'], outputs['returns'] = action_first, returns_first
-        outputs['returns'] = returns_first
-        outputs['entropy'] = tf.math.reduce_mean(entropies.stack(), axis=0)
+        # outputs['returns'] = returns_first
+        outputs['obs'], outputs['rewards'], outputs['returns'] = obs.stack(), rewards.stack(), returns.stack()
+        outputs['entropy_rwd'], outputs['entropy_done'] = tf.math.reduce_mean(metric_entropy_rwd.stack(), axis=0), tf.math.reduce_mean(metric_entropy_done.stack(), axis=0)
         return outputs
 
     def MU3_actor(self, inputs):
@@ -1851,7 +1859,7 @@ class GeneralAI(tf.keras.Model):
             # if action[0] == tf.cast(inputs['obs'][0], dtype=tf.int32):
             #     tf.print('test')
 
-            # values, entropy = outputs_img['returns'], outputs_img['entropy']
+            # values, entropy = outputs_img['returns'][:1], outputs_img['entropy_rwd']
             # returns_pred = inputs['rewards'] + values
             # # returns_pred = inputs['rewards']
             # with tape_action:
@@ -1905,7 +1913,7 @@ class GeneralAI(tf.keras.Model):
         loss_dones = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
         obs = [None]*self.obs_spec_len
-        for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][0:1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+        for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][:1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
         inputs_step = {'obs':obs, 'actions':self.action_zero_out}
         rep_logits = self.rep(inputs_step, step=0); rep_dist = self.rep.dist(rep_logits)
         inputs_step['obs'] = rep_dist.sample()
