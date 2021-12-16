@@ -1112,564 +1112,564 @@ class GeneralAI(tf.keras.Model):
 
 
 
-    def VPN_actor(self, inputs):
-        print("tracing -> GeneralAI VPN_actor")
-        loss = {}
-        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    # def VPN_actor(self, inputs):
+    #     print("tracing -> GeneralAI VPN_actor")
+    #     loss = {}
+    #     loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
-        for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
-        for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
-        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+    #     for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+    #     for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+    #     rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        step = tf.constant(0)
-        # while step < self.max_steps and not inputs['dones'][-1][0]:
-        while not inputs['dones'][-1][0]:
-            inputs_step = {}
-            for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
+    #     step = tf.constant(0)
+    #     # while step < self.max_steps and not inputs['dones'][-1][0]:
+    #     while not inputs['dones'][-1][0]:
+    #         inputs_step = {}
+    #         for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
 
-            with tf.GradientTape(persistent=True) as tape_action:
-                rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
-                inputs_step['obs'] = rep_dist.sample()
+    #         with tf.GradientTape(persistent=True) as tape_action:
+    #             rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
+    #             inputs_step['obs'] = rep_dist.sample()
 
-            # outputs_img = self.VPN_imagine(inputs_step)
-            # loss_img = self.VPN_img_learner(outputs_img)
-            # action_rnd = [None]*self.action_spec_len
-            # for i in range(self.action_spec_len):
-            #     action_rnd[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+    #         # outputs_img = self.VPN_imagine(inputs_step)
+    #         # loss_img = self.VPN_img_learner(outputs_img)
+    #         # action_rnd = [None]*self.action_spec_len
+    #         # for i in range(self.action_spec_len):
+    #         #     action_rnd[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
 
-            with tape_action:
-                action_logits = self.action(inputs_step)
-                action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
-                for i in range(self.action_spec_len):
-                    action_dist[i] = self.action.dist[i](action_logits[i])
-                    action[i] = action_dist[i].sample()
-                    actions[i] = actions[i].write(step, action[i][-1])
-                    action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+    #         with tape_action:
+    #             action_logits = self.action(inputs_step)
+    #             action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len):
+    #                 action_dist[i] = self.action.dist[i](action_logits[i])
+    #                 action[i] = action_dist[i].sample()
+    #                 actions[i] = actions[i].write(step, action[i][-1])
+    #                 action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
 
-            np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+    #         np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
+    #         for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+    #         inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
 
-            entropy = tf.constant([0.0], dtype=self.compute_dtype)
-            inputs_step['actions'] = action
-            trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
-            inputs_step['obs'] = trans_dist.sample()
-            # entropy += trans_dist.entropy()
+    #         entropy = tf.constant([0.0], dtype=self.compute_dtype)
+    #         inputs_step['actions'] = action
+    #         trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+    #         inputs_step['obs'] = trans_dist.sample()
+    #         # entropy += trans_dist.entropy()
 
-            if self.value_cont:
-                value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
-                values = value_dist.sample()
-                entropy += value_dist.entropy()
-            else: values = self.value(inputs_step)
+    #         if self.value_cont:
+    #             value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+    #             values = value_dist.sample()
+    #             entropy += value_dist.entropy()
+    #         else: values = self.value(inputs_step)
 
-            returns_pred = inputs['rewards'] + values
-            with tape_action:
-                loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
-            gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+    #         returns_pred = inputs['rewards'] + values
+    #         with tape_action:
+    #             loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
+    #         gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
+    #         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
 
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            dones = dones.write(step, inputs['dones'][-1])
-            returns_updt = returns.stack()
-            returns_updt = returns_updt + inputs['rewards'][-1]
-            returns = returns.unstack(returns_updt)
-            returns = returns.write(step, [self.float64_zero])
+    #         rewards = rewards.write(step, inputs['rewards'][-1])
+    #         dones = dones.write(step, inputs['dones'][-1])
+    #         returns_updt = returns.stack()
+    #         returns_updt = returns_updt + inputs['rewards'][-1]
+    #         returns = returns.unstack(returns_updt)
+    #         returns = returns.write(step, [self.float64_zero])
             
-            loss_actions = loss_actions.write(step, loss_action)
-            metric_entropy = metric_entropy.write(step, entropy)
-            metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
+    #         loss_actions = loss_actions.write(step, loss_action)
+    #         metric_entropy = metric_entropy.write(step, entropy)
+    #         metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
 
-            step += 1
+    #         step += 1
 
-        outputs = {}
-        out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
-        for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
-        for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
-        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
+    #     outputs = {}
+    #     out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+    #     for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
+    #     for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
+    #     outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
 
-        loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.concat(), metric_entropy.concat(), metric_returns_pred.concat()
-        return outputs, inputs, loss
+    #     loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.concat(), metric_entropy.concat(), metric_returns_pred.concat()
+    #     return outputs, inputs, loss
 
-    def VPN_return_learner(self, inputs, training=True):
-        print("tracing -> GeneralAI VPN_return_learner")
-        loss = {}
-        loss_returns = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    # def VPN_return_learner(self, inputs, training=True):
+    #     print("tracing -> GeneralAI VPN_return_learner")
+    #     loss = {}
+    #     loss_returns = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        for step in tf.range(tf.shape(inputs['dones'])[0]):
-            inputs_step = {}
+    #     for step in tf.range(tf.shape(inputs['dones'])[0]):
+    #         inputs_step = {}
 
-            obs = [None]*self.obs_spec_len
-            for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
-            inputs_step['obs'] = obs
-            with tf.GradientTape(persistent=True) as tape_value:
-                rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
-                inputs_step['obs'] = rep_dist.sample()
+    #         obs = [None]*self.obs_spec_len
+    #         for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+    #         inputs_step['obs'] = obs
+    #         with tf.GradientTape(persistent=True) as tape_value:
+    #             rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
+    #             inputs_step['obs'] = rep_dist.sample()
 
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            inputs_step['actions'] = action
-            with tape_value:
-                trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
-                inputs_step['obs'] = trans_dist.sample()
+    #         action = [None]*self.action_spec_len
+    #         for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+    #         inputs_step['actions'] = action
+    #         with tape_value:
+    #             trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+    #             inputs_step['obs'] = trans_dist.sample()
 
-            returns = inputs['returns'][step:step+1]
-            with tape_value:
-                if self.value_cont:
-                    value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
-                    loss_return = self.loss_likelihood(value_dist, returns)
-                else:
-                    values = self.value(inputs_step)
-                    loss_return = self.loss_diff(values, returns)
-            gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables))
+    #         returns = inputs['returns'][step:step+1]
+    #         with tape_value:
+    #             if self.value_cont:
+    #                 value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+    #                 loss_return = self.loss_likelihood(value_dist, returns)
+    #             else:
+    #                 values = self.value(inputs_step)
+    #                 loss_return = self.loss_diff(values, returns)
+    #         gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables)
+    #         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables))
             
-            loss_returns = loss_returns.write(step, loss_return)
-
-        loss['return'] = loss_returns.concat()
-        return loss
-
-    def VPN_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI VPN_run_episode")
-        while not inputs['dones'][-1][0]:
-            self.reset_states(); outputs, inputs, loss_actor = self.VPN_actor(inputs)
-            self.reset_states(); loss_return = self.VPN_return_learner(outputs)
-
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss_actor['returns_pred']),
-                tf.math.reduce_mean(loss_actor['action']),
-                tf.math.reduce_mean(loss_actor['entropy']),
-                tf.math.reduce_mean(loss_return['return']),
-            ]
-            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-
-    def VPN(self):
-        print("tracing -> GeneralAI VPN")
-        for episode in tf.range(self.max_episodes):
-            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.VPN_run_episode(inputs, episode)
-
-
-
-
-
-    def SPR_learner(self, inputs, num_img_steps, training=True):
-        print("tracing -> GeneralAI SPR_learner")
-        loss = {}
-        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_next_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_next_actions_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        steps = tf.shape(inputs['dones'])[0]
-        for step in tf.range(steps):
-            inputs_step = {}
-
-            obs = [None]*self.obs_spec_len
-            for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
-            inputs_step['obs'] = obs
-            with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_next_action:
-                rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
-                inputs_step['obs'] = rep_dist.sample()
-
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            returns = inputs['returns'][step:step+1]
-            with tape_action:
-                action_logits = self.action(inputs_step)
-                action_dist = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_PG(action_dist, action, returns)
-            gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-            loss_actions = loss_actions.write(step, loss_action)
-
-
-            inputs_step['actions'] = action
-            with tape_next_action:
-                trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
-                inputs_step['obs'] = trans_dist.sample()
-
-            dones = inputs['dones'][step:step+1]
-
-            if not dones[-1][0]:
-                self.reset_states(use_img=True)
-
-                next_action = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step+1:step+2]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
-                with tape_next_action:
-                    next_action_logits = self.action(inputs_step, use_img=True)
-                    next_action_dist = [None]*self.action_spec_len
-                    for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
-                    loss_next_action = self.loss_likelihood(next_action_dist, next_action)
-                gradients = tape_next_action.gradient(loss_next_action, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
-                self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
-                loss_next_actions = loss_next_actions.write(step, loss_next_action)
-
-
-                loss_next_action_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-                step_img, step_img_max = step+2, step+2+num_img_steps
-                while step_img < step_img_max and step_img < steps:
-
-                    inputs_step['actions'] = next_action
-                    with tf.GradientTape(persistent=True) as tape_next_action_img:
-                        trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
-                        inputs_step['obs'] = trans_dist.sample()
-
-                    next_action = [None]*self.action_spec_len
-                    for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step_img:step_img+1]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
-                    with tape_next_action_img:
-                        next_action_logits = self.action(inputs_step, use_img=True)
-                        next_action_dist = [None]*self.action_spec_len
-                        for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
-                        loss_next_action = self.loss_likelihood(next_action_dist, next_action)
-                    gradients = tape_next_action_img.gradient(loss_next_action, self.trans.trainable_variables + self.action.trainable_variables)
-                    self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.action.trainable_variables))
-                    loss_next_action_img_accu = loss_next_action_img_accu.write(step_img-2, loss_next_action)
-
-                    step_img += 1
-                loss_next_actions_img = loss_next_actions_img.write(step, tf.math.reduce_mean(loss_next_action_img_accu.stack(), axis=0))
-
-        loss['action'], loss['next_action'], loss['next_action_img'] = loss_actions.concat(), loss_next_actions.concat(), loss_next_actions_img.concat()
-        return loss
-
-    def SPR_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI SPR_run_episode")
-        while not inputs['dones'][-1][0]:
-            self.reset_states(); outputs, inputs = self.PG_actor(inputs)
-            self.reset_states(); loss = self.SPR_learner(outputs, num_img_steps=2)
-
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['action']),
-                tf.math.reduce_mean(loss['next_action']),
-                tf.math.reduce_mean(loss['next_action_img']),
-            ]
-            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-
-    def SPR(self):
-        print("tracing -> GeneralAI SPR")
-        for episode in tf.range(self.max_episodes):
-            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.SPR_run_episode(inputs, episode)
-
-
-
-
-
-    def MU2_img_learner(self, inputs):
-        print("tracing -> GeneralAI MU2_img_learner")
-        loss = {}
-        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        inputs_step, dones = {'obs':inputs['obs'], 'actions':self.action_zero_out}, tf.constant([[False]])
-        step = tf.constant(0)
-        while step < 4 and not dones[-1][0]:
-        # while not dones[-1][0]:
-
-            with tf.GradientTape(persistent=True) as tape_action:
-                action_logits = self.action(inputs_step, use_img=True)
-                action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
-                for i in range(self.action_spec_len):
-                    action_dist[i] = self.action.dist[i](action_logits[i])
-                    action[i] = action_dist[i].sample()
-
-            inputs_step['actions'] = action
-            trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
-            inputs_step['obs'] = trans_dist.sample()
-            # entropy = trans_dist.entropy()
-            # entropy = tf.constant([0.0], dtype=self.compute_dtype)
-
-            rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
-            done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
-            rewards, dones = rwd_dist.sample(), tf.cast(done_dist.sample(), tf.bool)
-
-            if self.value_cont:
-                value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
-                values = value_dist.sample()
-                # entropy = entropy + value_dist.entropy()
-            else: values = self.value(inputs_step, use_img=True)
-
-            returns_pred = rewards + values
-            with tape_action:
-                # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
-                loss_action = self.loss_PG(action_dist, action, returns_pred)
-            gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
-            loss_actions = loss_actions.write(step, loss_action)
-            # metric_entropy = metric_entropy.write(step, entropy)
-            # metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
-
-            step += 1
-
-        # loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.stack(), metric_entropy.stack(), metric_returns_pred.stack()
-        loss['action'] = loss_actions.stack()
-        return loss
-
-    def MU2_actor(self, inputs):
-        print("tracing -> GeneralAI MU2_actor")
-        loss = {}
-        loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
-        for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
-        for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
-        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        step = tf.constant(0)
-        # while step < self.max_steps and not inputs['dones'][-1][0]:
-        while not inputs['dones'][-1][0]:
-            inputs_step = {}
-            for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
-
-            rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
-            inputs_step['obs'] = rep_dist.sample()
-
-            for img_traj in tf.range(4):
-                self.reset_states(use_img=True); loss_img = self.MU2_img_learner(inputs_step)
-                # action_rnd = [None]*self.action_spec_len
-                # for i in range(self.action_spec_len):
-                #     action_rnd[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
-
-                loss_actions = loss_actions.write(step, tf.math.reduce_mean(loss_img['action'], axis=0))
-                # metric_entropy = metric_entropy.write(step, tf.math.reduce_mean(loss_img['entropy'], axis=0))
-                # metric_returns_pred = metric_returns_pred.write(step, tf.math.reduce_mean(loss_img['returns_pred'], axis=0))
-
-            action_logits = self.action(inputs_step)
-            action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
-            for i in range(self.action_spec_len):
-                action_dist[i] = self.action.dist[i](action_logits[i])
-                action[i] = action_dist[i].sample()
-                actions[i] = actions[i].write(step, action[i][-1])
-                action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
-
-            np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
-
-            inputs_step['actions'] = action
-            trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
-            inputs_step['obs'] = trans_dist.sample()
-
-            rwd_logits = self.rwd(inputs_step); rwd_dist = self.rwd.dist[0](rwd_logits[0])
-            done_logits = self.done(inputs_step); done_dist = self.done.dist[0](done_logits[0])
-
-            if self.value_cont: value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
-            else: values = self.value(inputs_step)
-
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            dones = dones.write(step, inputs['dones'][-1])
-            returns_updt = returns.stack()
-            returns_updt = returns_updt + inputs['rewards'][-1]
-            returns = returns.unstack(returns_updt)
-            returns = returns.write(step, [self.float64_zero])
-
-            step += 1
-
-        outputs = {}
-        out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
-        for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
-        for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
-        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
-
-        # loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.concat(), metric_entropy.concat(), metric_returns_pred.concat()
-        loss['action'] = loss_actions.concat()
-        return outputs, inputs, loss
-
-    def MU2_learner(self, inputs, num_img_steps, training=True):
-        print("tracing -> GeneralAI MU2_learner")
-        loss = {}
-        # loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_rewards = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_dones = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_returns = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_next_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        loss_rewards_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_dones_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_returns_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        loss_next_actions_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-        steps = tf.shape(inputs['dones'])[0]
-        for step in tf.range(steps):
-            inputs_step = {}
-
-            obs = [None]*self.obs_spec_len
-            for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
-            inputs_step['obs'] = obs
-            with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done, tf.GradientTape(persistent=True) as tape_value, tf.GradientTape(persistent=True) as tape_next_action:
-                rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
-                inputs_step['obs'] = rep_dist.sample()
-
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            # returns = inputs['returns'][step:step+1]
-            # returns = inputs['rewards'][step:step+1] + returns
-            # with tape_action:
-            #     action_logits = self.action(inputs_step)
-            #     action_dist = [None]*self.action_spec_len
-            #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-            #     loss_action = self.loss_PG(action_dist, action, returns)
-            # gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
-            # self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-            # loss_actions = loss_actions.write(step, loss_action)
-
-
-
-            inputs_step['actions'] = action
-            with tape_reward, tape_done, tape_value, tape_next_action:
-                trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
-                inputs_step['obs'] = trans_dist.sample()
-
-            rewards = inputs['rewards'][step:step+1]
-            with tape_reward:
-                rwd_logits = self.rwd(inputs_step); rwd_dist = self.rwd.dist[0](rwd_logits[0])
-                loss_reward = self.loss_likelihood(rwd_dist, rewards)
-            gradients = tape_reward.gradient(loss_reward, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables))
-            loss_rewards = loss_rewards.write(step, loss_reward)
-
-            dones = inputs['dones'][step:step+1]
-            with tape_done:
-                done_logits = self.done(inputs_step); done_dist = self.done.dist[0](done_logits[0])
-                loss_done = self.loss_likelihood(done_dist, dones)
-            gradients = tape_done.gradient(loss_done, self.rep.trainable_variables + self.trans.trainable_variables + self.done.trainable_variables)
-            self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.done.trainable_variables))
-            loss_dones = loss_dones.write(step, loss_done)
-
-            if not dones[-1][0]:
-                returns = inputs['returns'][step:step+1]
-                with tape_value:
-                    if self.value_cont:
-                        value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
-                        loss_return = self.loss_likelihood(value_dist, returns)
-                    else:
-                        values = self.value(inputs_step)
-                        loss_return = self.loss_diff(values, returns)
-                gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables)
-                self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables))
-                loss_returns = loss_returns.write(step, loss_return)
-
-                self.reset_states(use_img=True)
-
-                next_action = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step+1:step+2]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
-                with tape_next_action:
-                    next_action_logits = self.action(inputs_step, use_img=True)
-                    next_action_dist = [None]*self.action_spec_len
-                    for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
-                    loss_next_action = self.loss_likelihood(next_action_dist, next_action)
-                gradients = tape_next_action.gradient(loss_next_action, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
-                self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
-                loss_next_actions = loss_next_actions.write(step, loss_next_action)
-
-
-
-                loss_reward_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-                loss_done_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-                loss_return_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-                loss_next_action_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-                step_img, step_img_max = step+1, step+1+num_img_steps
-                while step_img < step_img_max and step_img < steps:
-
-                    inputs_step['actions'] = next_action
-                    with tf.GradientTape(persistent=True) as tape_reward_img, tf.GradientTape(persistent=True) as tape_done_img, tf.GradientTape(persistent=True) as tape_value_img, tf.GradientTape(persistent=True) as tape_next_action_img:
-                        trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
-                        inputs_step['obs'] = trans_dist.sample()
-
-                    rewards = inputs['rewards'][step_img:step_img+1]
-                    with tape_reward_img:
-                        rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
-                        loss_reward = self.loss_likelihood(rwd_dist, rewards)
-                    gradients = tape_reward_img.gradient(loss_reward, self.trans.trainable_variables + self.rwd.trainable_variables)
-                    self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.rwd.trainable_variables))
-                    loss_reward_img_accu = loss_reward_img_accu.write(step_img-1, loss_reward)
-
-                    dones = inputs['dones'][step_img:step_img+1]
-                    with tape_done_img:
-                        done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
-                        loss_done = self.loss_likelihood(done_dist, dones)
-                    gradients = tape_done_img.gradient(loss_done, self.trans.trainable_variables + self.done.trainable_variables)
-                    self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.done.trainable_variables))
-                    loss_done_img_accu = loss_done_img_accu.write(step_img-1, loss_done)
-
-                    step_img += 1
-                    if step_img < steps:
-                        returns = inputs['returns'][step_img-1:step_img]
-                        with tape_value_img:
-                            if self.value_cont:
-                                value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
-                                loss_return = self.loss_likelihood(value_dist, returns)
-                            else:
-                                values = self.value(inputs_step, use_img=True)
-                                loss_return = self.loss_diff(values, returns)
-                        gradients = tape_value_img.gradient(loss_return, self.trans.trainable_variables + self.value.trainable_variables)
-                        self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.value.trainable_variables))
-                        loss_return_img_accu = loss_return_img_accu.write(step_img-2, loss_return)
-
-                        next_action = [None]*self.action_spec_len
-                        for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step_img:step_img+1]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
-                        with tape_next_action_img:
-                            next_action_logits = self.action(inputs_step, use_img=True)
-                            next_action_dist = [None]*self.action_spec_len
-                            for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
-                            loss_next_action = self.loss_likelihood(next_action_dist, next_action)
-                        gradients = tape_next_action_img.gradient(loss_next_action, self.trans.trainable_variables + self.action.trainable_variables)
-                        self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.action.trainable_variables))
-                        loss_next_action_img_accu = loss_next_action_img_accu.write(step_img-2, loss_next_action)
-                loss_rewards_img = loss_rewards_img.write(step, tf.math.reduce_mean(loss_reward_img_accu.stack(), axis=0))
-                loss_dones_img = loss_dones_img.write(step, tf.math.reduce_mean(loss_done_img_accu.stack(), axis=0))
-                loss_returns_img = loss_returns_img.write(step, tf.math.reduce_mean(loss_return_img_accu.stack(), axis=0))
-                loss_next_actions_img = loss_next_actions_img.write(step, tf.math.reduce_mean(loss_next_action_img_accu.stack(), axis=0))
-
-
-        # loss['action'] = loss_actions.concat()
-        loss['reward'], loss['done'], loss['return'], loss['next_action'] = loss_rewards.concat(), loss_dones.concat(), loss_returns.concat(), loss_next_actions.concat()
-        loss['reward_img'], loss['done_img'], loss['return_img'], loss['next_action_img'] = loss_rewards_img.concat(), loss_dones_img.concat(), loss_returns_img.concat(), loss_next_actions_img.concat()
-        return loss
-
-    def MU2_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI MU2_run_episode")
-        while not inputs['dones'][-1][0]:
-            self.reset_states(); outputs, inputs, loss_actor = self.MU2_actor(inputs)
-            self.reset_states(); loss = self.MU2_learner(outputs, num_img_steps=4)
-
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss_actor['action']),
-                # tf.math.reduce_mean(loss['action']),
-                tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['reward_img']),
-                tf.math.reduce_mean(loss['done']), tf.math.reduce_mean(loss['done_img']),
-                tf.math.reduce_mean(loss['return']), tf.math.reduce_mean(loss['return_img']),
-                tf.math.reduce_mean(loss['next_action']), tf.math.reduce_mean(loss['next_action_img']),
-                # tf.math.reduce_mean(loss['reward']),
-                # tf.math.reduce_mean(loss['done']),
-                # tf.math.reduce_mean(loss['return']),
-                # tf.math.reduce_mean(loss['next_action']),
-            ]
-            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-
-    def MU2(self):
-        print("tracing -> GeneralAI MU2")
-        for episode in tf.range(self.max_episodes):
-            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.MU2_run_episode(inputs, episode)
+    #         loss_returns = loss_returns.write(step, loss_return)
+
+    #     loss['return'] = loss_returns.concat()
+    #     return loss
+
+    # def VPN_run_episode(self, inputs, episode, training=True):
+    #     print("tracing -> GeneralAI VPN_run_episode")
+    #     while not inputs['dones'][-1][0]:
+    #         self.reset_states(); outputs, inputs, loss_actor = self.VPN_actor(inputs)
+    #         self.reset_states(); loss_return = self.VPN_return_learner(outputs)
+
+    #         metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+    #             tf.math.reduce_mean(loss_actor['returns_pred']),
+    #             tf.math.reduce_mean(loss_actor['action']),
+    #             tf.math.reduce_mean(loss_actor['entropy']),
+    #             tf.math.reduce_mean(loss_return['return']),
+    #         ]
+    #         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    # def VPN(self):
+    #     print("tracing -> GeneralAI VPN")
+    #     for episode in tf.range(self.max_episodes):
+    #         tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+    #         np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+    #         for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+    #         inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+    #         self.VPN_run_episode(inputs, episode)
+
+
+
+
+
+    # def SPR_learner(self, inputs, num_img_steps, training=True):
+    #     print("tracing -> GeneralAI SPR_learner")
+    #     loss = {}
+    #     loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_next_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_next_actions_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+    #     steps = tf.shape(inputs['dones'])[0]
+    #     for step in tf.range(steps):
+    #         inputs_step = {}
+
+    #         obs = [None]*self.obs_spec_len
+    #         for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+    #         inputs_step['obs'] = obs
+    #         with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_next_action:
+    #             rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
+    #             inputs_step['obs'] = rep_dist.sample()
+
+    #         action = [None]*self.action_spec_len
+    #         for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+    #         returns = inputs['returns'][step:step+1]
+    #         with tape_action:
+    #             action_logits = self.action(inputs_step)
+    #             action_dist = [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+    #             loss_action = self.loss_PG(action_dist, action, returns)
+    #         gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
+    #         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+    #         loss_actions = loss_actions.write(step, loss_action)
+
+
+    #         inputs_step['actions'] = action
+    #         with tape_next_action:
+    #             trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+    #             inputs_step['obs'] = trans_dist.sample()
+
+    #         dones = inputs['dones'][step:step+1]
+
+    #         if not dones[-1][0]:
+    #             self.reset_states(use_img=True)
+
+    #             next_action = [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step+1:step+2]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
+    #             with tape_next_action:
+    #                 next_action_logits = self.action(inputs_step, use_img=True)
+    #                 next_action_dist = [None]*self.action_spec_len
+    #                 for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
+    #                 loss_next_action = self.loss_likelihood(next_action_dist, next_action)
+    #             gradients = tape_next_action.gradient(loss_next_action, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
+    #             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+    #             loss_next_actions = loss_next_actions.write(step, loss_next_action)
+
+
+    #             loss_next_action_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #             step_img, step_img_max = step+2, step+2+num_img_steps
+    #             while step_img < step_img_max and step_img < steps:
+
+    #                 inputs_step['actions'] = next_action
+    #                 with tf.GradientTape(persistent=True) as tape_next_action_img:
+    #                     trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
+    #                     inputs_step['obs'] = trans_dist.sample()
+
+    #                 next_action = [None]*self.action_spec_len
+    #                 for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step_img:step_img+1]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
+    #                 with tape_next_action_img:
+    #                     next_action_logits = self.action(inputs_step, use_img=True)
+    #                     next_action_dist = [None]*self.action_spec_len
+    #                     for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
+    #                     loss_next_action = self.loss_likelihood(next_action_dist, next_action)
+    #                 gradients = tape_next_action_img.gradient(loss_next_action, self.trans.trainable_variables + self.action.trainable_variables)
+    #                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.action.trainable_variables))
+    #                 loss_next_action_img_accu = loss_next_action_img_accu.write(step_img-2, loss_next_action)
+
+    #                 step_img += 1
+    #             loss_next_actions_img = loss_next_actions_img.write(step, tf.math.reduce_mean(loss_next_action_img_accu.stack(), axis=0))
+
+    #     loss['action'], loss['next_action'], loss['next_action_img'] = loss_actions.concat(), loss_next_actions.concat(), loss_next_actions_img.concat()
+    #     return loss
+
+    # def SPR_run_episode(self, inputs, episode, training=True):
+    #     print("tracing -> GeneralAI SPR_run_episode")
+    #     while not inputs['dones'][-1][0]:
+    #         self.reset_states(); outputs, inputs = self.PG_actor(inputs)
+    #         self.reset_states(); loss = self.SPR_learner(outputs, num_img_steps=2)
+
+    #         metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+    #             tf.math.reduce_mean(loss['action']),
+    #             tf.math.reduce_mean(loss['next_action']),
+    #             tf.math.reduce_mean(loss['next_action_img']),
+    #         ]
+    #         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    # def SPR(self):
+    #     print("tracing -> GeneralAI SPR")
+    #     for episode in tf.range(self.max_episodes):
+    #         tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+    #         np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+    #         for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+    #         inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+    #         self.SPR_run_episode(inputs, episode)
+
+
+
+
+
+    # def MU2_img_learner(self, inputs):
+    #     print("tracing -> GeneralAI MU2_img_learner")
+    #     loss = {}
+    #     loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     # metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     # metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+    #     inputs_step, dones = {'obs':inputs['obs'], 'actions':self.action_zero_out}, tf.constant([[False]])
+    #     step = tf.constant(0)
+    #     while step < 4 and not dones[-1][0]:
+    #     # while not dones[-1][0]:
+
+    #         with tf.GradientTape(persistent=True) as tape_action:
+    #             action_logits = self.action(inputs_step, use_img=True)
+    #             action_dist, action = [None]*self.action_spec_len, [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len):
+    #                 action_dist[i] = self.action.dist[i](action_logits[i])
+    #                 action[i] = action_dist[i].sample()
+
+    #         inputs_step['actions'] = action
+    #         trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
+    #         inputs_step['obs'] = trans_dist.sample()
+    #         # entropy = trans_dist.entropy()
+    #         # entropy = tf.constant([0.0], dtype=self.compute_dtype)
+
+    #         rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+    #         done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
+    #         rewards, dones = rwd_dist.sample(), tf.cast(done_dist.sample(), tf.bool)
+
+    #         if self.value_cont:
+    #             value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
+    #             values = value_dist.sample()
+    #             # entropy = entropy + value_dist.entropy()
+    #         else: values = self.value(inputs_step, use_img=True)
+
+    #         returns_pred = rewards + values
+    #         with tape_action:
+    #             # loss_action = self.loss_PG(action_dist, action, returns_pred, entropy)
+    #             loss_action = self.loss_PG(action_dist, action, returns_pred)
+    #         gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
+    #         self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
+    #         loss_actions = loss_actions.write(step, loss_action)
+    #         # metric_entropy = metric_entropy.write(step, entropy)
+    #         # metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
+
+    #         step += 1
+
+    #     # loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.stack(), metric_entropy.stack(), metric_returns_pred.stack()
+    #     loss['action'] = loss_actions.stack()
+    #     return loss
+
+    # def MU2_actor(self, inputs):
+    #     print("tracing -> GeneralAI MU2_actor")
+    #     loss = {}
+    #     loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     # metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     # metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+    #     obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+    #     for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
+    #     for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+    #     rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+    #     step = tf.constant(0)
+    #     # while step < self.max_steps and not inputs['dones'][-1][0]:
+    #     while not inputs['dones'][-1][0]:
+    #         inputs_step = {}
+    #         for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
+
+    #         rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
+    #         inputs_step['obs'] = rep_dist.sample()
+
+    #         for img_traj in tf.range(4):
+    #             self.reset_states(use_img=True); loss_img = self.MU2_img_learner(inputs_step)
+    #             # action_rnd = [None]*self.action_spec_len
+    #             # for i in range(self.action_spec_len):
+    #             #     action_rnd[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
+
+    #             loss_actions = loss_actions.write(step, tf.math.reduce_mean(loss_img['action'], axis=0))
+    #             # metric_entropy = metric_entropy.write(step, tf.math.reduce_mean(loss_img['entropy'], axis=0))
+    #             # metric_returns_pred = metric_returns_pred.write(step, tf.math.reduce_mean(loss_img['returns_pred'], axis=0))
+
+    #         action_logits = self.action(inputs_step)
+    #         action_dist, action, action_dis = [None]*self.action_spec_len, [None]*self.action_spec_len, [None]*self.action_spec_len
+    #         for i in range(self.action_spec_len):
+    #             action_dist[i] = self.action.dist[i](action_logits[i])
+    #             action[i] = action_dist[i].sample()
+    #             actions[i] = actions[i].write(step, action[i][-1])
+    #             action_dis[i] = util.discretize(action[i], self.action_spec[i], self.force_cont_action)
+
+    #         np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
+    #         for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+    #         inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+
+    #         inputs_step['actions'] = action
+    #         trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+    #         inputs_step['obs'] = trans_dist.sample()
+
+    #         rwd_logits = self.rwd(inputs_step); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+    #         done_logits = self.done(inputs_step); done_dist = self.done.dist[0](done_logits[0])
+
+    #         if self.value_cont: value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+    #         else: values = self.value(inputs_step)
+
+    #         rewards = rewards.write(step, inputs['rewards'][-1])
+    #         dones = dones.write(step, inputs['dones'][-1])
+    #         returns_updt = returns.stack()
+    #         returns_updt = returns_updt + inputs['rewards'][-1]
+    #         returns = returns.unstack(returns_updt)
+    #         returns = returns.write(step, [self.float64_zero])
+
+    #         step += 1
+
+    #     outputs = {}
+    #     out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+    #     for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
+    #     for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
+    #     outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
+
+    #     # loss['action'], loss['entropy'], loss['returns_pred'] = loss_actions.concat(), metric_entropy.concat(), metric_returns_pred.concat()
+    #     loss['action'] = loss_actions.concat()
+    #     return outputs, inputs, loss
+
+    # def MU2_learner(self, inputs, num_img_steps, training=True):
+    #     print("tracing -> GeneralAI MU2_learner")
+    #     loss = {}
+    #     # loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_rewards = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_dones = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_returns = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_next_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+    #     loss_rewards_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_dones_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_returns_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #     loss_next_actions_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
+    #     steps = tf.shape(inputs['dones'])[0]
+    #     for step in tf.range(steps):
+    #         inputs_step = {}
+
+    #         obs = [None]*self.obs_spec_len
+    #         for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+    #         inputs_step['obs'] = obs
+    #         with tf.GradientTape(persistent=True) as tape_action, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done, tf.GradientTape(persistent=True) as tape_value, tf.GradientTape(persistent=True) as tape_next_action:
+    #             rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
+    #             inputs_step['obs'] = rep_dist.sample()
+
+    #         action = [None]*self.action_spec_len
+    #         for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+    #         # returns = inputs['returns'][step:step+1]
+    #         # returns = inputs['rewards'][step:step+1] + returns
+    #         # with tape_action:
+    #         #     action_logits = self.action(inputs_step)
+    #         #     action_dist = [None]*self.action_spec_len
+    #         #     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+    #         #     loss_action = self.loss_PG(action_dist, action, returns)
+    #         # gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
+    #         # self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+    #         # loss_actions = loss_actions.write(step, loss_action)
+
+
+
+    #         inputs_step['actions'] = action
+    #         with tape_reward, tape_done, tape_value, tape_next_action:
+    #             trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
+    #             inputs_step['obs'] = trans_dist.sample()
+
+    #         rewards = inputs['rewards'][step:step+1]
+    #         with tape_reward:
+    #             rwd_logits = self.rwd(inputs_step); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+    #             loss_reward = self.loss_likelihood(rwd_dist, rewards)
+    #         gradients = tape_reward.gradient(loss_reward, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables)
+    #         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.rwd.trainable_variables))
+    #         loss_rewards = loss_rewards.write(step, loss_reward)
+
+    #         dones = inputs['dones'][step:step+1]
+    #         with tape_done:
+    #             done_logits = self.done(inputs_step); done_dist = self.done.dist[0](done_logits[0])
+    #             loss_done = self.loss_likelihood(done_dist, dones)
+    #         gradients = tape_done.gradient(loss_done, self.rep.trainable_variables + self.trans.trainable_variables + self.done.trainable_variables)
+    #         self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.done.trainable_variables))
+    #         loss_dones = loss_dones.write(step, loss_done)
+
+    #         if not dones[-1][0]:
+    #             returns = inputs['returns'][step:step+1]
+    #             with tape_value:
+    #                 if self.value_cont:
+    #                     value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
+    #                     loss_return = self.loss_likelihood(value_dist, returns)
+    #                 else:
+    #                     values = self.value(inputs_step)
+    #                     loss_return = self.loss_diff(values, returns)
+    #             gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables)
+    #             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables))
+    #             loss_returns = loss_returns.write(step, loss_return)
+
+    #             self.reset_states(use_img=True)
+
+    #             next_action = [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step+1:step+2]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
+    #             with tape_next_action:
+    #                 next_action_logits = self.action(inputs_step, use_img=True)
+    #                 next_action_dist = [None]*self.action_spec_len
+    #                 for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
+    #                 loss_next_action = self.loss_likelihood(next_action_dist, next_action)
+    #             gradients = tape_next_action.gradient(loss_next_action, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
+    #             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
+    #             loss_next_actions = loss_next_actions.write(step, loss_next_action)
+
+
+
+    #             loss_reward_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #             loss_done_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #             loss_return_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #             loss_next_action_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    #             step_img, step_img_max = step+1, step+1+num_img_steps
+    #             while step_img < step_img_max and step_img < steps:
+
+    #                 inputs_step['actions'] = next_action
+    #                 with tf.GradientTape(persistent=True) as tape_reward_img, tf.GradientTape(persistent=True) as tape_done_img, tf.GradientTape(persistent=True) as tape_value_img, tf.GradientTape(persistent=True) as tape_next_action_img:
+    #                     trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
+    #                     inputs_step['obs'] = trans_dist.sample()
+
+    #                 rewards = inputs['rewards'][step_img:step_img+1]
+    #                 with tape_reward_img:
+    #                     rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+    #                     loss_reward = self.loss_likelihood(rwd_dist, rewards)
+    #                 gradients = tape_reward_img.gradient(loss_reward, self.trans.trainable_variables + self.rwd.trainable_variables)
+    #                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.rwd.trainable_variables))
+    #                 loss_reward_img_accu = loss_reward_img_accu.write(step_img-1, loss_reward)
+
+    #                 dones = inputs['dones'][step_img:step_img+1]
+    #                 with tape_done_img:
+    #                     done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
+    #                     loss_done = self.loss_likelihood(done_dist, dones)
+    #                 gradients = tape_done_img.gradient(loss_done, self.trans.trainable_variables + self.done.trainable_variables)
+    #                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.done.trainable_variables))
+    #                 loss_done_img_accu = loss_done_img_accu.write(step_img-1, loss_done)
+
+    #                 step_img += 1
+    #                 if step_img < steps:
+    #                     returns = inputs['returns'][step_img-1:step_img]
+    #                     with tape_value_img:
+    #                         if self.value_cont:
+    #                             value_logits = self.value(inputs_step, use_img=True); value_dist = self.value.dist[0](value_logits[0])
+    #                             loss_return = self.loss_likelihood(value_dist, returns)
+    #                         else:
+    #                             values = self.value(inputs_step, use_img=True)
+    #                             loss_return = self.loss_diff(values, returns)
+    #                     gradients = tape_value_img.gradient(loss_return, self.trans.trainable_variables + self.value.trainable_variables)
+    #                     self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.value.trainable_variables))
+    #                     loss_return_img_accu = loss_return_img_accu.write(step_img-2, loss_return)
+
+    #                     next_action = [None]*self.action_spec_len
+    #                     for i in range(self.action_spec_len): next_action[i] = inputs['actions'][i][step_img:step_img+1]; next_action[i].set_shape(self.action_spec[i]['step_shape'])
+    #                     with tape_next_action_img:
+    #                         next_action_logits = self.action(inputs_step, use_img=True)
+    #                         next_action_dist = [None]*self.action_spec_len
+    #                         for i in range(self.action_spec_len): next_action_dist[i] = self.action.dist[i](next_action_logits[i])
+    #                         loss_next_action = self.loss_likelihood(next_action_dist, next_action)
+    #                     gradients = tape_next_action_img.gradient(loss_next_action, self.trans.trainable_variables + self.action.trainable_variables)
+    #                     self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.action.trainable_variables))
+    #                     loss_next_action_img_accu = loss_next_action_img_accu.write(step_img-2, loss_next_action)
+    #             loss_rewards_img = loss_rewards_img.write(step, tf.math.reduce_mean(loss_reward_img_accu.stack(), axis=0))
+    #             loss_dones_img = loss_dones_img.write(step, tf.math.reduce_mean(loss_done_img_accu.stack(), axis=0))
+    #             loss_returns_img = loss_returns_img.write(step, tf.math.reduce_mean(loss_return_img_accu.stack(), axis=0))
+    #             loss_next_actions_img = loss_next_actions_img.write(step, tf.math.reduce_mean(loss_next_action_img_accu.stack(), axis=0))
+
+
+    #     # loss['action'] = loss_actions.concat()
+    #     loss['reward'], loss['done'], loss['return'], loss['next_action'] = loss_rewards.concat(), loss_dones.concat(), loss_returns.concat(), loss_next_actions.concat()
+    #     loss['reward_img'], loss['done_img'], loss['return_img'], loss['next_action_img'] = loss_rewards_img.concat(), loss_dones_img.concat(), loss_returns_img.concat(), loss_next_actions_img.concat()
+    #     return loss
+
+    # def MU2_run_episode(self, inputs, episode, training=True):
+    #     print("tracing -> GeneralAI MU2_run_episode")
+    #     while not inputs['dones'][-1][0]:
+    #         self.reset_states(); outputs, inputs, loss_actor = self.MU2_actor(inputs)
+    #         self.reset_states(); loss = self.MU2_learner(outputs, num_img_steps=4)
+
+    #         metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+    #             tf.math.reduce_mean(loss_actor['action']),
+    #             # tf.math.reduce_mean(loss['action']),
+    #             tf.math.reduce_mean(loss['reward']), tf.math.reduce_mean(loss['reward_img']),
+    #             tf.math.reduce_mean(loss['done']), tf.math.reduce_mean(loss['done_img']),
+    #             tf.math.reduce_mean(loss['return']), tf.math.reduce_mean(loss['return_img']),
+    #             tf.math.reduce_mean(loss['next_action']), tf.math.reduce_mean(loss['next_action_img']),
+    #             # tf.math.reduce_mean(loss['reward']),
+    #             # tf.math.reduce_mean(loss['done']),
+    #             # tf.math.reduce_mean(loss['return']),
+    #             # tf.math.reduce_mean(loss['next_action']),
+    #         ]
+    #         dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
+    # def MU2(self):
+    #     print("tracing -> GeneralAI MU2")
+    #     for episode in tf.range(self.max_episodes):
+    #         tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+    #         np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+    #         for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+    #         inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+    #         self.MU2_run_episode(inputs, episode)
 
 
 
