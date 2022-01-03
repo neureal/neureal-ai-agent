@@ -2074,7 +2074,7 @@ class GeneralAI(tf.keras.Model):
     #     outputs['entropy_rwd'], outputs['entropy_done'] = tf.math.reduce_mean(metric_entropy_rwd.stack(), axis=0), tf.math.reduce_mean(metric_entropy_done.stack(), axis=0)
     #     return outputs
 
-    # def MU4_img_act(self, inputs, return_prompt):
+    # def MU4_img_act(self, inputs, return_goal):
     #     print("tracing -> GeneralAI MU4_img_act")
     #     rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
     #     returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
@@ -2082,7 +2082,7 @@ class GeneralAI(tf.keras.Model):
     #     inputs_step = {'obs':inputs['obs'], 'actions':self.action_zero_out}
     #     step, dones = tf.constant(0), tf.constant([[False]])
     #     while not dones[-1][0]:
-    #         inputs_act = {'obs':inputs_step['obs'], 'actions':[return_prompt]}
+    #         inputs_act = {'obs':inputs_step['obs'], 'actions':[return_goal]}
     #         actin_logits = self.actin(inputs_act, use_img=True); actin_dist = self.actin.dist(actin_logits)
     #         inputs_act['obs'] = actin_dist.sample()
     #         action_logits = self.actout(inputs_act, use_img=True)
@@ -2098,7 +2098,7 @@ class GeneralAI(tf.keras.Model):
     #         rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
     #         done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
     #         reward, dones = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
-    #         return_prompt -= reward
+    #         return_goal -= reward
 
     #         rewards = rewards.write(step, reward[-1])
     #         returns_updt = returns.stack()
@@ -2128,9 +2128,9 @@ class GeneralAI(tf.keras.Model):
             action[i] = action_dist[i].sample()
         return action
         
-    def MU4_gen_act(self, inputs, return_prompt, store_memory=True, use_img=False):
+    def MU4_gen_act(self, inputs, return_goal, store_memory=True, use_img=False):
         print("tracing -> GeneralAI MU4_gen_act")
-        inputs_act = {'obs':inputs['obs'], 'actions':[return_prompt]}
+        inputs_act = {'obs':inputs['obs'], 'actions':[return_goal]}
         actin_logits = self.actin(inputs_act, store_memory=store_memory, use_img=use_img); actin_dist = self.actin.dist(actin_logits)
         inputs_act['obs'] = actin_dist.sample()
         action_logits = self.actout(inputs_act, store_memory=store_memory, use_img=use_img)
@@ -2140,7 +2140,7 @@ class GeneralAI(tf.keras.Model):
             action[i] = action_dist[i].sample()
         return action
 
-    def MU4_img(self, inputs, gen, return_prompt=None):
+    def MU4_img(self, inputs, gen, return_goal=None):
         print("tracing -> GeneralAI MU4_img")
         obs = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
         rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
@@ -2155,7 +2155,7 @@ class GeneralAI(tf.keras.Model):
 
             action = self.action_zero_out
             if gen == 0: action = self.MU4_gen_PG(inputs_step, use_img=True)
-            # if gen == 0: action = self.MU4_gen_act(inputs_step, return_prompt, use_img=True)
+            # if gen == 0: action = self.MU4_gen_act(inputs_step, return_goal, use_img=True)
             # if gen == 1: action = self.MU4_gen_PG(inputs_step, use_img=True)
             # if gen == 2: action = self.MU4_gen_rnd()
             inputs_step['actions'] = action
@@ -2208,7 +2208,7 @@ class GeneralAI(tf.keras.Model):
     #     # loss_actions = loss_actions.write(step, loss_action)
 
 
-    def MU4_actor(self, inputs, gen, return_prompt):
+    def MU4_actor(self, inputs, gen, return_goal):
         print("tracing -> GeneralAI MU4_actor")
         loss = {}
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
@@ -2254,7 +2254,7 @@ class GeneralAI(tf.keras.Model):
             #     outputs_img = self.MU4_img(inputs_step, gen)
             #     action = self.MU4_gen_PG(inputs_step, store_memory=False, use_img=True)
 
-            if gen == 0: action = self.MU4_gen_act(inputs_step, return_prompt)
+            if gen == 0: action = self.MU4_gen_act(inputs_step, return_goal)
             if gen == 1: action = self.MU4_gen_PG(inputs_step)
             if gen == 2: action = self.MU4_gen_rnd()
 
@@ -2289,10 +2289,10 @@ class GeneralAI(tf.keras.Model):
             # ## _img-act
             # self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
             # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # outputs_img = self.MU4_img_act(inputs_step, return_prompt)
+            # outputs_img = self.MU4_img_act(inputs_step, return_goal)
 
             # ## _gen-act
-            # inputs_act = {'obs':inputs_step['obs'], 'actions':[return_prompt]}
+            # inputs_act = {'obs':inputs_step['obs'], 'actions':[return_goal]}
             # actin_logits = self.actin(inputs_act); actin_dist = self.actin.dist(actin_logits)
             # inputs_act['obs'] = actin_dist.sample()
             # action_logits = self.actout(inputs_act)
@@ -2312,7 +2312,7 @@ class GeneralAI(tf.keras.Model):
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
-            return_prompt -= inputs['rewards']
+            return_goal -= inputs['rewards']
 
 
 
@@ -2412,7 +2412,7 @@ class GeneralAI(tf.keras.Model):
         loss['entropy'], loss['returns_pred'] = metric_entropy.concat(), metric_returns_pred.concat()
         return outputs, inputs, loss
 
-    def MU4_act_learner(self, inputs, gen, return_prompt, training=True):
+    def MU4_act_learner(self, inputs, gen, return_goal, training=True):
         print("tracing -> GeneralAI MU4_act_learner")
         loss = {}
         loss_PG = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
@@ -2449,12 +2449,12 @@ class GeneralAI(tf.keras.Model):
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
                 loss_action = self.loss_likelihood(action_dist, action)
-                # loss_action = self.loss_PG(action_dist, action, return_step, returns_target=return_prompt)
+                # loss_action = self.loss_PG(action_dist, action, return_step, returns_target=return_goal)
             gradients = tape_act.gradient(loss_action, self.rep.trainable_variables + self.actin.trainable_variables + self.actout.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.actin.trainable_variables + self.actout.trainable_variables))
             loss_act = loss_act.write(step, loss_action)
             
-            return_prompt -= inputs['rewards'][step:step+1]; return_prompt.set_shape((1,1))
+            return_goal -= inputs['rewards'][step:step+1]; return_goal.set_shape((1,1))
 
         loss['loss_PG'], loss['loss_act'] = loss_PG.concat(), loss_act.concat()
         return loss
@@ -2515,16 +2515,16 @@ class GeneralAI(tf.keras.Model):
 
     def MU4_run_episode(self, inputs, gen, episode, training=True):
         print("tracing -> GeneralAI MU4_run_episode")
-        return_prompt, log_metrics = tf.constant([[0.0]], dtype=tf.float64), False
-        if gen == 0: return_prompt, log_metrics = tf.constant([[200.0]], dtype=tf.float64), True
-        # if gen == 1: return_prompt, log_metrics, gen = tf.constant([[10.0]], dtype=tf.float64), False, 0
-        if gen == 3: return_prompt, log_metrics, gen = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64), False, 0
+        return_goal, log_metrics = tf.constant([[0.0]], dtype=tf.float64), False
+        if gen == 0: return_goal, log_metrics = tf.constant([[200.0]], dtype=tf.float64), True
+        # if gen == 1: return_goal, log_metrics, gen = tf.constant([[10.0]], dtype=tf.float64), False, 0
+        if gen == 3: return_goal, log_metrics, gen = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64), False, 0
         while not inputs['dones'][-1][0]:
             # self.reset_states(); outputs, inputs = self.PG_actor(inputs)
             # self.reset_states(); loss_PG = self.PG_learner_onestep(outputs)
 
-            self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_prompt)
-            self.reset_states(); loss_act = self.MU4_act_learner(outputs, gen, return_prompt)
+            self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal)
+            self.reset_states(); loss_act = self.MU4_act_learner(outputs, gen, return_goal)
             # self.reset_states(); loss_dyn = self.MU3_dyn_learner(outputs) # _dyn3
             self.reset_states(); loss_dyn = self.MU4_dyn_learner(outputs) # _dyn4
 
