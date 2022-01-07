@@ -2648,7 +2648,7 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 net_attn_io = True
 aio_max_latents = 32
-attn_mem_multi = 4 # attn_img_multi
+attn_mem_multi = 2 # attn_img_multi
 aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
