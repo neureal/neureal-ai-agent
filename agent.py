@@ -105,8 +105,7 @@ class RepNet(tf.keras.Model):
             # out_accu[-3] = self.layer_rwd_in(out)
             # out = tf.cast(inputs['dones'], self.compute_dtype)
             # out_accu[-2] = self.layer_done_in(out)
-            step = tf.cast(step, self.compute_dtype)
-            step = tf.reshape(step, [1,1])
+            step = tf.reshape(tf.cast(step, self.compute_dtype), [1,1])
             out_accu[-1] = self.layer_step_in(step)
         # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
         out = tf.concat(out_accu, axis=0)
@@ -133,13 +132,14 @@ class TransNet(tf.keras.Model):
         self.layer_flatten = tf.keras.layers.Flatten()
 
         # self.net_inputs = ['actions']*len(spec_in)+['obs'] # action conditioning/embedding
-        self.net_ins = len(spec_in); self.net_ins_all, self.layer_attn_in, self.layer_mlp_in = self.net_ins+1, [None]*self.net_ins, [None]*self.net_ins
+        self.net_ins = len(spec_in); self.net_ins_all, self.layer_attn_in, self.layer_mlp_in = self.net_ins+2, [None]*self.net_ins, [None]*self.net_ins
         for i in range(self.net_ins):
             event_shape, event_size, channels, num_latents = spec_in[i]['event_shape'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['num_latents']
             # TODO add aug_data_pos?
             if net_attn_io and event_size > 1:
                 self.layer_attn_in[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))
             self.layer_mlp_in[i] = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))
+        self.layer_step_size_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_size_in')
         # TODO add net_attn_io2
         # TODO add aug_data_step
 
@@ -176,6 +176,8 @@ class TransNet(tf.keras.Model):
             # shape = tf.concat([tf.shape(inputs['obs'])[:1], tf.shape(out)[1:]], axis=0)
             # out = tf.broadcast_to(out, shape)
             out_accu[i] = self.layer_mlp_in[i](out)
+        step_size = tf.reshape(tf.cast(inputs['step_size'], self.compute_dtype), [1,1])
+        out_accu[-2] = self.layer_step_size_in(step_size)
         out_accu[-1] = tf.cast(inputs['obs'], self.compute_dtype)
         # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
         out = tf.concat(out_accu, axis=0)
@@ -305,10 +307,11 @@ class GeneralAI(tf.keras.Model):
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         # self.float_log_min_prob = tf.constant(tf.math.log(self.float_eps), compute_dtype)
-        self.compute_zero, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
+        self.attn_img_scales = int(np.log2(max_steps))+1
+        self.compute_zero, self.int32_max, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
         self.arch, self.env, self.trader, self.env_render, self.value_cont, self.force_cont_obs, self.force_cont_action = arch, env, trader, env_render, value_cont, force_cont_obs, force_cont_action
-        self.max_episodes, self.max_steps, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
+        self.max_episodes, self.max_steps, self.attn_mem_multi, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(attn_mem_multi, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
 
@@ -332,7 +335,7 @@ class GeneralAI(tf.keras.Model):
         lat_batch_size += (1 if aug_data_step else 0)
         net_attn_io2 = (net_attn_io and lat_batch_size > aio_max_latents)
         if net_attn_io2: lat_batch_size = aio_max_latents
-        memory_size = lat_batch_size * max_steps * attn_mem_multi
+        memory_size = lat_batch_size * max_steps
 
         lat_batch_size_trans = lat_batch_size
         for i in range(self.action_spec_len):
@@ -342,7 +345,7 @@ class GeneralAI(tf.keras.Model):
             else: num_latents = 1
             self.action_spec[i]['num_latents'] = num_latents
             lat_batch_size_trans += num_latents
-        memory_size_trans = lat_batch_size_trans * max_steps * attn_mem_multi
+        memory_size_trans = lat_batch_size_trans * max_steps
 
         latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans}
         if latent_dist == 0: latent_spec.update({'event_shape':(latent_size,), 'num_components':0, 'step_shape':tf.TensorShape((lat_batch_size,latent_size))}) # deterministic
@@ -350,7 +353,7 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 2: latent_spec.update({'event_shape':(latent_size,), 'num_components':int(latent_size/16)}) # continuous
         self.latent_spec = latent_spec
 
-        inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero}
+        inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step_size':1}
         if arch in ('PG','AC','TRANS','MU','VPN','SPR','MU2','MU3','MU4',):
             self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
@@ -361,7 +364,7 @@ class GeneralAI(tf.keras.Model):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
         self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         if arch in ('MU4',):
-            memory_size_actin = (lat_batch_size+1) * max_steps * attn_mem_multi
+            memory_size_actin = (lat_batch_size+1) * max_steps
             inputs['actions'] = [tf.constant([[0]],tf.float64)]
             query_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
             self.actin = TransNet('AN1', query_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin, max_steps=max_steps); outputs = self.actin(inputs)
@@ -2024,14 +2027,17 @@ class GeneralAI(tf.keras.Model):
     def MU4_img(self, inputs, gen, return_goal=None):
         print("tracing -> GeneralAI MU4_img")
         obs = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
-        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_entropy_rwd = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_entropy_done = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # metric_entropy_rwd = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # metric_entropy_done = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        inputs_step = {'obs':inputs['obs'], 'actions':self.action_zero_out}
+        step_size, step_scale = 1, 1
+        step_loc = tf.bitwise.right_shift(self.max_steps, step_scale)
+
+        inputs_step = {'obs':inputs['obs'], 'actions':self.action_zero_out, 'step_size':1}
         step, dones = tf.constant(0), tf.constant([[False]])
-        while step < self.max_steps and not dones[-1][0]:
+        while not dones[-1][0]:
             obs = obs.write(step, inputs_step['obs'])
 
             action = self.action_zero_out
@@ -2040,6 +2046,14 @@ class GeneralAI(tf.keras.Model):
             # if gen == 1: action = self.MU4_gen_PG(inputs_step, use_img=True)
             # if gen == 2: action = self.MU4_gen_rnd()
             inputs_step['actions'] = action
+            
+            if step == step_loc:
+                step_size = tf.math.pow(self.attn_mem_multi, step_scale)
+                step_scale += 1
+                step_loc += tf.bitwise.right_shift(self.max_steps, step_scale)
+                # if step == step_loc: step_size = self.int32_max
+                if step != step_loc: step_size = 1 # TODO remove
+            inputs_step['step_size'] = step_size
 
             trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
             inputs_step['obs'] = trans_dist.sample()
@@ -2047,37 +2061,38 @@ class GeneralAI(tf.keras.Model):
             rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
             reward, dones = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
+            if step == step_loc: dones = tf.constant([[True]])
 
-            entropy_rwd, entropy_done = rwd_dist.entropy(), done_dist.entropy()
-            metric_entropy_rwd = metric_entropy_rwd.write(step, entropy_rwd)
-            metric_entropy_done = metric_entropy_done.write(step, entropy_done)
+            # entropy_rwd, entropy_done = rwd_dist.entropy(), done_dist.entropy()
+            # metric_entropy_rwd = metric_entropy_rwd.write(step, entropy_rwd)
+            # metric_entropy_done = metric_entropy_done.write(step, entropy_done)
 
-            rewards = rewards.write(step, reward[-1])
+            # rewards = rewards.write(step, reward[-1])
+            returns = returns.write(step, [self.float64_zero])
             returns_updt = returns.stack()
             returns_updt = returns_updt + reward[-1]
             returns = returns.unstack(returns_updt)
-            returns = returns.write(step, [self.float64_zero])
 
             step += 1
 
         outputs = {}
-        outputs['obs'], outputs['rewards'], outputs['returns'] = obs.stack(), rewards.stack(), returns.stack()
-        outputs['entropy_rwd'], outputs['entropy_done'] = tf.math.reduce_mean(metric_entropy_rwd.stack(), axis=0), tf.math.reduce_mean(metric_entropy_done.stack(), axis=0)
+        outputs['obs'], outputs['returns'] = obs.stack(), returns.stack()
+        # outputs['rewards'] = rewards.stack()
+        # outputs['entropy_rwd'], outputs['entropy_done'] = tf.math.reduce_mean(metric_entropy_rwd.stack(), axis=0), tf.math.reduce_mean(metric_entropy_done.stack(), axis=0)
         return outputs
 
     # def MU4_img_act_learn(self, inputs, action):
     #     print("tracing -> GeneralAI MU4_img_act_learn")
-    #     returns = inputs['rewards'] + inputs['returns']
 
     #     self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
     #     for step in tf.range(tf.shape(inputs['obs'])[0]):
-    #         inputs_act = {'obs':inputs['obs'][step:step+1][0], 'actions':[returns[step:step+1]]}
+    #         inputs_act = {'obs':inputs['obs'][step:step+1][0], 'actions':[inputs['returns'][step:step+1]]}
     #         actin_logits = self.actin(inputs_act, use_img=True); actin_dist = self.actin.dist(actin_logits)
     #         inputs_act['obs'] = actin_dist.sample()
     #         action_logits = self.actout(inputs_act, use_img=True)
 
+    #     inputs_act = {'obs':inputs['obs'][:1][0], 'actions':[inputs['returns'][:1]]}
     #     with tf.GradientTape() as tape_action:
-    #         inputs_act = {'obs':inputs['obs'][:1][0], 'actions':[returns[:1]]}
     #         actin_logits = self.actin(inputs_act, store_memory=False, use_img=True); actin_dist = self.actin.dist(actin_logits)
     #         inputs_act['obs'] = actin_dist.sample()
     #         action_logits = self.actout(inputs_act, store_memory=False, use_img=True)
@@ -2097,31 +2112,32 @@ class GeneralAI(tf.keras.Model):
         loss_dones = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_rewards_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_dones_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # metric_entropy = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # metric_returns_pred = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        obs, actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+        obs, actions, returns = [None]*self.obs_spec_len, [None]*self.action_spec_len, [None]*self.attn_img_scales
         for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
         for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
+        for i in range(self.attn_img_scales): returns[i] = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        rewards = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         # obs_rep = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
         # obs_trans = tf.TensorArray(self.latent_spec['dtype'], size=0, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
         # obs_trans_img = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
-        rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
 
         dyn_img_obs = self.latent_zero
         step = tf.constant(0)
         while not inputs['dones'][-1][0]:
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
 
-            inputs_step = {'obs':self.latent_zero, 'actions':self.action_zero_out}
+            inputs_step = {'obs':self.latent_zero, 'actions':self.action_zero_out, 'step_size':1}
             with tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done: # tf.GradientTape(persistent=True) as tape_action, 
                 rep_logits = self.rep(inputs, step=step); rep_dist = self.rep.dist(rep_logits)
                 inputs_step['obs'] = rep_dist.sample()
             # obs_rep = obs_rep.write(step, inputs_step['obs'])
 
-            # TODO use value net for early stopping
+            # TODO train trans to match rep latent output (use cosine similarity if not using distribution latents)
             # TODO add transformer layer latents together for long horizon prediction and long history
             # TODO add ARS/MCTS/explorer here too (explorer is trained to find unique situations)
             # TODO train act on img but scale likelihood based on prediction entropy (higher entropy = flatter loss)
@@ -2196,53 +2212,60 @@ class GeneralAI(tf.keras.Model):
             return_goal -= inputs['rewards']
 
 
+            returns[-1] = returns[-1].write(step, [self.float64_zero])
+            returns_updt = returns[-1].stack()
+            returns_updt = returns_updt + inputs['rewards'][-1]
+            returns[-1] = returns[-1].unstack(returns_updt)
+
+            rewards = rewards.write(step, inputs['rewards'][-1])
+            dones = dones.write(step, inputs['dones'][-1])
 
 
-            # TODO train rep (with cosine similarity?) to match trans output?
 
             ## _dyn2
-            if step != 0:
-                inputs_dyn_img = {'obs':dyn_img_obs, 'actions':action}
+            if step >= 1:
+                # inputs_step_img = {'obs':obs_trans.stack()[step-1:step][0], 'actions':action, 'step_size':1}
+                inputs_step_img = {'obs':dyn_img_obs, 'actions':action, 'step_size':1}
                 self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
                 with tf.GradientTape(persistent=True) as tape_reward_img, tf.GradientTape(persistent=True) as tape_done_img:
-                    trans_logits = self.trans(inputs_dyn_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
-                    inputs_dyn_img['obs'] = trans_dist.sample()
-                # obs_trans_img = obs_trans_img.write(step, inputs_dyn_img['obs'])
+                    trans_logits = self.trans(inputs_step_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
+                    inputs_step_img['obs'] = trans_dist.sample()
+                # obs_trans_img = obs_trans_img.write(step, inputs_step_img['obs'])
 
                 with tape_reward_img:
-                    rwd_logits = self.rwd(inputs_dyn_img, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+                    rwd_logits = self.rwd(inputs_step_img, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
                     loss_reward = self.loss_likelihood(rwd_dist, inputs['rewards'])
                 gradients = tape_reward_img.gradient(loss_reward, self.trans.trainable_variables) # + self.rwd.trainable_variables
                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables)) # + self.rwd.trainable_variables
                 loss_rewards_img = loss_rewards_img.write(step, loss_reward)
 
                 with tape_done_img:
-                    done_logits = self.done(inputs_dyn_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
+                    done_logits = self.done(inputs_step_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
                     loss_done = self.loss_likelihood(done_dist, inputs['dones'])
                 gradients = tape_done_img.gradient(loss_done, self.trans.trainable_variables) # + self.done.trainable_variables
                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables)) # + self.done.trainable_variables
                 loss_dones_img = loss_dones_img.write(step, loss_done)
 
             # ## _dyn4 # not the right history context: is real not imaginary, needs too much memory to store ongoing imagination trajectories from each old real state
-            # inputs_dyn_img = {'obs':self.latent_zero, 'actions':action}
+            # inputs_step_img = {'obs':self.latent_zero, 'actions':action}
             # obs_img = obs_trans.stack()
             # for step_dyn in tf.range(tf.shape(obs_img)[0]):
-            #     inputs_dyn_img['obs'] = obs_img[step_dyn]
+            #     inputs_step_img['obs'] = obs_img[step_dyn]
             #     self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
             #     with tf.GradientTape(persistent=True) as tape_reward_img, tf.GradientTape(persistent=True) as tape_done_img:
-            #         trans_logits = self.trans(inputs_dyn_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
-            #         inputs_dyn_img['obs'] = trans_dist.sample()
-            #     obs_trans = obs_trans.write(step_dyn, inputs_dyn_img['obs'])
+            #         trans_logits = self.trans(inputs_step_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
+            #         inputs_step_img['obs'] = trans_dist.sample()
+            #     obs_trans = obs_trans.write(step_dyn, inputs_step_img['obs'])
 
             #     with tape_reward_img:
-            #         rwd_logits = self.rwd(inputs_dyn_img, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+            #         rwd_logits = self.rwd(inputs_step_img, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             #         loss_reward = self.loss_likelihood(rwd_dist, inputs['rewards'])
             #     gradients = tape_reward_img.gradient(loss_reward, self.trans.trainable_variables) # + self.rwd.trainable_variables
             #     self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables)) # + self.rwd.trainable_variables
             #     loss_rewards_img = loss_rewards_img.write(step, loss_reward)
 
             #     with tape_done_img:
-            #         done_logits = self.done(inputs_dyn_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
+            #         done_logits = self.done(inputs_step_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
             #         loss_done = self.loss_likelihood(done_dist, inputs['dones'])
             #     gradients = tape_done_img.gradient(loss_done, self.trans.trainable_variables) # + self.done.trainable_variables
             #     self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables)) # + self.done.trainable_variables
@@ -2255,6 +2278,11 @@ class GeneralAI(tf.keras.Model):
                 inputs_step['obs'] = trans_dist.sample()
             dyn_img_obs = inputs_step['obs']
             # obs_trans = obs_trans.write(step, inputs_step['obs'])
+
+            # obs_trans = obs_trans.write(step, self.latent_zero)
+            # obs_trans_updt = obs_trans.stack()
+            # obs_trans_updt = obs_trans_updt + inputs_step['obs']
+            # obs_trans = obs_trans.unstack(obs_trans_updt)
 
             with tape_reward:
                 rwd_logits = self.rwd(inputs_step); rwd_dist = self.rwd.dist[0](rwd_logits[0])
@@ -2272,25 +2300,36 @@ class GeneralAI(tf.keras.Model):
 
 
 
-            rewards = rewards.write(step, inputs['rewards'][-1])
-            dones = dones.write(step, inputs['dones'][-1])
-            returns_updt = returns.stack()
-            returns_updt = returns_updt + inputs['rewards'][-1]
-            returns = returns.unstack(returns_updt)
-            returns = returns.write(step, [self.float64_zero])
+            # if inputs['dones'][-1][0]:
+            #     outputs = {}
+            #     out_obs, out_actions, out_returns = [None]*self.obs_spec_len, [None]*self.action_spec_len, [None]*self.attn_img_scales
+            #     for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
+            #     for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
+            #     for i in range(self.attn_img_scales): out_returns[i] = returns[i].stack()
+            #     outputs['obs'], outputs['actions'], outputs['returns'], outputs['rewards'], outputs['dones'] = out_obs, out_actions, out_returns, rewards.stack(), dones.stack()
+
+            #     self.reset_states(); loss_act = self.MU4_dyn_act_learner(outputs, gen)
+
+            # if step > 4 and (step%4 == 0 or inputs['dones'][-1][0]):
+            #     test = rewards.stack()[-8:-4] + returns[-1].stack()[-8:-4]
+            #     print()
+
+            # if step >= 4:
+
 
             step += 1
 
         outputs = {}
-        out_obs, out_actions = [None]*self.obs_spec_len, [None]*self.action_spec_len
+        out_obs, out_actions, out_returns = [None]*self.obs_spec_len, [None]*self.action_spec_len, [None]*self.attn_img_scales
         for i in range(self.obs_spec_len): out_obs[i] = obs[i].stack()
         for i in range(self.action_spec_len): out_actions[i] = actions[i].stack()
-        outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
+        for i in range(self.attn_img_scales): out_returns[i] = returns[i].stack()
+        outputs['obs'], outputs['actions'], outputs['returns'], outputs['rewards'], outputs['dones'] = out_obs, out_actions, out_returns, rewards.stack(), dones.stack()
         # outputs['obs_rep'], outputs['obs_trans'], outputs['obs_trans_img'] = obs_rep.stack(), obs_trans.stack(), obs_trans_img.stack()
 
         loss['action'], loss['reward'], loss['done'] = loss_actions.concat(), loss_rewards.concat(), loss_dones.concat()
         loss['reward_img'], loss['done_img'] = loss_rewards_img.concat(), loss_dones_img.concat()
-        loss['entropy'], loss['returns_pred'] = metric_entropy.concat(), metric_returns_pred.concat()
+        # loss['entropy'], loss['returns_pred'] = metric_entropy.concat(), metric_returns_pred.concat()
         return outputs, inputs, loss
 
     # def MU4_act_learner(self, inputs, gen, return_goal, training=True):
@@ -2322,8 +2361,8 @@ class GeneralAI(tf.keras.Model):
     #             self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
     #             loss_PG = loss_PG.write(step, loss_action)
 
+    #         inputs_act = {'obs':inputs_step['obs'], 'actions':return_step}
     #         with tape_act:
-    #             inputs_act = {'obs':inputs_step['obs'], 'actions':return_step}
     #             actin_logits = self.actin(inputs_act); actin_dist = self.actin.dist(actin_logits)
     #             inputs_act['obs'] = actin_dist.sample()
     #             action_logits = self.actout(inputs_act)
@@ -2343,18 +2382,21 @@ class GeneralAI(tf.keras.Model):
     def MU4_dyn_act_learner(self, inputs, gen, training=True):
         print("tracing -> GeneralAI MU4_dyn_act_learner")
         loss = {}
+        # loss_PG_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # loss_act_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # loss_rewards_ret = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # loss_dones_ret = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_rewards = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_dones = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_PG = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_act = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        returns = inputs['rewards'] + inputs['returns']
         episode_len = tf.shape(inputs['dones'])[0]
         for step in tf.range(episode_len):
             obs = [None]*self.obs_spec_len
             for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
 
-            inputs_step = {'obs':obs}
+            inputs_step = {'obs':obs, 'step_size':1}
             with tf.GradientTape(persistent=True) as tape_act:
                 rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
                 inputs_step['obs'] = rep_dist.sample()
@@ -2362,20 +2404,24 @@ class GeneralAI(tf.keras.Model):
             # trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
             # inputs_step['obs'] = trans_dist.sample()
             # self.rwd(inputs_step); self.done(inputs_step)
-            
+
+
+
+            # loss_PG_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+            # loss_act_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+            # loss_rewards_ret_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+            # loss_dones_ret_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+            loss_rewards_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+            loss_dones_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+
             self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
             self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
 
-
-            loss_rewards_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-            loss_dones_img_accu = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-
-            inputs_step_img = {'obs':inputs_step['obs'], 'actions':self.action_zero_out}
+            inputs_step_img = {'obs':inputs_step['obs'], 'actions':self.action_zero_out, 'step_size':1}
             for step_img in tf.range(step, episode_len):
                 action = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step_img:step_img+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-                inputs_step_img['actions'] = action
-                return_step = returns[step_img:step_img+1]
+                return_step = inputs['returns'][-1][step_img:step_img+1]
 
                 if gen == 0:
                     with tf.GradientTape() as tape_PG:
@@ -2385,10 +2431,10 @@ class GeneralAI(tf.keras.Model):
                         loss_action = self.loss_PG(action_dist, action, return_step)
                     gradients = tape_PG.gradient(loss_action, self.action.trainable_variables)
                     self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
-                    loss_PG = loss_PG.write(step, loss_action)
+                    # loss_PG_img_accu = loss_PG_img_accu.write(step_img, loss_action)
 
+                # inputs_act = {'obs':inputs_step_img['obs'], 'actions':return_step}
                 # with tf.GradientTape() as tape_act_img:
-                #     inputs_act = {'obs':inputs_step_img['obs'], 'actions':return_step}
                 #     actin_logits = self.actin(inputs_act, use_img=True); actin_dist = self.actin.dist(actin_logits)
                 #     inputs_act['obs'] = actin_dist.sample()
                 #     action_logits = self.actout(inputs_act, use_img=True)
@@ -2397,10 +2443,33 @@ class GeneralAI(tf.keras.Model):
                 #     loss_action = self.loss_likelihood(action_dist, action)
                 # gradients = tape_act_img.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables)
                 # self._optimizer.apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables))
-                # loss_act = loss_act.write(step, loss_action)
+                # # loss_act_img_accu = loss_act_img_accu.write(step_img, loss_action)
+
+
+                step_scale = self.attn_img_scales-1
+                step_size = tf.math.pow(self.attn_mem_multi, step_scale)
+                inputs_step_img_scale = {'obs':inputs_step_img['obs'], 'actions':action, 'step_size':step_size}
+                with tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
+                    trans_logits = self.trans(inputs_step_img_scale, store_memory=False, use_img=True); trans_dist = self.trans.dist(trans_logits)
+                    inputs_step_img_scale['obs'] = trans_dist.sample()
+
+                with tape_reward:
+                    rwd_logits = self.rwd(inputs_step_img_scale, store_memory=False, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+                    loss_reward = self.loss_likelihood(rwd_dist, inputs['returns'][step_scale][step_img:step_img+1])
+                gradients = tape_reward.gradient(loss_reward, self.trans.trainable_variables + self.rwd.trainable_variables)
+                self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.rwd.trainable_variables))
+                # loss_rewards_ret_accu = loss_rewards_ret_accu.write(step_img, loss_reward)
+
+                with tape_done:
+                    done_logits = self.done(inputs_step_img_scale, store_memory=False, use_img=True); done_dist = self.done.dist[0](done_logits[0])
+                    loss_done = self.loss_likelihood(done_dist, tf.constant([[True]]))
+                gradients = tape_done.gradient(loss_done, self.trans.trainable_variables + self.done.trainable_variables)
+                self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.done.trainable_variables))
+                # loss_dones_ret_accu = loss_dones_ret_accu.write(step_img, loss_done)
 
 
 
+                inputs_step_img['actions'] = action
                 with tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
                     trans_logits = self.trans(inputs_step_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
                     inputs_step_img['obs'] = trans_dist.sample()
@@ -2410,24 +2479,27 @@ class GeneralAI(tf.keras.Model):
                     loss_reward = self.loss_likelihood(rwd_dist, inputs['rewards'][step_img:step_img+1])
                 gradients = tape_reward.gradient(loss_reward, self.trans.trainable_variables + self.rwd.trainable_variables)
                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.rwd.trainable_variables))
-                loss_rewards_img_accu = loss_rewards_img_accu.write(step_img, loss_reward)
+                loss_rewards_accu = loss_rewards_accu.write(step_img, loss_reward)
 
                 with tape_done:
                     done_logits = self.done(inputs_step_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
                     loss_done = self.loss_likelihood(done_dist, inputs['dones'][step_img:step_img+1])
                 gradients = tape_done.gradient(loss_done, self.trans.trainable_variables + self.done.trainable_variables)
                 self._optimizer.apply_gradients(zip(gradients, self.trans.trainable_variables + self.done.trainable_variables))
-                loss_dones_img_accu = loss_dones_img_accu.write(step_img, loss_done)
+                loss_dones_accu = loss_dones_accu.write(step_img, loss_done)
 
-
-            loss_rewards = loss_rewards.write(step, tf.math.reduce_mean(loss_rewards_img_accu.stack(), axis=0))
-            loss_dones = loss_dones.write(step, tf.math.reduce_mean(loss_dones_img_accu.stack(), axis=0))
+            # loss_PG_img = loss_PG_img.write(step, tf.math.reduce_mean(loss_PG_img_accu.stack(), axis=0))
+            # loss_act_img = loss_act_img.write(step, tf.math.reduce_mean(loss_act_img_accu.stack(), axis=0))
+            # loss_rewards_ret = loss_rewards.write(step, tf.math.reduce_mean(loss_rewards_ret_accu.stack(), axis=0))
+            # loss_dones_ret = loss_dones.write(step, tf.math.reduce_mean(loss_dones_ret_accu.stack(), axis=0))
+            loss_rewards = loss_rewards.write(step, tf.math.reduce_mean(loss_rewards_accu.stack(), axis=0))
+            loss_dones = loss_dones.write(step, tf.math.reduce_mean(loss_dones_accu.stack(), axis=0))
 
 
 
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            return_step = returns[step:step+1]
+            return_step = inputs['returns'][-1][step:step+1]
 
             if gen == 0:
                 with tf.GradientTape() as tape_PG:
@@ -2439,8 +2511,8 @@ class GeneralAI(tf.keras.Model):
                 self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
                 loss_PG = loss_PG.write(step, loss_action)
 
+            # inputs_act = {'obs':inputs_step['obs'], 'actions':return_step}
             # with tape_act:
-            #     inputs_act = {'obs':inputs_step['obs'], 'actions':return_step}
             #     actin_logits = self.actin(inputs_act, use_img=True, store_real=True); actin_dist = self.actin.dist(actin_logits)
             #     inputs_act['obs'] = actin_dist.sample()
             #     action_logits = self.actout(inputs_act, use_img=True, store_real=True)
@@ -2452,6 +2524,8 @@ class GeneralAI(tf.keras.Model):
             # loss_act = loss_act.write(step, loss_action)
 
 
+        # loss['loss_PG_img'], loss['loss_act_img'] = loss_PG_img.concat(), loss_act_img.concat()
+        # loss['reward_ret'], loss['done_ret'] = loss_rewards_ret.concat(), loss_dones_ret.concat()
         loss['reward'], loss['done'] = loss_rewards.concat(), loss_dones.concat()
         loss['loss_PG'], loss['loss_act'] = loss_PG.concat(), loss_act.concat()
         return loss
@@ -2577,13 +2651,13 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 net_attn_io = True
 aio_max_latents = 32
-attn_mem_multi = 1
+attn_mem_multi = 4 # attn_img_multi
 aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '_rp200_gen0_dyn125' # _rp200 _gen0123 _dyn14 _RfB _img2 _prs2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 0, '_gen1_dyn125' # _rp200 _gen0123 _dyn14 _RfB _img2 _prs2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
@@ -2605,7 +2679,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 3; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-max_steps = 3 # max replay buffer or train interval or bootstrap
+max_steps = 4 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
