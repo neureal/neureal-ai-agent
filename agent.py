@@ -307,7 +307,7 @@ class GeneralAI(tf.keras.Model):
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         # self.float_log_min_prob = tf.constant(tf.math.log(self.float_eps), compute_dtype)
-        self.attn_img_scales = int(np.log2(max_steps))+1
+        self.attn_img_scales, self.attn_img_max_step_size = int(np.log2(max_steps))+1, tf.constant(1024*64, tf.int32)
         self.compute_zero, self.int32_max, self.int32_maxbit, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(1073741824, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
         self.arch, self.env, self.trader, self.env_render, self.value_cont, self.force_cont_obs, self.force_cont_action = arch, env, trader, env_render, value_cont, force_cont_obs, force_cont_action
@@ -2050,7 +2050,7 @@ class GeneralAI(tf.keras.Model):
                 step_size = tf.math.pow(self.attn_mem_multi, step_scale)
                 step_scale += 1
                 step_loc += tf.bitwise.right_shift(self.max_steps, step_scale)
-                # if step == step_loc: step_size = self.int32_maxbit
+                # if step == step_loc: step_size = self.attn_img_max_step_size
                 if step != step_loc: step_size = 1 # TODO remove
             inputs_step['step_size'] = step_size
 
@@ -2446,7 +2446,7 @@ class GeneralAI(tf.keras.Model):
 
                 step_scale = self.attn_img_scales-1
                 step_size = tf.math.pow(self.attn_mem_multi, step_scale)
-                inputs_step_img_ret = {'obs':inputs_step_img['obs'], 'actions':action, 'step_size':step_size}
+                inputs_step_img_ret = {'obs':inputs_step_img['obs'], 'actions':action, 'step_size':step_size} # self.attn_img_max_step_size
                 with tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
                     trans_logits = self.trans(inputs_step_img_ret, store_memory=False, use_img=True); trans_dist = self.trans.dist(trans_logits)
                     inputs_step_img_ret['obs'] = trans_dist.sample()
