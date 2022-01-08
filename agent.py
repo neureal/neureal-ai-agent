@@ -345,6 +345,7 @@ class GeneralAI(tf.keras.Model):
             else: num_latents = 1
             self.action_spec[i]['num_latents'] = num_latents
             lat_batch_size_trans += num_latents
+        lat_batch_size_trans += 1 # step_size
         memory_size_trans = lat_batch_size_trans * max_steps
 
         latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans}
@@ -364,7 +365,7 @@ class GeneralAI(tf.keras.Model):
         #     self.gen = GenNet('GN', self.obs_spec, force_cont_obs, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.gen(inputs)
         self.action = GenNet('AN', self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         if arch in ('MU4',):
-            memory_size_actin = (lat_batch_size+1) * max_steps
+            memory_size_actin = (lat_batch_size+2) * max_steps # return_goal and step_size
             inputs['actions'] = [tf.constant([[0]],tf.float64)]
             query_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
             self.actin = TransNet('AN1', query_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin, max_steps=max_steps); outputs = self.actin(inputs)
@@ -2493,6 +2494,14 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             return_step = inputs['returns'][-1][step:step+1]
 
+            step_scale = self.attn_img_scales-1
+            step_size = tf.math.pow(self.attn_mem_multi, step_scale)
+            inputs_step_store = {'obs':inputs_step['obs'], 'actions':action, 'step_size':step_size}
+            trans_logits = self.trans(inputs_step_store, store_memory=False); trans_dist = self.trans.dist(trans_logits)
+            inputs_step_store['obs'] = trans_dist.sample()
+            rwd_logits = self.rwd(inputs_step_store, store_memory=False); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+            loss_return = self.loss_likelihood(rwd_dist, inputs['returns'][step_scale][step:step+1])
+
             inputs_step_store = {'obs':inputs_step['obs'], 'actions':action, 'step_size':1}
             trans_logits = self.trans(inputs_step_store); trans_dist = self.trans.dist(trans_logits)
             inputs_step_store['obs'] = trans_dist.sample()
@@ -2507,7 +2516,9 @@ class GeneralAI(tf.keras.Model):
                     action_logits = self.action(inputs_step, use_img=True, store_real=True)
                     action_dist = [None]*self.action_spec_len
                     for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                    loss_action = self.loss_PG(action_dist, action, return_step)
+                    # loss_action = self.loss_PG(action_dist, action, return_step)
+                    surprise = -loss_return-loss_reward-loss_done
+                    loss_action = self.loss_PG(action_dist, action, surprise)
                 gradients = tape_PG.gradient(loss_action, self.action.trainable_variables)
                 self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
                 loss_PG = loss_PG.write(step, loss_action)
