@@ -552,18 +552,18 @@ class GeneralAI(tf.keras.Model):
         if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
         return loss
 
-    def loss_PG(self, dist, targets, returns, returns_target=None, advantages=None): # policy gradient, actor/critic
+    def loss_PG(self, dist, targets, returns, values=None, returns_target=None): # policy gradient, actor/critic
         returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
         loss_lik = self.loss_likelihood(dist, targets, probs=False)
         # loss_lik = loss_lik -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
-        if returns_target is not None: returns = tf.squeeze(tf.cast(returns_target, self.compute_dtype), axis=-1) - returns # lPGt
-        if advantages is not None: returns = returns - tf.squeeze(tf.cast(advantages, self.compute_dtype), axis=-1)
+        if returns_target is not None: returns = tf.squeeze(tf.cast(returns_target, self.compute_dtype), axis=-1) - returns
+        if values is not None: returns = returns - tf.squeeze(tf.cast(values, self.compute_dtype), axis=-1)
         loss = loss_lik * returns # / self.float_maxroot
-        # if advantages is not None: loss = loss * (-advantages)
-        # if advantages is not None: loss = loss - loss_lik * advantages
-        # if advantages is not None: loss = loss - advantages
-        # if advantages is not None: loss = loss * (1.0 + advantages)
-        # if advantages is not None: loss = loss * advantages
+        # if values is not None: loss = loss * (-values)
+        # if values is not None: loss = loss - loss_lik * values
+        # if values is not None: loss = loss - values
+        # if values is not None: loss = loss * (1.0 + values)
+        # if values is not None: loss = loss * values
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
         if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
@@ -1971,7 +1971,7 @@ class GeneralAI(tf.keras.Model):
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
                 # loss_action = self.loss_likelihood(action_dist, action)
-                # # surprise = -loss_return-loss_reward-loss_done
+                # surprise = -loss_return-loss_reward-loss_done
                 surprise = loss_return+loss_reward+loss_done
                 loss_action = self.loss_PG(action_dist, action, surprise)
             gradients = tape_act.gradient(loss_action, self.rep.trainable_variables + self.actin.trainable_variables + self.actout.trainable_variables)
