@@ -15,6 +15,7 @@ tf.keras.backend.set_floatx('float64')
 # tf.random.set_seed(0)
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import tensorflow_probability as tfp
+import tensorflow_addons as tfa
 import matplotlib.pyplot as plt
 import model_util as util
 import gym, ale_py, gym_algorithmic, procgen, pybulletgym
@@ -382,6 +383,7 @@ class GeneralAI(tf.keras.Model):
             self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
+        # self._optimizer = tfa.optimizers.AdamW(learning_rate=learn_rate, weight_decay=1e-7, epsilon=self.float_eps) # _wd7
 
 
         metrics_loss = OrderedDict()
@@ -512,11 +514,12 @@ class GeneralAI(tf.keras.Model):
         if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
         return loss
 
-    def loss_PG(self, dist, targets, returns, advantages=None): # policy gradient, actor/critic
+    def loss_PG(self, dist, targets, returns, values=None, returns_target=None): # policy gradient, actor/critic
         returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
         loss_lik = self.loss_likelihood(dist, targets, probs=False)
         # loss_lik = loss_lik -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
-        if advantages is not None: returns = returns - tf.squeeze(tf.cast(advantages, self.compute_dtype), axis=-1)
+        if returns_target is not None: returns = tf.squeeze(tf.cast(returns_target, self.compute_dtype), axis=-1) - returns
+        if values is not None: returns = returns - tf.squeeze(tf.cast(values, self.compute_dtype), axis=-1)
         loss = loss_lik * returns # / self.float_maxroot
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
@@ -601,7 +604,6 @@ class GeneralAI(tf.keras.Model):
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             returns = inputs['returns'][step:step+1]
-            # returns = inputs['rewards'][step:step+1] + returns
 
             inputs_step = {'obs':obs}
             with tf.GradientTape(persistent=True) as tape_action:
@@ -744,7 +746,7 @@ class GeneralAI(tf.keras.Model):
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         metric_advantages = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        # returns = inputs['rewards'] + inputs['returns']
+        # return_goal = tf.constant([[200.0]], tf.float64)
         for step in tf.range(tf.shape(inputs['dones'])[0]):
             obs = [None]*self.obs_spec_len
             for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
@@ -770,15 +772,18 @@ class GeneralAI(tf.keras.Model):
             loss_returns = loss_returns.write(step, loss_return)
 
             with tape_action:
-                advantages = returns - tf.cast(values, tf.float64) # new chance of chosen action: if over predict = push away, if under predict = push closer, if can predict = stay
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_PG(action_dist, action, advantages)
+                loss_action = self.loss_PG(action_dist, action, returns, values)
+                # loss_action = self.loss_PG(action_dist, action, returns, values, returns_target=return_goal) # lPGt
+                # loss_action = self.loss_PG(action_dist, action, loss_return) # lPGv
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
-            metric_advantages = metric_advantages.write(step, advantages[0])
+            metric_advantages = metric_advantages.write(step, (returns - tf.cast(values,tf.float64))[0])
+
+            # return_goal -= inputs['rewards'][step:step+1]; return_goal.set_shape((1,1))
 
         loss['value'], loss['action'] = loss_returns.concat(), loss_actions.concat()
         loss['advantages'] = metric_advantages.concat()
@@ -1182,7 +1187,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _gen0123 _dyn14 _rp200 _RfB _img2 _prs2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
+machine, device, extra = 'dev', 0, '' # _wd7 _lPGv _gen0123 _dyn14 _rp200 _RfB _img2 _prs2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
