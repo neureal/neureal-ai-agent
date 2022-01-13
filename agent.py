@@ -15,6 +15,7 @@ tf.keras.backend.set_floatx('float64')
 # tf.random.set_seed(0)
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import tensorflow_probability as tfp
+import tensorflow_addons as tfa
 import matplotlib.pyplot as plt
 import model_util as util
 import gym, ale_py, gym_algorithmic, procgen, pybulletgym
@@ -374,7 +375,7 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('AC','MU','VPN','MU2',):
             if value_cont:
-                value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+                value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
                 self.value = GenNet('VN', value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
             else: self.value = ValueNet('VN', latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
 
@@ -389,6 +390,7 @@ class GeneralAI(tf.keras.Model):
             self.done = GenNet('DO', done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
         self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps)
+        # self._optimizer = tfa.optimizers.AdamW(learning_rate=learn_rate, weight_decay=1e-7, epsilon=self.float_eps) # _wd7
 
 
         metrics_loss = OrderedDict()
@@ -2333,7 +2335,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '_gen0_dyn1278' # _gen0123 _dyn14 _rp200 _RfB _img2 _prs2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 0, '_gen0_dyn1278' # _gen0123 _dyn14 _rp200 _RfB _img2 _prs2 _wd7 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
@@ -2353,9 +2355,9 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; tenv = 3; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
+# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-# max_steps = 4 # max replay buffer or train interval or bootstrap
+# max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
 # arch = 'PG' # Policy Gradient agent, PG loss
