@@ -157,8 +157,8 @@ class TransNet(tf.keras.Model):
         if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
         if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
         if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
-        # if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=mid, evo=evo, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
-        if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
+        # if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=params_size, num_heads=1, norm=True, hidden_size=mid, evo=evo, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
+        if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=params_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
         self.layer_dense_out_logits = tf.keras.layers.Dense(self.lat_batch_size*params_size, name='dense_out_logits')
 
         self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -188,11 +188,11 @@ class TransNet(tf.keras.Model):
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
-        if not self.net_attn_io:
+        if self.net_attn_io: out = self.layer_attn_out(out)
+        else:
             out = self.layer_flatten(tf.expand_dims(out, axis=0))
             out = self.layer_dense_out_logits(out)
             out = tf.reshape(out, (self.lat_batch_size, -1))
-        else: out = self.layer_attn_out(out)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('trans net out:', out)
