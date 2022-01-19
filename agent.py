@@ -18,7 +18,7 @@ import tensorflow_probability as tfp
 import tensorflow_addons as tfa
 import matplotlib.pyplot as plt
 import model_util as util
-import gym, ale_py, gym_algorithmic, procgen, pybulletgym
+import gym, gym_algorithmic, procgen, pybullet_envs
 
 # CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.6.0, tensorflow_probability==0.14.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
@@ -973,7 +973,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _wd7 _lPGv _gen0123 _dyn14 _rp200 _RfB _img2 _prs2 _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
+machine, device, extra = 'dev', 0, '' # _prs2 _wd7 _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64')
@@ -984,9 +984,10 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # env_name, max_steps, env_render, env = 'ProcgenMiner', 1024, False, gym.make('procgen-miner-v0')
 # env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # max_steps 21600
 
+# env_name, max_steps, env_render, env = 'CartPoleCont', 256, False, gym.make('CartPoleContinuousBulletEnv-v0'); env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2') # max_steps 1000
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker() # max_steps 1600
-# env_name, max_steps, env_render, env = 'Hopper', 1024, False, gym.make('HopperPyBulletEnv-v0') # max_steps 1000
+# env_name, max_steps, env_render, env = 'Hopper', 1024, False, gym.make('HopperBulletEnv-v0') # max_steps 1000
 
 # from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
 
@@ -1018,7 +1019,7 @@ if __name__ == '__main__':
     # agent_process.join()
 
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
-    with tf.device("/device:{}:{}".format(device_type,device)):
+    with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
         model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, net_attn_io, aio_max_latents, attn_mem_multi, aug_data_step, aug_data_pos)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
         
@@ -1067,7 +1068,7 @@ if __name__ == '__main__':
         # TODO np.mean, reduce size if above 200,000 episodes
 
         name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%y-%m-%d-%H-%M-%S"), extra)
-        total_steps = np.sum(metrics_loss['1steps']['steps+'])
+        total_steps = int(np.sum(metrics_loss['1steps']['steps+']))
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
         title += "     |     lr:{}    dis:{}    en:{}    al:{}    am:{}    ms:{}".format(learn_rate, returns_disc, entropy_contrib, aio_max_latents, attn_mem_multi, max_steps)
