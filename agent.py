@@ -1654,39 +1654,39 @@ class GeneralAI(tf.keras.Model):
             # loss_actions = loss_actions.write(step, tf.expand_dims(tf.math.reduce_mean(loss_act['loss_act'], axis=0), axis=0))
 
 
-            # # rnd
-            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # outputs_img = self.MU4_img(inputs_step, 2, return_goal)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # loss_act = self.MU4_img_learner(outputs_img, 2)
-            # # PG
-            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # outputs_img = self.MU4_img(inputs_step, 0, return_goal)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # loss_act = self.MU4_img_learner(outputs_img, 0)
-            # # act rnd
-            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # outputs_img = self.MU4_img(inputs_step, 1, return_goal_rnd)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # loss_act = self.MU4_img_learner(outputs_img, 1)
-            # # act
-            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # outputs_img = self.MU4_img(inputs_step, 1, return_goal)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # loss_act = self.MU4_img_learner(outputs_img, 1)
-            # loss_actions = loss_actions.write(step, tf.expand_dims(tf.math.reduce_mean(loss_act['loss_act'], axis=0), axis=0))
+            # rnd
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, 2, return_goal)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            loss_act = self.MU4_img_learner(outputs_img, 2)
+            # PG
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, 0, return_goal)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            loss_act = self.MU4_img_learner(outputs_img, 0)
+            # act rnd
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, 1, return_goal_rnd)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            loss_act = self.MU4_img_learner(outputs_img, 1)
+            # act
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, 1, return_goal)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            loss_act = self.MU4_img_learner(outputs_img, 1)
+            loss_actions = loss_actions.write(step, tf.expand_dims(tf.math.reduce_mean(loss_act['loss_act'], axis=0), axis=0))
 
 
             action = self.action_zero_out
             if gen == 0:
-                # action = self.MU4_gen_PG(inputs_step, use_img=True, store_real=True) # _img
-                action = self.MU4_gen_PG(inputs_step)
+                action = self.MU4_gen_PG(inputs_step, use_img=True, store_real=True) # _img
+                # action = self.MU4_gen_PG(inputs_step)
             if gen == 1:
-                # action = self.MU4_gen_act(inputs_step, return_goal, use_img=True, store_real=True) # _img
-                action = self.MU4_gen_act(inputs_step, return_goal)
+                action = self.MU4_gen_act(inputs_step, return_goal, use_img=True, store_real=True) # _img
+                # action = self.MU4_gen_act(inputs_step, return_goal)
             if gen == 2: action = self.MU4_gen_rnd()
 
 
