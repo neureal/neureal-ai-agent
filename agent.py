@@ -323,7 +323,7 @@ class GeneralAI(tf.keras.Model):
         self.gym_step_dtypes = [feat['dtype'] for feat in self.obs_spec] + [tf.float64, tf.bool]
         self.rewards_zero, self.dones_zero = tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
 
-        self.attn_img_scales = int(np.log2(max_steps)) # TODO remove
+        self.attn_img_scales = int(np.log(max_steps) / np.log(attn_mem_multi)) # TODO remove
         self.attn_img_step_sizes = [None]*(self.attn_img_scales)
         for step_scale in range(self.attn_img_scales): self.attn_img_step_sizes[step_scale] = tf.math.pow(self.attn_mem_multi, step_scale+1)
         # self.attn_img_step_sizes[-1] = tf.math.pow(self.attn_mem_multi, int(np.log2(max_steps))) # TODO remove
@@ -2538,8 +2538,8 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64')
 # env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2')
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0
-# env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0')
-# env_name, max_steps, env_render, env = 'ProcgenMiner', 1024, False, gym.make('procgen-miner-v0')
+# env_name, max_steps, env_render, env = 'pgenChaser', 1024, False, gym.make('procgen-chaser-v0')
+# env_name, max_steps, env_render, env = 'pgenCaveFlyer', 1024, False, gym.make('procgen-caveflyer-v0')
 # env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # max_steps 21600
 
 # env_name, max_steps, env_render, env = 'CartPoleCont', 256, False, gym.make('CartPoleContinuousBulletEnv-v0'); env.observation_space.dtype = np.dtype('float64')
