@@ -327,6 +327,9 @@ class GeneralAI(tf.keras.Model):
         self.attn_img_step_sizes = [None]*(self.attn_img_scales)
         for step_scale in range(self.attn_img_scales): self.attn_img_step_sizes[step_scale] = tf.math.pow(self.attn_mem_multi, step_scale+1)
         # self.attn_img_step_sizes[-1] = tf.math.pow(self.attn_mem_multi, int(np.log2(max_steps))) # TODO remove
+        self.attn_img_step_sizesT = tf.concat(self.attn_img_step_sizes, axis=0)
+        if self.attn_img_step_sizesT.shape == (): self.attn_img_step_sizesT = tf.reshape(self.attn_img_step_sizesT, (1,))
+        self.attn_img_step_locs = max_steps - tf.cast(max_steps / self.attn_img_step_sizesT, tf.int32)
 
         net_attn, net_lstm = True, False
 
@@ -1490,10 +1493,12 @@ class GeneralAI(tf.keras.Model):
         step_sizes = tf.TensorArray(tf.int32, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
         entropies = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        step_size, step_scale = 1, 1
-        step_loc = tf.bitwise.right_shift(self.max_steps, step_scale)
+        step_size, step_scale = 1, 0
+        step_loc = self.attn_img_step_locs[step_scale]
+        # step_loc = tf.bitwise.right_shift(self.max_steps, step_scale)
+        # step_loc = self.max_steps - tf.cast(self.max_steps / self.attn_img_step_sizesT[step_scale], tf.int32)
 
-        inputs_step = {'obs':inputs['obs'], 'actions':self.action_zero_out, 'step_size':1}
+        inputs_step = {'obs':inputs['obs'], 'actions':self.action_zero_out, 'step_size':step_size}
         step, dones = tf.constant(0), tf.constant([[False]])
         while not dones[-1][0]:
             obs = obs.write(step, inputs_step['obs'])
@@ -1507,10 +1512,12 @@ class GeneralAI(tf.keras.Model):
             inputs_step['actions'] = action
 
             if step == step_loc:
-                step_size = tf.math.pow(self.attn_mem_multi, step_scale)
+                step_size = self.attn_img_step_sizesT[step_scale] # tf.math.pow(self.attn_mem_multi, step_scale)
                 step_scale += 1
-                step_loc += tf.bitwise.right_shift(self.max_steps, step_scale)
-                if step != step_loc: step_size = 1 # TODO remove
+                # step_loc += tf.bitwise.right_shift(self.max_steps, step_scale)
+                # step_loc = self.max_steps - tf.cast(self.max_steps / tf.math.pow(self.attn_mem_multi, step_scale), tf.int32)
+                if step_scale != self.attn_img_scales: step_loc = self.attn_img_step_locs[step_scale]
+                # if step != step_loc: step_size = 1 # TODO remove
             inputs_step['step_size'] = step_size
 
             trans_logits = self.trans(inputs_step, use_img=True); trans_dist = self.trans.dist(trans_logits)
@@ -1519,7 +1526,7 @@ class GeneralAI(tf.keras.Model):
             rwd_logits = self.rwd(inputs_step, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             done_logits = self.done(inputs_step, use_img=True); done_dist = self.done.dist[0](done_logits[0])
             reward, dones = tf.cast(rwd_dist.sample(), tf.float64), tf.cast(done_dist.sample(), tf.bool)
-            if step == step_loc: dones = tf.constant([[True]])
+            if step_scale == self.attn_img_scales: dones = tf.constant([[True]])
 
             entropy_rwd, entropy_done = rwd_dist.entropy(), done_dist.entropy()
             entropy = (entropy_rwd + entropy_done) * 0.1
@@ -1584,18 +1591,18 @@ class GeneralAI(tf.keras.Model):
                 self._optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
                 loss_PG = loss_PG.write(step, loss_action)
 
-            # inputs_act = {'obs':inputs_step['obs'], 'actions':return_step, 'step_size':inputs['step_size'][step:step+1]}
-            # with tf.GradientTape() as tape_act:
-            #     actin_logits = self.actin(inputs_act, use_img=True); actin_dist = self.actin.dist(actin_logits)
-            #     inputs_act['obs'] = actin_dist.sample()
-            #     action_logits = self.actout(inputs_act, use_img=True)
-            #     action_dist = [None]*self.action_spec_len
-            #     for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
-            #     loss_action = self.loss_likelihood(action_dist, action)
-            #     # loss_action = self.loss_PG(action_dist, action, inputs['entropy'][step:step+1])
-            # gradients = tape_act.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables)
-            # self._optimizer.apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables))
-            # loss_act = loss_act.write(step, loss_action)
+            inputs_act = {'obs':inputs_step['obs'], 'actions':return_step, 'step_size':inputs['step_size'][step:step+1]}
+            with tf.GradientTape() as tape_act:
+                actin_logits = self.actin(inputs_act, use_img=True); actin_dist = self.actin.dist(actin_logits)
+                inputs_act['obs'] = actin_dist.sample()
+                action_logits = self.actout(inputs_act, use_img=True)
+                action_dist = [None]*self.action_spec_len
+                for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
+                loss_action = self.loss_likelihood(action_dist, action)
+                # loss_action = self.loss_PG(action_dist, action, inputs['entropy'][step:step+1])
+            gradients = tape_act.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables)
+            self._optimizer.apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables))
+            loss_act = loss_act.write(step, loss_action)
 
         loss['loss_PG'], loss['loss_act'] = loss_PG.concat(), loss_act.concat()
         return loss
@@ -1647,9 +1654,9 @@ class GeneralAI(tf.keras.Model):
 
 
             # ## _img
-            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
-            # outputs_img = self.MU4_img(inputs_step, gen, return_goal)
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, gen, return_goal)
 
             # self.action.reset_states(use_img=True); self.actin.reset_states(use_img=True); self.actout.reset_states(use_img=True)
             # loss_act = self.MU4_img_learner(outputs_img, gen)
@@ -1684,11 +1691,11 @@ class GeneralAI(tf.keras.Model):
 
             action = self.action_zero_out
             if gen == 0:
-                # action = self.MU4_gen_PG(inputs_step, use_img=True, store_real=True) # _img
-                action = self.MU4_gen_PG(inputs_step)
+                action = self.MU4_gen_PG(inputs_step, use_img=True, store_real=True) # _img
+                # action = self.MU4_gen_PG(inputs_step)
             if gen == 1:
-                # action = self.MU4_gen_act(inputs_step, return_goal, use_img=True, store_real=True) # _img
-                action = self.MU4_gen_act(inputs_step, return_goal)
+                action = self.MU4_gen_act(inputs_step, return_goal, use_img=True, store_real=True) # _img
+                # action = self.MU4_gen_act(inputs_step, return_goal)
             if gen == 2: action = self.MU4_gen_rnd()
 
 
@@ -1710,7 +1717,7 @@ class GeneralAI(tf.keras.Model):
             for step_scale in range(self.attn_img_scales):
                 returns[step_scale] = returns[step_scale].write(step, [self.float64_zero])
                 returns_updt = returns[step_scale].stack()
-                if step_scale < self.attn_img_scales-1:
+                if step_scale != self.attn_img_scales-1:
                     step_size = self.attn_img_step_sizes[step_scale]
                     returns_temp = returns_updt[-step_size:] + inputs['rewards'][-1]
                     returns_updt = tf.concat([returns_updt[:-step_size], returns_temp], axis=0)
@@ -1958,7 +1965,7 @@ class GeneralAI(tf.keras.Model):
             for step_scale in range(self.attn_img_scales):
                 obs_rep_ret[step_scale] = obs_rep_ret[step_scale].write(step, self.latent_zero)
                 returns_updt = obs_rep_ret[step_scale].stack()
-                if step_scale < self.attn_img_scales-1:
+                if step_scale != self.attn_img_scales-1:
                     step_size = self.attn_img_step_sizes[step_scale]
                     returns_temp = returns_updt[-step_size:] + inputs_step['obs']
                     returns_updt = tf.concat([returns_updt[:-step_size], returns_temp], axis=0)
@@ -1980,8 +1987,12 @@ class GeneralAI(tf.keras.Model):
             step_size_max = episode_len - step
             for step_scale in range(self.attn_img_scales):
                 step_size, done_target = self.attn_img_step_sizes[step_scale], tf.constant([[False]])
-                if step_size >= step_size_max: step_size, done_target = step_size_max, tf.constant([[True]])
-                if step_scale == self.attn_img_scales-1: done_target = tf.constant([[True]])
+                # if step_size >= step_size_max: step_size, done_target = step_size_max, tf.constant([[True]])
+                if step_scale != self.attn_img_scales-1:
+                    if step_size >= step_size_max: continue
+                else:
+                    if step_size >= step_size_max: step_size = step_size_max
+                    done_target = tf.constant([[True]])
                 inputs_step_ret = {'obs':inputs_step['obs'], 'actions':action, 'step_size':step_size}
 
                 with tf.GradientTape() as tape_trans, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
@@ -2525,7 +2536,7 @@ latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
 net_attn_io = True
 aio_max_latents = 32
-attn_mem_multi = 2 # attn_img_base
+attn_mem_multi = 4 # attn_img_base # max_steps must be power of this!
 aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
@@ -2552,7 +2563,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
+# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
 # max_steps = 4 # max replay buffer or train interval or bootstrap
 
