@@ -1495,8 +1495,6 @@ class GeneralAI(tf.keras.Model):
 
         step_size, step_scale = 1, 0
         step_loc = self.attn_img_step_locs[step_scale]
-        # step_loc = tf.bitwise.right_shift(self.max_steps, step_scale)
-        # step_loc = self.max_steps - tf.cast(self.max_steps / self.attn_img_step_sizesT[step_scale], tf.int32)
 
         inputs_step = {'obs':inputs['obs'], 'actions':self.action_zero_out, 'step_size':step_size}
         step, dones = tf.constant(0), tf.constant([[False]])
@@ -1512,10 +1510,8 @@ class GeneralAI(tf.keras.Model):
             inputs_step['actions'] = action
 
             if step == step_loc:
-                step_size = self.attn_img_step_sizesT[step_scale] # tf.math.pow(self.attn_mem_multi, step_scale)
+                step_size = self.attn_img_step_sizesT[step_scale]
                 step_scale += 1
-                # step_loc += tf.bitwise.right_shift(self.max_steps, step_scale)
-                # step_loc = self.max_steps - tf.cast(self.max_steps / tf.math.pow(self.attn_mem_multi, step_scale), tf.int32)
                 if step_scale != self.attn_img_scales: step_loc = self.attn_img_step_locs[step_scale]
                 # if step != step_loc: step_size = 1 # TODO remove
             inputs_step['step_size'] = step_size
