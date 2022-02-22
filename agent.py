@@ -312,23 +312,23 @@ class GeneralAI(tf.keras.Model):
         self.compute_zero, self.int32_max, self.int32_maxbit, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(1073741824, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
         self.arch, self.env, self.trader, self.env_render, self.value_cont, self.force_cont_obs, self.force_cont_action = arch, env, trader, env_render, value_cont, force_cont_obs, force_cont_action
-        self.max_episodes, self.max_steps, self.attn_mem_multi, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(attn_mem_multi, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
+        self.max_episodes, self.max_steps, self.learn_rate, self.attn_mem_multi, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(learn_rate, tf.float64), tf.constant(attn_mem_multi, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
 
-        # def schedule(): return tf.random.uniform((), minval=learn_rate, maxval=1e-2) # -sr2
-        # schedule = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=0.01, decay_steps=1000, decay_rate=0.1) # -sed
-        # schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=1e-2, first_decay_steps=1000, t_mul=1.0, m_mul=1.0, alpha=learn_rate)
-        # schedule = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=1e-2, step_size=1000, scale_mode='cycle')
-        # self._optimizer = tf.keras.optimizers.SGD(learning_rate=learn_rate) # _Os
-        # self._optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=self.float_eps) # _Oa
-        # self._optimizer = tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=self.float_eps, weight_decay=1e-7) # _Oaw
-        # self._optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=self.float_eps) # _Oar
-        self._optimizer = tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=self.float_eps, rectify=True) # _Oab
+        # def schedule(): return tf.random.uniform((), maxval=self.learn_rate, minval=self.float_eps.numpy()) # -sr
+        # def schedule(): return tf.random.truncated_normal((), mean=self.learn_rate/2, stddev=(self.learn_rate-self.float_eps.numpy())/4) # -srtn
+        # schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=self.learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=1e-8) # -scd
+        # schedule = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=self.learn_rate, maximal_learning_rate=1e-8, step_size=16, scale_mode='cycle') # -stc
+        # self._optimizer = tf.keras.optimizers.SGD(learning_rate=self.learn_rate) # _Os
+        # self._optimizer = tf.keras.optimizers.Adam(learning_rate=self.learn_rate, epsilon=self.float_eps) # _Oa
+        # self._optimizer = tfa.optimizers.AdamW(learning_rate=self.learn_rate, epsilon=self.float_eps, weight_decay=1e-7) # _Oaw
+        # self._optimizer = tfa.optimizers.RectifiedAdam(learning_rate=self.learn_rate, epsilon=self.float_eps) # _Oar
+        self._optimizer = tfa.optimizers.AdaBelief(learning_rate=self.learn_rate, epsilon=self.float_eps, rectify=True) # _Oab
         # self._optimizer = tfa.optimizers.COCOB(alpha=100.0, use_locking=True) # _Oco
-        # self._optimizer = tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10) # _Ows # has error with floatx=float64
-        # self._optimizer = tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=1e-7) # _Osw
-        self._optimizer1 = tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=self.float_eps, rectify=True) # _Oab
+        # self._optimizer = tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=self.learn_rate), start_averaging=0, average_period=10) # _Ows # has error with floatx=float64
+        # self._optimizer = tfa.optimizers.SGDW(learning_rate=self.learn_rate, weight_decay=1e-7) # _Osw
+        # self._optimizer1 = tfa.optimizers.AdaBelief(learning_rate=self.learn_rate, epsilon=self.float_eps, rectify=True) # _Oab
 
         self.obs_spec, self.obs_zero, _ = util.gym_get_spec(env.observation_space, self.compute_dtype, force_cont=force_cont_obs)
         self.action_spec, _, self.action_zero_out = util.gym_get_spec(env.action_space, self.compute_dtype, force_cont=force_cont_action)
@@ -404,6 +404,7 @@ class GeneralAI(tf.keras.Model):
         if arch == 'PG':
             metrics_loss['1nets'] = {'loss_action':np.float64}
             metrics_loss['1extras'] = {'returns':np.float64}
+            metrics_loss['1extras2'] = {'learn_rate':np.float64}
         if arch == 'AC':
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
             metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
@@ -609,6 +610,24 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI PG_learner_onestep")
         loss = {}
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        # metric_learn_rate = tf.TensorArray(tf.float32, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        learn_rate = self.learn_rate
+
+        # for w in self._optimizer.weights: w.assign(tf.zeros_like(w)) # _optR
+
+        # # _rtnO
+        # return_goal = tf.constant(200.0, tf.float64)
+        # learn_rate = return_goal - inputs['returns'][0][0] + tf.cast(self.float_eps, tf.float64)
+        # learn_rate = learn_rate / return_goal
+        # # learn_rate = -tf.math.log(learn_rate)
+        # learn_rate = learn_rate * self.learn_rate
+        # self._optimizer.learning_rate = learn_rate
+
+        # # _rtnON
+        # inputs_lr = {'step':step, 'loss_action':loss_actions.stack()}
+        # lr_logits = self.lr(inputs_lr); lr_dist = self.lr.dist[0](lr_logits[0])
+        # learn_rate = lr_dist.sample()
+        # self._optimizer.learning_rate = learn_rate
 
         for step in tf.range(tf.shape(inputs['dones'])[0]):
             obs = [None]*self.obs_spec_len
@@ -616,6 +635,14 @@ class GeneralAI(tf.keras.Model):
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             returns = inputs['returns'][step:step+1]
+            
+            # # _rtnI
+            # learn_rate = return_goal - inputs['returns'][0][0] + tf.cast(self.float_eps, tf.float64)
+            # learn_rate = learn_rate / return_goal
+            # learn_rate = learn_rate * self.learn_rate
+            # self._optimizer.learning_rate = learn_rate
+            # metric_learn_rate = metric_learn_rate.write(step, [learn_rate])
+
 
             inputs_step = {'obs':obs}
             with tf.GradientTape(persistent=True) as tape_action:
@@ -631,7 +658,11 @@ class GeneralAI(tf.keras.Model):
             self._optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
 
+            # return_goal -= tf.cast(inputs['rewards'][step][0], tf.float32)
+
         loss['action'] = loss_actions.concat()
+        loss['learn_rate'] = learn_rate
+        # loss['learn_rate'] = metric_learn_rate.concat()
         return loss
 
     def PG_run_episode(self, inputs, episode, training=True):
@@ -642,7 +673,7 @@ class GeneralAI(tf.keras.Model):
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
+                tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['learn_rate'])]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
                 tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
                 inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
@@ -976,15 +1007,15 @@ value_cont = True
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-net_attn_io = True
+net_attn_io = False
 aio_max_latents = 32
 attn_mem_multi = 2 # attn_img_base
-aug_data_step, aug_data_pos = True, False
+aug_data_step, aug_data_pos = False, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '_Oab' # _prs2 _Oaw-wd7 _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
+machine, device, extra = 'dev', 0, '' # _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
@@ -1013,8 +1044,8 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG' # Policy Gradient agent, PG loss
-arch = 'AC' # Actor Critic, PG and advantage loss
+arch = 'PG' # Policy Gradient agent, PG loss
+# arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
@@ -1091,7 +1122,7 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
         plt.figure(num=name, figsize=(34, 18), tight_layout=True)
-        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.03
+        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.01
         for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
         for loss_group_name, loss_group in metrics_loss.items():
