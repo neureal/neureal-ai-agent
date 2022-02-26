@@ -245,16 +245,16 @@ class GenNet(tf.keras.Model):
         def schedule_rtn(): return tf.random.truncated_normal((), dtype=tf.float64, mean=mean, stddev=stddev)
         if opt_spec['schedule_type'] == 'r': learn_rate = schedule_r
         if opt_spec['schedule_type'] == 'rtn': learn_rate = schedule_rtn
-        if opt_spec['schedule_type'] == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=1e-8)
-        if opt_spec['schedule_type'] == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=1e-8, step_size=16, scale_mode='cycle')
-        if opt_spec['type'] == 's': self.optimizer = tf.keras.optimizers.SGD(learning_rate=learn_rate) # _Os
-        if opt_spec['type'] == 'a': self.optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=float_eps) # _Oa
-        if opt_spec['type'] == 'aw': self.optimizer = tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay']) # _Oaw
-        if opt_spec['type'] == 'ar': self.optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps) # _Oar
-        if opt_spec['type'] == 'ab': self.optimizer = tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True) # _Oab
-        if opt_spec['type'] == 'co': self.optimizer = tfa.optimizers.COCOB(alpha=100.0, use_locking=True) # _Oco
-        if opt_spec['type'] == 'ws': self.optimizer = tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10) # _Ows # has error with floatx=float64
-        if opt_spec['type'] == 'sw': self.optimizer = tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=1e-7) # _Osw
+        if opt_spec['schedule_type'] == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
+        if opt_spec['schedule_type'] == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
+        if opt_spec['type'] == 's': self.optimizer = tf.keras.optimizers.SGD(learning_rate=learn_rate)
+        if opt_spec['type'] == 'a': self.optimizer = tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=float_eps)
+        if opt_spec['type'] == 'aw': self.optimizer = tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'])
+        if opt_spec['type'] == 'ar': self.optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps)
+        if opt_spec['type'] == 'ab': self.optimizer = tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True)
+        if opt_spec['type'] == 'co': self.optimizer = tfa.optimizers.COCOB(alpha=100.0, use_locking=True)
+        if opt_spec['type'] == 'ws': self.optimizer = tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10) # has error with floatx=float64
+        if opt_spec['type'] == 'sw': self.optimizer = tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=1e-7)
         # TODO subclass model.save_weights and add include_optimizer https://www.tensorflow.org/api_docs/python/tf/keras/Model#save_weights
         # self.action.optimizer.apply_gradients(zip(self.rep.trainable_variables + self.action.trainable_variables, self.rep.trainable_variables + self.action.trainable_variables))
 
