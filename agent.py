@@ -41,7 +41,7 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class RepNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io2=False, num_heads=1, memory_size=None, max_steps=1, aug_data_step=False, aug_data_pos=False):
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io2=False, num_heads=1, memory_size=None, aug_data_step=False, aug_data_pos=False):
         super(RepNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io2, self.aug_data_step = net_blocks, net_attn, net_lstm, net_attn_io2, aug_data_step
@@ -126,7 +126,7 @@ class RepNet(tf.keras.Model):
 
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
-    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, max_steps=1): # spec_in=[] for no action conditioning
+    def __init__(self, name, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None): # spec_in=[] for no action conditioning
         super(TransNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io, self.lat_batch_size = net_blocks, net_attn, net_lstm, net_attn_io, latent_spec['num_latents']
@@ -377,7 +377,7 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step_size':1}
         if arch in ('PG','AC','TRANS',):
-            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, max_steps=max_steps, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
@@ -397,7 +397,7 @@ class GeneralAI(tf.keras.Model):
         if arch in ('TRANS',):
             inputs['actions'] = self.action_zero_out
             # latent_dist = 2; latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans, 'event_shape':(latent_size,), 'num_components':8}
-            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans, max_steps=max_steps); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
 
 
 
@@ -616,28 +616,14 @@ class GeneralAI(tf.keras.Model):
 
         # for w in self.action.optimizer.weights: w.assign(tf.zeros_like(w)) # _optR
 
-        # # _rtnO
-        # return_goal = tf.constant(200.0, tf.float64)
-        # learn_rate = return_goal - inputs['returns'][0][0] + tf.cast(self.float_eps, tf.float64)
-        # learn_rate = learn_rate / return_goal
-        # # learn_rate = -tf.math.log(learn_rate)
-        # learn_rate = learn_rate * self.learn_rate
-        # self.action.optimizer.learning_rate = learn_rate
-
-        # # _rtnO2
-        # return_goal, return_rnd, minval = tf.constant(200.0, tf.float64), tf.constant(9.0, tf.float64), tf.cast(self.float_eps, tf.float64)
+        # # _rtnO3
+        # return_goal, return_rnd, minval = tf.constant(200.0, tf.float64), tf.constant(9.0, tf.float64), tf.cast(self.float_eps, tf.float64) # CartPole
+        # # return_goal, return_rnd, minval = tf.constant(250.0, tf.float64), tf.constant(-460.0, tf.float64), tf.cast(self.float_eps, tf.float64) # LunarLand
         # learn_rate = return_goal - inputs['returns'][0][0]
         # learn_rate = learn_rate / (return_goal - return_rnd)
         # learn_rate = learn_rate * learn_rate
         # learn_rate = learn_rate * self.learn_rate
         # learn_rate = tf.math.maximum(learn_rate, minval)
-        # if learn_rate > minval: learn_rate = tf.random.uniform((), dtype=tf.float64, maxval=learn_rate, minval=minval)
-        # self.action.optimizer.learning_rate = learn_rate
-
-        # # _rtnON
-        # inputs_lr = {'step':step, 'loss_action':loss_actions.stack()}
-        # lr_logits = self.lr(inputs_lr); lr_dist = self.lr.dist[0](lr_logits[0])
-        # learn_rate = lr_dist.sample()
         # self.action.optimizer.learning_rate = learn_rate
 
         for step in tf.range(tf.shape(inputs['dones'])[0]):
@@ -672,8 +658,8 @@ class GeneralAI(tf.keras.Model):
             # return_goal -= tf.cast(inputs['rewards'][step][0], tf.float32)
 
         loss['action'] = loss_actions.concat()
-        loss['learn_rate'] = learn_rate
         # loss['learn_rate'] = metric_learn_rate.concat()
+        loss['learn_rate'] = learn_rate
         return loss
 
     def PG_run_episode(self, inputs, episode, training=True):
@@ -1011,7 +997,7 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 1000
-learn_rate = 1e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
+learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
@@ -1026,7 +1012,7 @@ aug_data_step, aug_data_pos = False, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _VOa-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
+machine, device, extra = 'dev', 0, '' # _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
