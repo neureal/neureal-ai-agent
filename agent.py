@@ -407,7 +407,6 @@ class GeneralAI(tf.keras.Model):
         if arch == 'PG':
             metrics_loss['1nets'] = {'loss_action':np.float64}
             metrics_loss['1extras'] = {'returns':np.float64}
-            metrics_loss['1extras2'] = {'learn_rate':np.float64}
         if arch == 'AC':
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
             metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
@@ -611,20 +610,6 @@ class GeneralAI(tf.keras.Model):
         print("tracing -> GeneralAI PG_learner_onestep")
         loss = {}
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        # metric_learn_rate = tf.TensorArray(tf.float32, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        learn_rate = self.learn_rate
-
-        # for w in self.action.optimizer.weights: w.assign(tf.zeros_like(w)) # _optR
-
-        # # _rtnO3
-        # return_goal, return_rnd, minval = tf.constant(200.0, tf.float64), tf.constant(9.0, tf.float64), tf.cast(self.float_eps, tf.float64) # CartPole
-        # # return_goal, return_rnd, minval = tf.constant(250.0, tf.float64), tf.constant(-460.0, tf.float64), tf.cast(self.float_eps, tf.float64) # LunarLand
-        # learn_rate = return_goal - inputs['returns'][0][0]
-        # learn_rate = learn_rate / (return_goal - return_rnd)
-        # learn_rate = learn_rate * learn_rate
-        # learn_rate = learn_rate * self.learn_rate
-        # learn_rate = tf.math.maximum(learn_rate, minval)
-        # self.action.optimizer.learning_rate = learn_rate
 
         for step in tf.range(tf.shape(inputs['dones'])[0]):
             obs = [None]*self.obs_spec_len
@@ -632,14 +617,6 @@ class GeneralAI(tf.keras.Model):
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             returns = inputs['returns'][step:step+1]
-            
-            # # _rtnI
-            # learn_rate = return_goal - inputs['returns'][0][0] + tf.cast(self.float_eps, tf.float64)
-            # learn_rate = learn_rate / return_goal
-            # learn_rate = learn_rate * self.learn_rate
-            # self.action.optimizer.learning_rate = learn_rate
-            # metric_learn_rate = metric_learn_rate.write(step, [learn_rate])
-
 
             inputs_step = {'obs':obs}
             with tf.GradientTape(persistent=True) as tape_action:
@@ -655,11 +632,7 @@ class GeneralAI(tf.keras.Model):
             self.action.optimizer.apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
 
-            # return_goal -= tf.cast(inputs['rewards'][step][0], tf.float32)
-
         loss['action'] = loss_actions.concat()
-        # loss['learn_rate'] = metric_learn_rate.concat()
-        loss['learn_rate'] = learn_rate
         return loss
 
     def PG_run_episode(self, inputs, episode, training=True):
@@ -670,7 +643,7 @@ class GeneralAI(tf.keras.Model):
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
 
             metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['learn_rate'])]
+                tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
                 tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
                 inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
