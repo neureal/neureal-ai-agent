@@ -235,7 +235,7 @@ class GenNet(tf.keras.Model):
 
         self.layer_attn_out, self.layer_mlp_out_logits = [], []
         for i in range(self.net_outs):
-            if net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
+            # if net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
             self.layer_mlp_out_logits += [util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{:02d}'.format(i))]
 
         self.opt_spec, learn_rate, float_eps = opt_spec, opt_spec['learn_rate'], opt_spec['float_eps']
@@ -272,11 +272,13 @@ class GenNet(tf.keras.Model):
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
-        if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
+        # if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
+        out = tf.reshape(out, (batch_size, -1))
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
-            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
-            out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
+            # out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
+            # out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
+            out_logits[i] = self.layer_mlp_out_logits[i](out)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('action net out:', out)
@@ -977,10 +979,10 @@ value_cont = True
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-net_attn_io = False
+net_attn_io = True
 aio_max_latents = 32
 attn_mem_multi = 2 # attn_img_base
-aug_data_step, aug_data_pos = False, False
+aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
