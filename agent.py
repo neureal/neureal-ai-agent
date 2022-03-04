@@ -255,7 +255,7 @@ class GenNet(tf.keras.Model):
 
         self.layer_attn_out, self.layer_mlp_out_logits = [], []
         for i in range(self.net_outs):
-            if net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
+            # if net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
             self.layer_mlp_out_logits += [util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{:02d}'.format(i))]
 
         self.opt_spec, learn_rate, float_eps = opt_spec, opt_spec['learn_rate'], opt_spec['float_eps']
@@ -292,11 +292,13 @@ class GenNet(tf.keras.Model):
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
 
-        if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
+        # if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
+        out = tf.reshape(out, (batch_size, -1))
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
-            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
-            out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
+            # out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
+            # out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
+            out_logits[i] = self.layer_mlp_out_logits[i](out)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print('action net out:', out)
@@ -405,7 +407,7 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step_size':1}
         if arch in ('PG','AC','TRANS','MU','VPN','SPR','MU2','MU3','MU4',):
-            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
             self.rep = RepNet('RN', opt_spec, self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
@@ -418,29 +420,29 @@ class GeneralAI(tf.keras.Model):
         if arch in ('MU4',):
             memory_size_actin = (lat_batch_size+2) * max_steps # return_goal and step_size
             inputs['actions'] = [tf.constant([[0]],tf.float64)]
-            opt_spec = {'type':'', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+            opt_spec = {'type':'', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
             query_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
             self.actin = TransNet('AN1', opt_spec, query_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin); outputs = self.actin(inputs)
-            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
             self.actout = GenNet('AN2', opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actout(inputs)
 
         if arch in ('AC','MU','VPN','MU2',):
             if value_cont:
-                opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+                opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
                 self.value = GenNet('VN', opt_spec, value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
             else: self.value = ValueNet('VN', latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
 
         if arch in ('TRANS','MU','VPN','SPR','MU2','MU3','MU4',):
             inputs['actions'] = self.action_zero_out
-            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
             latent_dist = 2; latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans, 'event_shape':(latent_size,), 'num_components':8}
             self.trans = TransNet('TN', opt_spec, self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
         if arch in ('MU','MU2','MU3','MU4',):
-            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':16, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             self.rwd = GenNet('RW', opt_spec, reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
-            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-5, tf.float64), 'float_eps':self.float_eps}
+            opt_spec = {'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             self.done = GenNet('DO', opt_spec, done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
 
@@ -2602,14 +2604,14 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 3
-learn_rate = 1e-5 # 5 = testing, 6 = more stable/slower
+learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
 force_cont_obs, force_cont_action = False, False
 latent_size = 128
 latent_dist = 0 # 0 = deterministic, 1 = categorical, 2 = continuous
-net_attn_io = False
+net_attn_io = True
 aio_max_latents = 32
 attn_mem_multi = 4 # attn_img_base # max_steps must be power of this!
 aug_data_step, aug_data_pos = True, False
@@ -2617,7 +2619,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_dyn1279_rp200-rnd_gen03_trainN' # _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 1, '_dyn1279_rp200-rnd_gen0123' # _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
