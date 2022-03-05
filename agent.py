@@ -2091,69 +2091,69 @@ class GeneralAI(tf.keras.Model):
         loss['act'], loss['PG'] = loss_act.concat(), loss_PG.concat()
         return loss
 
-    def MU4_act_learner(self, inputs, return_goal, training=True):
-        print("tracing -> GeneralAI MU4_act_learner")
-        loss = {}
-        loss_act = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    # def MU4_act_learner(self, inputs, return_goal, training=True):
+    #     print("tracing -> GeneralAI MU4_act_learner")
+    #     loss = {}
+    #     loss_act = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        episode_len = tf.shape(inputs['dones'])[0]
-        for step in tf.range(episode_len):
-            obs = [None]*self.obs_spec_len
-            for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            return_step = inputs['returns'][-1][step:step+1]
+    #     episode_len = tf.shape(inputs['dones'])[0]
+    #     for step in tf.range(episode_len):
+    #         obs = [None]*self.obs_spec_len
+    #         for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+    #         action = [None]*self.action_spec_len
+    #         for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+    #         return_step = inputs['returns'][-1][step:step+1]
 
-            inputs_step = {'obs':obs, 'step_size':1}
-            rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
-            inputs_step['obs'] = rep_dist.sample()
+    #         inputs_step = {'obs':obs, 'step_size':1}
+    #         rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
+    #         inputs_step['obs'] = rep_dist.sample()
 
-            inputs_act = {'obs':inputs_step['obs'], 'actions':return_step, 'step_size':1}
-            with tf.GradientTape() as tape_act:
-                actin_logits = self.actin(inputs_act); actin_dist = self.actin.dist(actin_logits)
-                inputs_act['obs'] = actin_dist.sample()
-                action_logits = self.actout(inputs_act)
-                action_dist = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
-                loss_action = self.loss_likelihood(action_dist, action)
-                # loss_action = self.loss_PG(action_dist, action, return_step, returns_target=return_goal) # _lRt
-                # loss_action = self.loss_PG(action_dist, action, return_step) # _lR
-            gradients = tape_act.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables)
-            self.actout.optimizer.apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables))
-            loss_act = loss_act.write(step, loss_action)
-            # return_goal -= inputs['rewards'][step:step+1]; return_goal.set_shape((1,1))
+    #         inputs_act = {'obs':inputs_step['obs'], 'actions':return_step, 'step_size':1}
+    #         with tf.GradientTape() as tape_act:
+    #             actin_logits = self.actin(inputs_act); actin_dist = self.actin.dist(actin_logits)
+    #             inputs_act['obs'] = actin_dist.sample()
+    #             action_logits = self.actout(inputs_act)
+    #             action_dist = [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
+    #             loss_action = self.loss_likelihood(action_dist, action)
+    #             # loss_action = self.loss_PG(action_dist, action, return_step, returns_target=return_goal) # _lRt
+    #             # loss_action = self.loss_PG(action_dist, action, return_step) # _lR
+    #         gradients = tape_act.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables)
+    #         self.actout.optimizer.apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables))
+    #         loss_act = loss_act.write(step, loss_action)
+    #         # return_goal -= inputs['rewards'][step:step+1]; return_goal.set_shape((1,1))
 
-        loss['act'] = loss_act.concat()
-        return loss
+    #     loss['act'] = loss_act.concat()
+    #     return loss
 
-    def MU4_PG_learner(self, inputs, training=True):
-        print("tracing -> GeneralAI MU4_PG_learner")
-        loss = {}
-        loss_PG = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+    # def MU4_PG_learner(self, inputs, training=True):
+    #     print("tracing -> GeneralAI MU4_PG_learner")
+    #     loss = {}
+    #     loss_PG = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        episode_len = tf.shape(inputs['dones'])[0]
-        for step in tf.range(episode_len):
-            obs = [None]*self.obs_spec_len
-            for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
-            action = [None]*self.action_spec_len
-            for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            return_step = inputs['returns'][-1][step:step+1]
+    #     episode_len = tf.shape(inputs['dones'])[0]
+    #     for step in tf.range(episode_len):
+    #         obs = [None]*self.obs_spec_len
+    #         for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
+    #         action = [None]*self.action_spec_len
+    #         for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+    #         return_step = inputs['returns'][-1][step:step+1]
 
-            inputs_step = {'obs':obs, 'step_size':1}
-            rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
-            inputs_step['obs'] = rep_dist.sample()
+    #         inputs_step = {'obs':obs, 'step_size':1}
+    #         rep_logits = self.rep(inputs_step, step=step); rep_dist = self.rep.dist(rep_logits)
+    #         inputs_step['obs'] = rep_dist.sample()
 
-            with tf.GradientTape() as tape_PG:
-                action_logits = self.action(inputs_step)
-                action_dist = [None]*self.action_spec_len
-                for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_PG(action_dist, action, return_step)
-            gradients = tape_PG.gradient(loss_action, self.action.trainable_variables)
-            self.action.optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
-            loss_PG = loss_PG.write(step, loss_action)
+    #         with tf.GradientTape() as tape_PG:
+    #             action_logits = self.action(inputs_step)
+    #             action_dist = [None]*self.action_spec_len
+    #             for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
+    #             loss_action = self.loss_PG(action_dist, action, return_step)
+    #         gradients = tape_PG.gradient(loss_action, self.action.trainable_variables)
+    #         self.action.optimizer.apply_gradients(zip(gradients, self.action.trainable_variables))
+    #         loss_PG = loss_PG.write(step, loss_action)
 
-        loss['PG'] = loss_PG.concat()
-        return loss
+    #     loss['PG'] = loss_PG.concat()
+    #     return loss
 
     def MU4_dyn_learner3(self, inputs, training=True):
         print("tracing -> GeneralAI MU4_dyn_learner3")
