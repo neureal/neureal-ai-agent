@@ -2672,8 +2672,8 @@ class GeneralAI(tf.keras.Model):
 
                 metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                     # tf.math.reduce_mean(loss_actor['returns_pred']),
-                    tf.math.reduce_mean(loss_PG['PG']),
-                    tf.math.reduce_mean(loss_act['act']),
+                    tf.math.reduce_mean(loss_rep['PG']),
+                    tf.math.reduce_mean(loss_rep['act']),
                     tf.math.reduce_mean(loss_rep['trans']),
                     tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
                     # tf.math.reduce_mean(loss_actor['trans']), tf.math.reduce_mean(loss_actor['trans_img']),
