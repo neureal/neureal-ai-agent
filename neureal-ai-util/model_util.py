@@ -2,6 +2,7 @@ from collections import OrderedDict
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
+import tensorflow_addons as tfa
 import gym, numba
 
 # TODO put this in seperate repo
@@ -48,6 +49,26 @@ def ewma_ih(arr_in, window): # infinite history, faster
     for i in range(1, n): ewma[i] = arr_in[i] * alpha + ewma[i-1] * (1 - alpha)
     return ewma
 
+def optimizer(net_name, opt_spec):
+    typ, schedule_type, learn_rate, float_eps = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps']
+    maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64)
+    def schedule_r(): return tf.random.uniform((), dtype=tf.float64, maxval=maxval, minval=minval)
+    mean, stddev = tf.constant(maxval/2), tf.constant((maxval-minval)/4)
+    def schedule_rtn(): return tf.random.truncated_normal((), dtype=tf.float64, mean=mean, stddev=stddev)
+    if schedule_type == 'r': learn_rate = schedule_r
+    if schedule_type == 'rtn': learn_rate = schedule_rtn
+    if schedule_type == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
+    if schedule_type == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
+    if typ == 's': return tf.keras.optimizers.SGD(learning_rate=learn_rate, name='{}/optimizer_{}/SGD'.format(net_name, opt_spec['name']))
+    if typ == 'a': return tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+    if typ == 'aw': return tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/AdamW'.format(net_name, opt_spec['name']))
+    if typ == 'ar': return tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/RectifiedAdam'.format(net_name, opt_spec['name']))
+    if typ == 'ab': return tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True, name='{}/optimizer_{}/AdaBelief'.format(net_name, opt_spec['name']))
+    if typ == 'co': return tfa.optimizers.COCOB(alpha=100.0, use_locking=True, name='{}/optimizer_{}/COCOB'.format(net_name, opt_spec['name']))
+    if typ == 'ws': return tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10, name='{}/optimizer_{}/SWA'.format(net_name, opt_spec['name'])) # has error with floatx=float64
+    if typ == 'sw': return tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/SGDW'.format(net_name, opt_spec['name']))
+    # TODO subclass model.save_weights and add include_optimizer https://www.tensorflow.org/api_docs/python/tf/keras/Model#save_weights
+    # self.action.optimizer['act'].apply_gradients(zip(self.rep.trainable_variables + self.action.trainable_variables, self.rep.trainable_variables + self.action.trainable_variables))
 
 
 class EvoNormS0(tf.keras.layers.Layer):
