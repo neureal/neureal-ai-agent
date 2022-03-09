@@ -12,7 +12,7 @@ tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 # tf.config.optimizer.set_jit("autoclustering") # enable XLA
 # tf.config.experimental.enable_mlir_graph_optimization()
-# tf.random.set_seed(0)
+# tf.random.set_seed(0) # TODO https://www.tensorflow.org/guide/random_numbers
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -424,14 +424,14 @@ class GeneralAI(tf.keras.Model):
 
     def metrics_update(self, *args):
         args = list(args)
-        for i in range(len(args)): args[i] = args[i].item()
-        episode = args[0]
-        idx = 1
+        for i in range(1,len(args)): args[i] = args[i].item()
+        log_metrics, episode, idx = args[0], args[1], 2
         for loss_group in self.metrics_loss.values():
             for k in loss_group.keys():
-                if k.endswith('='): loss_group[k][episode] = args[idx]
-                elif k.endswith('+'): loss_group[k][episode] += args[idx]
-                else: loss_group[k][episode] += [args[idx]]
+                if log_metrics[idx-2]:
+                    if k.endswith('='): loss_group[k][episode] = args[idx]
+                    elif k.endswith('+'): loss_group[k][episode] += args[idx]
+                    else: loss_group[k][episode] += [args[idx]]
                 idx += 1
         return np.asarray(0, np.int32) # dummy
 
@@ -631,11 +631,12 @@ class GeneralAI(tf.keras.Model):
     def PG_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI PG_run_episode")
         # TODO how unlimited length episodes without sacrificing returns signal?
+        log_metrics = [True,True,True,True,True,True,True,True,True,True]
         while not inputs['dones'][-1][0]:
             self.reset_states(); outputs, inputs = self.PG_actor(inputs)
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
 
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(outputs['returns'])]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
                 tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
@@ -797,12 +798,13 @@ class GeneralAI(tf.keras.Model):
 
     def AC_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI AC_run_episode")
+        log_metrics = [True,True,True,True,True,True,True,True,True,True]
         while not inputs['dones'][-1][0]:
             # tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             outputs, inputs = self.AC_actor(inputs)
             loss = self.AC_learner_onestep(outputs)
 
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
                 tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
             ]
@@ -940,11 +942,12 @@ class GeneralAI(tf.keras.Model):
 
     def TRANS_run_episode(self, inputs, episode, training=True):
         print("tracing -> GeneralAI TRANS_run_episode")
+        log_metrics = [True,True,True,True,True,True,True,True,True,True]
         while not inputs['dones'][-1][0]:
             self.reset_states(); outputs, inputs = self.TRANS_actor(inputs)
             self.reset_states(); loss = self.TRANS_learner_onestep(outputs)
 
-            metrics = [episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action'])]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
