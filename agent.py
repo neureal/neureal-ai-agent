@@ -1,5 +1,5 @@
 from collections import OrderedDict
-import time, os # , talib, bottleneck
+import time, os, keyboard # , talib, bottleneck
 import multiprocessing as mp
 curdir = os.path.expanduser("~")
 import numpy as np
@@ -436,8 +436,6 @@ class GeneralAI(tf.keras.Model):
                 idx += 1
         return np.asarray(0, np.int32) # dummy
 
-
-    # TODO use ZMQ for remote messaging, latent pooling
     def env_reset(self, dummy):
         obs, reward, done = self.env.reset(), 0.0, False
         if self.env_render: self.env.render()
@@ -454,6 +452,14 @@ class GeneralAI(tf.keras.Model):
         else: rtn = util.gym_space_to_feat(obs, self.env.observation_space)
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool)]
         return rtn
+
+    def check_stop(self, *args):
+        if keyboard.is_pressed('ctrl+alt+k'): return np.asarray(True, bool)
+        return np.asarray(False, bool)
+
+    # TODO use ZMQ for remote messaging, latent pooling
+    def transact_latents(self, *args):
+        return [np.asarray([0,1,2], np.float64), np.asarray([2,1,0], np.float64)]
 
 
     def reset_states(self, use_img=False):
@@ -646,12 +652,15 @@ class GeneralAI(tf.keras.Model):
 
     def PG(self):
         print("tracing -> GeneralAI PG")
-        for episode in tf.range(self.max_episodes):
+        episode, stop = tf.constant(0), tf.constant(False)
+        while episode < self.max_episodes and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.PG_run_episode(inputs, episode)
+            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            episode += 1
 
 
 
@@ -816,13 +825,16 @@ class GeneralAI(tf.keras.Model):
 
     def AC(self):
         print("tracing -> GeneralAI AC")
-        for episode in tf.range(self.max_episodes):
+        episode, stop = tf.constant(0), tf.constant(False)
+        while episode < self.max_episodes and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1) # TODO parallel wont work with single instance env, will this work multiple?
             self.reset_states()
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.AC_run_episode(inputs, episode)
+            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            episode += 1
 
 
 
@@ -954,12 +966,15 @@ class GeneralAI(tf.keras.Model):
 
     def TRANS(self):
         print("tracing -> GeneralAI TRANS")
-        for episode in tf.range(self.max_episodes):
+        episode, stop = tf.constant(0), tf.constant(False)
+        while episode < self.max_episodes and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.TRANS_run_episode(inputs, episode)
+            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            episode += 1
 
 
 
