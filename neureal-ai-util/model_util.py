@@ -70,6 +70,12 @@ def optimizer(net_name, opt_spec):
     # TODO subclass model.save_weights and add include_optimizer https://www.tensorflow.org/api_docs/python/tf/keras/Model#save_weights
     # self.action.optimizer['act'].apply_gradients(zip(self.rep.trainable_variables + self.action.trainable_variables, self.rep.trainable_variables + self.action.trainable_variables))
 
+def optimizer_build(optimizer, variables):
+    optimizer.apply_gradients(zip(variables, variables))
+    for w in optimizer.weights: w.assign(tf.zeros_like(w))
+    return optimizer.weights
+
+
 
 class EvoNormS0(tf.keras.layers.Layer):
     def __init__(self, groups, eps=None, axis=-1, name=None):
@@ -96,8 +102,7 @@ class EvoNormS0(tf.keras.layers.Layer):
         std_shape.append(inlen)
         self._std_shape = tf.identity(std_shape)
 
-    @tf.function
-    def call(self, inputs, training=True):
+    def call(self, inputs):
         input_shape = tf.shape(inputs)
         group_shape = tf.concat([input_shape[:self._axis], self._group_shape], axis=0)
         grouped_inputs = tf.reshape(inputs, group_shape)
