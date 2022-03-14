@@ -49,6 +49,48 @@ def ewma_ih(arr_in, window): # infinite history, faster
     for i in range(1, n): ewma[i] = arr_in[i] * alpha + ewma[i-1] * (1 - alpha)
     return ewma
 
+def update_stats(stats_spec, value, float_eps, dtype):
+    b1, b1_n, b2, b2_n, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b1_n'], stats_spec['b2'], stats_spec['b2_n'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
+    zero, one = tf.constant(0, dtype), tf.constant(1, dtype)
+
+    var_ma.assign(b1 * var_ma + b1_n * value)
+    var_ema.assign(b2 * var_ema + b2_n * (value * value))
+    var_iter.assign_add(one)
+
+    ma = one - tf.math.pow(b1, var_iter)
+    ema = one - tf.math.pow(b2, var_iter)
+    if ma < float_eps: ma = float_eps
+    if ema < float_eps: ema = float_eps
+    ma = var_ma / ma
+    ema = var_ema / ema
+    ema = tf.math.sqrt(ema)
+    if ema < float_eps: ema = float_eps
+
+    snr = tf.math.abs(ma) / ema
+    std = ema - tf.math.abs(ma)
+
+    if ma < zero: ema = -ema
+    return ma, ema, snr, std
+
+
+def net_build(net, initializer):
+    net.reset_states()
+    net.weights_reset = []
+    for w in net.weights:
+        w.is_kernel = True if "/kernel:" in w.name else False
+        if w.is_kernel: w.assign(initializer(w.shape))
+        net.weights_reset.append(w.value())
+    net.initializer = initializer
+
+def net_reset(net):
+    for i in range(len(net.weights)):
+        w = net.weights[i]
+        if w.is_kernel: w.assign(net.initializer(w.shape))
+        else: w.assign(net.weights_reset[i])
+
+def net_copy(source, dest):
+    for i in range(len(dest.weights)): dest.weights[i].assign(source.weights[i].value())
+
 def optimizer(net_name, opt_spec):
     typ, schedule_type, learn_rate, float_eps = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps']
     maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64)
@@ -69,6 +111,12 @@ def optimizer(net_name, opt_spec):
     if typ == 'sw': return tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/SGDW'.format(net_name, opt_spec['name']))
     # TODO subclass model.save_weights and add include_optimizer https://www.tensorflow.org/api_docs/python/tf/keras/Model#save_weights
     # self.action.optimizer['act'].apply_gradients(zip(self.rep.trainable_variables + self.action.trainable_variables, self.rep.trainable_variables + self.action.trainable_variables))
+
+def optimizer_build(optimizer, variables):
+    optimizer.apply_gradients(zip(variables, variables))
+    for w in optimizer.weights: w.assign(tf.zeros_like(w))
+    return optimizer.weights
+
 
 
 class EvoNormS0(tf.keras.layers.Layer):
@@ -96,8 +144,7 @@ class EvoNormS0(tf.keras.layers.Layer):
         std_shape.append(inlen)
         self._std_shape = tf.identity(std_shape)
 
-    @tf.function
-    def call(self, inputs, training=True):
+    def call(self, inputs):
         input_shape = tf.shape(inputs)
         group_shape = tf.concat([input_shape[:self._axis], self._group_shape], axis=0)
         grouped_inputs = tf.reshape(inputs, group_shape)

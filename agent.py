@@ -1,5 +1,5 @@
 from collections import OrderedDict
-import time, os # , talib, bottleneck
+import time, os, keyboard # , talib, bottleneck
 import multiprocessing as mp
 curdir = os.path.expanduser("~")
 import numpy as np
@@ -12,7 +12,7 @@ tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 # tf.config.optimizer.set_jit("autoclustering") # enable XLA
 # tf.config.experimental.enable_mlir_graph_optimization()
-# tf.random.set_seed(0)
+# tf.random.set_seed(0) # TODO https://www.tensorflow.org/guide/random_numbers
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -40,7 +40,7 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class RepNet(tf.keras.Model):
-    def __init__(self, name, opt_spec, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io2=False, num_heads=1, memory_size=None, aug_data_step=False, aug_data_pos=False):
+    def __init__(self, name, inputs, opt_spec, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io2=False, num_heads=1, memory_size=None, aug_data_step=False, aug_data_pos=False):
         super(RepNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io2, self.aug_data_step = net_blocks, net_attn, net_lstm, net_attn_io2, aug_data_step
@@ -85,13 +85,13 @@ class RepNet(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
 
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}x{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_spec['num_latents'], latent_size, latent_spec['num_components'])
 
     def reset_states(self, use_img=False):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, store_memory=True, use_img=False, store_real=False, step=None, training=None):
+    def call(self, inputs, step=tf.constant(0), store_memory=True, use_img=False, store_real=False, training=None):
         out_accu = [None]*self.net_ins_all
         for i in range(self.net_ins):
             out = tf.cast(inputs['obs'][i], self.compute_dtype)
@@ -128,7 +128,7 @@ class RepNet(tf.keras.Model):
 
 # transition dynamics within latent space
 class TransNet(tf.keras.Model):
-    def __init__(self, name, opt_spec, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None): # spec_in=[] for no action conditioning
+    def __init__(self, name, inputs, opt_spec, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None): # spec_in=[] for no action conditioning
         super(TransNet, self).__init__(name=name)
         inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io, self.lat_batch_size = net_blocks, net_attn, net_lstm, net_attn_io, latent_spec['num_latents']
@@ -166,7 +166,7 @@ class TransNet(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
 
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}x{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_spec['num_latents_trans'], latent_size, latent_spec['num_components'])
 
     def reset_states(self, use_img=False):
@@ -205,7 +205,7 @@ class TransNet(tf.keras.Model):
 
 
 class GenNet(tf.keras.Model):
-    def __init__(self, name, opt_spec, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, max_steps=1, force_det_out=False):
+    def __init__(self, name, inputs, opt_spec, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, max_steps=1, force_det_out=False):
         super(GenNet, self).__init__(name=name)
         outp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, net_attn_io
@@ -246,13 +246,18 @@ class GenNet(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
 
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self.stats_rwd = {'b1':tf.constant(0.99,tf.float64), 'b1_n':tf.constant(0.01,tf.float64), 'b2':tf.constant(0.99,tf.float64), 'b2_n':tf.constant(0.01,tf.float64),
+            'ma':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_rwd/ma'.format(name)), 'ema':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_rwd/ema'.format(name)), 'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_rwd/iter'.format(name)),}
+        self.stats_loss = {'b1':tf.constant(0.99,self.compute_dtype), 'b1_n':tf.constant(0.01,self.compute_dtype), 'b2':tf.constant(0.99,self.compute_dtype), 'b2_n':tf.constant(0.01,self.compute_dtype),
+            'ma':tf.Variable(0, dtype=self.compute_dtype, trainable=False, name='{}/stats_loss/ma'.format(name)), 'ema':tf.Variable(0, dtype=self.compute_dtype, trainable=False, name='{}/stats_loss/ema'.format(name)), 'iter':tf.Variable(0, dtype=self.compute_dtype, trainable=False, name='{}/stats_loss/iter'.format(name)),}
+
+        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[{:02d}{}{}D{}-{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, arch_out, ('-hds'+str(num_heads) if self.net_attn else ''))
 
     def reset_states(self, use_img=False):
         for layer in self.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, store_memory=True, use_img=False, store_real=False, batch_size=1, training=None):
+    def call(self, inputs, batch_size=tf.constant(1), store_memory=True, use_img=False, store_real=False, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
         
         for i in range(self.net_blocks):
@@ -274,7 +279,7 @@ class GenNet(tf.keras.Model):
 
 
 class ValueNet(tf.keras.Model):
-    def __init__(self, name, opt_spec, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=1, memory_size=None):
+    def __init__(self, name, inputs, opt_spec, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=1, memory_size=None):
         super(ValueNet, self).__init__(name=name)
         mid, evo = latent_size*2, int(latent_size/2)
         self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
@@ -295,7 +300,7 @@ class ValueNet(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
 
-        self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.net_arch = "{}[{:02d}{}{}D{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''))
 
     def reset_states(self, use_img=False):
@@ -321,6 +326,7 @@ class GeneralAI(tf.keras.Model):
         self.float_min = tf.constant(compute_dtype.min, compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
+        self.float64_eps = tf.constant(tf.experimental.numpy.finfo(tf.float64).eps, tf.float64)
         # self.float_log_min_prob = tf.constant(tf.math.log(self.float_eps), compute_dtype)
         self.compute_zero, self.int32_max, self.int32_maxbit, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(1073741824, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
@@ -328,6 +334,7 @@ class GeneralAI(tf.keras.Model):
         self.max_episodes, self.max_steps, self.learn_rate, self.attn_mem_multi, self.entropy_contrib, self.returns_disc = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(learn_rate, tf.float64), tf.constant(attn_mem_multi, tf.int32), tf.constant(entropy_contrib, compute_dtype), tf.constant(returns_disc, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
+        self.initializer = tf.keras.initializers.GlorotUniform()
 
         self.obs_spec, self.obs_zero, _ = util.gym_get_spec(env.observation_space, self.compute_dtype, force_cont=force_cont_obs)
         self.action_spec, _, self.action_zero_out = util.gym_get_spec(env.action_space, self.compute_dtype, force_cont=force_cont_action)
@@ -386,48 +393,65 @@ class GeneralAI(tf.keras.Model):
                 {'name':'rwd', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'done', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
             ]
-            self.rep = RepNet('RN', opt_spec, self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', inputs, opt_spec, self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
+            self.rep.optimizer_weights = []
+            for spec in opt_spec: self.rep.optimizer_weights += util.optimizer_build(self.rep.optimizer[spec['name']], self.rep.trainable_variables)
+            util.net_build(self.rep, self.initializer)
 
         opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
-        self.action = GenNet('AN', opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
+        util.net_build(self.action, self.initializer)
         if arch in ('MU4',):
             opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-9, tf.float64), 'float_eps':self.float_eps}]
-            self.actionL = GenNet('ANL', opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actionL(inputs)
+            self.actionL = GenNet('ANL', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actionL(inputs)
+            self.actionL.optimizer_weights = util.optimizer_build(self.actionL.optimizer['action'], self.actionL.trainable_variables)
+            util.net_build(self.actionL, self.initializer)
         if arch in ('MU4',):
             memory_size_actin = (lat_batch_size+2) * max_steps # return_goal and step_size
             inputs['actions'] = [tf.constant([[0]],tf.float64)]
             query_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
-            self.actin = TransNet('ACT1', [], query_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin); outputs = self.actin(inputs)
+            self.actin = TransNet('ACT1', inputs, [], query_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin); outputs = self.actin(inputs)
             opt_spec = [{'name':'act', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
-            self.actout = GenNet('ACT2', opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actout(inputs)
+            self.actout = GenNet('ACT2', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actout(inputs)
+            self.actout.optimizer_weights = util.optimizer_build(self.actout.optimizer['act'], self.actin.trainable_variables + self.actout.trainable_variables)
+            util.net_build(self.actout, self.initializer)
 
         if arch in ('AC','MU','VPN','MU2',):
             opt_spec = [{'name':'value', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-                self.value = GenNet('VN', opt_spec, value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
-            else: self.value = ValueNet('VN', opt_spec, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
+                self.value = GenNet('VN', inputs, opt_spec, value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
+            else: self.value = ValueNet('VN', inputs, opt_spec, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
+            self.value.optimizer_weights = util.optimizer_build(self.value.optimizer['value'], self.value.trainable_variables)
+            util.net_build(self.value, self.initializer)
 
         if arch in ('TRANS','MU','VPN','SPR','MU2','MU3','MU4',):
             inputs['actions'] = self.action_zero_out
             opt_spec = [{'name':'trans', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             latent_dist = 2; latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans, 'event_shape':(latent_size,), 'num_components':8}
-            self.trans = TransNet('TN', opt_spec, self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', inputs, opt_spec, self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
+            self.trans.optimizer_weights = util.optimizer_build(self.trans.optimizer['trans'], self.trans.trainable_variables)
+            util.net_build(self.trans, self.initializer)
         if arch in ('MU','MU2','MU3','MU4',):
             opt_spec = [{'name':'rwd', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             reward_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':16, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.rwd = GenNet('RW', opt_spec, reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
+            self.rwd = GenNet('RW', inputs, opt_spec, reward_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.rwd(inputs)
+            self.rwd.optimizer_weights = util.optimizer_build(self.rwd.optimizer['rwd'], self.rwd.trainable_variables)
+            util.net_build(self.rwd, self.initializer)
             opt_spec = [{'name':'done', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             done_spec = [{'net_type':0, 'dtype':tf.bool, 'dtype_out':tf.int32, 'is_discrete':True, 'num_components':2, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.done = GenNet('DO', opt_spec, done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
+            self.done = GenNet('DO', inputs, opt_spec, done_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.done(inputs)
+            self.done.optimizer_weights = util.optimizer_build(self.done.optimizer['done'], self.done.trainable_variables)
+            util.net_build(self.done, self.initializer)
 
 
 
         metrics_loss = OrderedDict()
-        metrics_loss['1rewards*'] = {'rewards_act_total+':np.float64, 'rewards_act_final=':np.float64}
+        metrics_loss['1rewards*'] = {'-ma_act':np.float64, '-rewards_act_total+':np.float64, '-rewards_act_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
         if arch == 'PG':
             metrics_loss['1nets'] = {'loss_action':np.float64}
@@ -471,11 +495,11 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets3'] = {'loss_rwd_dyn':np.float64, 'loss_done_dyn':np.float64}
             metrics_loss['1extra2'] = {'return_entropy':np.float64}
         if arch == 'MU4':
-            metrics_loss['1rewards2*'] = {'rewards_PG_total+':np.float64, 'rewards_PG_final=':np.float64}
-            metrics_loss['1rewards3*'] = {'rewards_PGL_total+':np.float64, 'rewards_PGL_final=':np.float64}
+            metrics_loss['1rewards2*'] = {'-ma_PG':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
+            metrics_loss['1rewards3*'] = {'-ma_PGL':np.float64, '-rewards_PGL_total+':np.float64, '-rewards_PGL_final=':np.float64}
             # metrics_loss['1extra'] = {'returns_pred':np.float64}
-            metrics_loss['1nets'] = {'loss_PG':np.float64}
-            metrics_loss['1nets8'] = {'loss_PGL':np.float64}
+            metrics_loss['1nets'] = {'loss_PG':np.float64}; metrics_loss['1netsS'] = {'-std_PG':np.float64}
+            metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-std_PGL':np.float64}
             # metrics_loss['1nets4'] = {'loss_act':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64, 'loss_trans_img':np.float64}
@@ -515,8 +539,6 @@ class GeneralAI(tf.keras.Model):
                 idx += 1
         return np.asarray(0, np.int32) # dummy
 
-
-    # TODO use ZMQ for remote messaging, latent pooling
     def env_reset(self, dummy):
         obs, reward, done = self.env.reset(), 0.0, False
         if self.env_render: self.env.render()
@@ -533,6 +555,14 @@ class GeneralAI(tf.keras.Model):
         else: rtn = util.gym_space_to_feat(obs, self.env.observation_space)
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool)]
         return rtn
+
+    def check_stop(self, *args):
+        if keyboard.is_pressed('ctrl+alt+k'): return np.asarray(True, bool)
+        return np.asarray(False, bool)
+
+    # TODO use ZMQ for remote messaging, latent pooling
+    def transact_latents(self, *args):
+        return [np.asarray([0,1,2], np.float64), np.asarray([2,1,0], np.float64)]
 
 
     def reset_states(self, use_img=False):
@@ -2633,23 +2663,29 @@ class GeneralAI(tf.keras.Model):
 
     def MU4_run_episode(self, inputs, gen, episode, training=True):
         print("tracing -> GeneralAI MU4_run_episode")
-        log_metrics, train = [True,True,True,True,True,True,True,True,True,True], True
+        total_steps, total_reward, total_loss, ma, std = tf.constant(0,tf.int32), tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype), tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype)
+        log_metrics, train = [True,True,True,True,True,True,True,True,True,True,True,True,True,True], True
         return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns     
         # return_goal_alt = tf.constant([[10.0]], tf.float64)
         return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
-        if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,True,True,False,False,True,False,False], True, 0 # actor/PG
-        if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,False,False,False,False,False,False,False], False, 1 # act
-        if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,True,True,False,True,False], True, 2 # random, actorL/PGL
-        if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False,False,False,False,False,False,False], True, 1 # act alt
+        if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,True,True,True,False,False,False,True,True,False,False], True, 0 # action/PG
+        if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True,False,False,False,False,False,False,False,False,False,False], False, 1 # actout/act
+        if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,False,False,True,True], True, 2 # random, actionL/PGL
+        if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False,False,False,False,False,False,False,False,False,False,False], True, 1 # act alt
         while not inputs['dones'][-1][0]:
             # self.reset_states(); outputs, inputs = self.PG_actor(inputs)
             # self.reset_states(); loss_PG = self.PG_learner_onestep(outputs)
+
+            self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
+            total_reward += tf.math.reduce_sum(outputs['rewards'])
+            if gen == 0: ma, _, _, _ = util.update_stats(self.action.stats_rwd, total_reward, self.float64_eps, tf.float64) # TODO move these out of while
+            if gen == 1: ma, _, _, _ = util.update_stats(self.actout.stats_rwd, total_reward, self.float64_eps, tf.float64)
+            if gen == 2: ma, _, _, _ = util.update_stats(self.actionL.stats_rwd, total_reward, self.float64_eps, tf.float64)
 
             loss_rep = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
             loss_act = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
             loss_PG = {'PG':tf.constant([0], self.compute_dtype)}
             loss_dyn = {'trans':tf.constant([0], self.compute_dtype), 'reward':tf.constant([0], self.compute_dtype), 'done':tf.constant([0], self.compute_dtype)}
-            self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
             if train:
                 self.reset_states(); loss_rep = self.MU4_rep_learner(outputs, gen) # _repL1
                 # self.reset_states(); loss_act = self.MU4_act_learner(outputs, return_goal)
@@ -2660,6 +2696,11 @@ class GeneralAI(tf.keras.Model):
                 # self.reset_states(); loss_dyn = self.MU4_dyn_act_learner(outputs, gen) # _dyn5
                 # self.reset_states(); loss_dyn = self.MU4_dyn_learner2(outputs, gen) # _dyn8
                 # self.reset_states(); loss_dyn = self.MU4_dyn_learner3(outputs) # _dyn9
+                total_steps += tf.shape(loss_act['PG'])[0]
+                total_loss += tf.math.reduce_sum(loss_act['PG'])
+                if gen == 0: _, _, _, std = util.update_stats(self.action.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype) # TODO move these out of while
+                if gen == 1: _, _, _, std = util.update_stats(self.actout.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
+                if gen == 2: _, _, _, std = util.update_stats(self.actionL.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
 
             # for step in tf.range(tf.shape(outputs['dones'])[0] - 2):
             #     metrics = [step, outputs['rewards'][step:step+1][0][0], outputs['rewards'][-1][0], 0,
@@ -2669,12 +2710,12 @@ class GeneralAI(tf.keras.Model):
             #     ]
             #     dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
-                tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
+            metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
+                ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 # tf.math.reduce_mean(loss_actor['returns_pred']),
-                tf.math.reduce_mean(loss_act['PG']),
-                tf.math.reduce_mean(loss_act['PG']),
+                tf.math.reduce_mean(loss_act['PG']), std,
+                tf.math.reduce_mean(loss_act['PG']), std,
                 # tf.math.reduce_mean(loss_act['act']),
                 # tf.math.reduce_mean(loss_rep['trans']),
                 # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
@@ -2691,18 +2732,24 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
                 inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-        
+
+        # if episode%10 == 0:
+        #     # tf.print(episode)
+        #     util.net_copy(self.action, self.actionL)
+        #     util.net_reset(self.action)
 
     def MU4(self):
         print("tracing -> GeneralAI MU4")
         num_gen = 3
-        for episode in tf.range(self.max_episodes*num_gen):
+        episode, stop = tf.constant(0), tf.constant(False)
+        while episode < self.max_episodes*num_gen and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
             self.MU4_run_episode(inputs, episode%num_gen, episode//num_gen)
-
+            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            episode += 1
 
 
 
@@ -2725,7 +2772,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_rp200_gen012' # _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 1, '_rp200_gen012_pgl-1e9' # _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
@@ -2838,7 +2885,7 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
         plt.figure(num=name, figsize=(34, 18), tight_layout=True)
-        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.03
+        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.01
         for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
         for loss_group_name, loss_group in metrics_loss.items():
