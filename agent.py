@@ -388,7 +388,7 @@ class GeneralAI(tf.keras.Model):
             opt_spec = [
                 {'name':'act', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'PG', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
-                {'name':'PGL', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
+                {'name':'PGL', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-9, tf.float64), 'float_eps':self.float_eps},
                 {'name':'trans', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'rwd', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'done', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
@@ -2672,66 +2672,66 @@ class GeneralAI(tf.keras.Model):
         if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True,False,False,False,False,False,False,False,False,False,False], False, 1 # actout/act
         if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,False,False,True,True], True, 2 # random, actionL/PGL
         if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False,False,False,False,False,False,False,False,False,False,False], True, 1 # act alt
-        while not inputs['dones'][-1][0]:
-            # self.reset_states(); outputs, inputs = self.PG_actor(inputs)
-            # self.reset_states(); loss_PG = self.PG_learner_onestep(outputs)
+        # while not inputs['dones'][-1][0]:
+        # self.reset_states(); outputs, inputs = self.PG_actor(inputs)
+        # self.reset_states(); loss_PG = self.PG_learner_onestep(outputs)
 
-            self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
-            total_reward += tf.math.reduce_sum(outputs['rewards'])
-            if gen == 0: ma, _, _, _ = util.update_stats(self.action.stats_rwd, total_reward, self.float64_eps, tf.float64) # TODO move these out of while
-            if gen == 1: ma, _, _, _ = util.update_stats(self.actout.stats_rwd, total_reward, self.float64_eps, tf.float64)
-            if gen == 2: ma, _, _, _ = util.update_stats(self.actionL.stats_rwd, total_reward, self.float64_eps, tf.float64)
+        self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
+        total_reward += tf.math.reduce_sum(outputs['rewards'])
+        if gen == 0: ma, _, _, _ = util.update_stats(self.action.stats_rwd, total_reward, self.float64_eps, tf.float64) # TODO move these out of while
+        if gen == 1: ma, _, _, _ = util.update_stats(self.actout.stats_rwd, total_reward, self.float64_eps, tf.float64)
+        if gen == 2: ma, _, _, _ = util.update_stats(self.actionL.stats_rwd, total_reward, self.float64_eps, tf.float64)
 
-            loss_rep = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
-            loss_act = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
-            loss_PG = {'PG':tf.constant([0], self.compute_dtype)}
-            loss_dyn = {'trans':tf.constant([0], self.compute_dtype), 'reward':tf.constant([0], self.compute_dtype), 'done':tf.constant([0], self.compute_dtype)}
-            if train:
-                self.reset_states(); loss_rep = self.MU4_rep_learner(outputs, gen) # _repL1
-                # self.reset_states(); loss_act = self.MU4_act_learner(outputs, return_goal)
-                self.reset_states(); loss_act = self.MU4_act_PG_learner(outputs, gen, return_goal)
-                # if gen == 0: self.reset_states(); loss_PG = self.MU4_PG_learner(outputs)
-                # self.reset_states(); loss_dyn = self.MU3_dyn_learner(outputs) # _dyn3
-                # self.reset_states(); loss_dyn = self.MU4_dyn_learner(outputs) # _dyn4
-                # self.reset_states(); loss_dyn = self.MU4_dyn_act_learner(outputs, gen) # _dyn5
-                # self.reset_states(); loss_dyn = self.MU4_dyn_learner2(outputs, gen) # _dyn8
-                # self.reset_states(); loss_dyn = self.MU4_dyn_learner3(outputs) # _dyn9
-                total_steps += tf.shape(loss_act['PG'])[0]
-                total_loss += tf.math.reduce_sum(loss_act['PG'])
-                if gen == 0: _, _, _, std = util.update_stats(self.action.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype) # TODO move these out of while
-                if gen == 1: _, _, _, std = util.update_stats(self.actout.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
-                if gen == 2: _, _, _, std = util.update_stats(self.actionL.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
+        loss_rep = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
+        loss_act = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
+        loss_PG = {'PG':tf.constant([0], self.compute_dtype)}
+        loss_dyn = {'trans':tf.constant([0], self.compute_dtype), 'reward':tf.constant([0], self.compute_dtype), 'done':tf.constant([0], self.compute_dtype)}
+        if train:
+            self.reset_states(); loss_rep = self.MU4_rep_learner(outputs, gen) # _repL1
+            # self.reset_states(); loss_act = self.MU4_act_learner(outputs, return_goal)
+            self.reset_states(); loss_act = self.MU4_act_PG_learner(outputs, gen, return_goal)
+            # if gen == 0: self.reset_states(); loss_PG = self.MU4_PG_learner(outputs)
+            # self.reset_states(); loss_dyn = self.MU3_dyn_learner(outputs) # _dyn3
+            # self.reset_states(); loss_dyn = self.MU4_dyn_learner(outputs) # _dyn4
+            # self.reset_states(); loss_dyn = self.MU4_dyn_act_learner(outputs, gen) # _dyn5
+            # self.reset_states(); loss_dyn = self.MU4_dyn_learner2(outputs, gen) # _dyn8
+            # self.reset_states(); loss_dyn = self.MU4_dyn_learner3(outputs) # _dyn9
+            total_steps += tf.shape(loss_act['PG'])[0]
+            total_loss += tf.math.reduce_sum(loss_act['PG'])
+            if gen == 0: _, _, _, std = util.update_stats(self.action.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype) # TODO move these out of while
+            if gen == 1: _, _, _, std = util.update_stats(self.actout.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
+            if gen == 2: _, _, _, std = util.update_stats(self.actionL.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
 
-            # for step in tf.range(tf.shape(outputs['dones'])[0] - 2):
-            #     metrics = [step, outputs['rewards'][step:step+1][0][0], outputs['rewards'][-1][0], 0,
-            #         # loss_act['loss_PG'][step:step+1],
-            #         loss_act['loss_act'][step:step+1][0],
-            #         loss_dyn['reward'][step:step+1][0], loss_dyn['done'][step:step+1][0],
-            #     ]
-            #     dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+        # for step in tf.range(tf.shape(outputs['dones'])[0] - 2):
+        #     metrics = [step, outputs['rewards'][step:step+1][0][0], outputs['rewards'][-1][0], 0,
+        #         # loss_act['loss_PG'][step:step+1],
+        #         loss_act['loss_act'][step:step+1][0],
+        #         loss_dyn['reward'][step:step+1][0], loss_dyn['done'][step:step+1][0],
+        #     ]
+        #     dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-            metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
-                ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
-                # tf.math.reduce_mean(loss_actor['returns_pred']),
-                tf.math.reduce_mean(loss_act['PG']), std,
-                tf.math.reduce_mean(loss_act['PG']), std,
-                # tf.math.reduce_mean(loss_act['act']),
-                # tf.math.reduce_mean(loss_rep['trans']),
-                # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
-                # tf.math.reduce_mean(loss_actor['trans']), tf.math.reduce_mean(loss_actor['trans_img']),
-                # tf.math.reduce_mean(loss_actor['reward']), tf.math.reduce_mean(loss_actor['done']),
-                # tf.math.reduce_mean(loss_actor['reward_img']), tf.math.reduce_mean(loss_actor['done_img']),
-                # tf.math.reduce_mean(loss_dyn['trans_ret']), tf.math.reduce_mean(loss_dyn['trans']),
-                # tf.math.reduce_mean(loss_dyn['reward_ret']), tf.math.reduce_mean(loss_dyn['done_ret']),
-                # tf.math.reduce_mean(loss_dyn['reward']), tf.math.reduce_mean(loss_dyn['done']),
-                # tf.math.reduce_mean(loss_act['reward']), tf.math.reduce_mean(loss_act['done']),
-                # tf.math.reduce_mean(loss_actor['entropy']),
-            ]
-            if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
-                tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
-                inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
-            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+        metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+            ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
+            ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
+            # tf.math.reduce_mean(loss_actor['returns_pred']),
+            tf.math.reduce_mean(loss_act['PG']), std,
+            tf.math.reduce_mean(loss_act['PG']), std,
+            # tf.math.reduce_mean(loss_act['act']),
+            # tf.math.reduce_mean(loss_rep['trans']),
+            # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
+            # tf.math.reduce_mean(loss_actor['trans']), tf.math.reduce_mean(loss_actor['trans_img']),
+            # tf.math.reduce_mean(loss_actor['reward']), tf.math.reduce_mean(loss_actor['done']),
+            # tf.math.reduce_mean(loss_actor['reward_img']), tf.math.reduce_mean(loss_actor['done_img']),
+            # tf.math.reduce_mean(loss_dyn['trans_ret']), tf.math.reduce_mean(loss_dyn['trans']),
+            # tf.math.reduce_mean(loss_dyn['reward_ret']), tf.math.reduce_mean(loss_dyn['done_ret']),
+            # tf.math.reduce_mean(loss_dyn['reward']), tf.math.reduce_mean(loss_dyn['done']),
+            # tf.math.reduce_mean(loss_act['reward']), tf.math.reduce_mean(loss_act['done']),
+            # tf.math.reduce_mean(loss_actor['entropy']),
+        ]
+        if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
+            tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
+            inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
+        dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
         # if episode%10 == 0:
         #     # tf.print(episode)
