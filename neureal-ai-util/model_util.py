@@ -49,13 +49,15 @@ def ewma_ih(arr_in, window): # infinite history, faster
     for i in range(1, n): ewma[i] = arr_in[i] * alpha + ewma[i-1] * (1 - alpha)
     return ewma
 
-def update_stats(stats_spec, value, float_eps, dtype):
+def stats_update(stats_spec, value, dtype):
     b1, b1_n, b2, b2_n, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b1_n'], stats_spec['b2'], stats_spec['b2_n'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
-    zero, one = tf.constant(0, dtype), tf.constant(1, dtype)
-
+    one = tf.constant(1, dtype)
     var_ma.assign(b1 * var_ma + b1_n * value)
     var_ema.assign(b2 * var_ema + b2_n * (value * value))
     var_iter.assign_add(one)
+def stats_get(stats_spec, float_eps, dtype):
+    b1, b2, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b2'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
+    zero, one = tf.constant(0, dtype), tf.constant(1, dtype)
 
     ma = one - tf.math.pow(b1, var_iter)
     ema = one - tf.math.pow(b2, var_iter)
