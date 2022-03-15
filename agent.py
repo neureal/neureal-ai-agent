@@ -600,26 +600,6 @@ class GeneralAI(tf.keras.Model):
         outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
         return outputs, inputs
 
-    # def PG_learner(self, inputs, training=True):
-    #     print("tracing -> GeneralAI PG_learner")
-    #     loss = {}
-
-    #     with tf.GradientTape() as tape:
-    #         batch_size = tf.shape(inputs['rewards'])[0]
-    #         rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
-    #         inputs['obs'] = rep_dist.sample()
-
-    #         action_logits = self.action(inputs, batch_size=batch_size, training=training)
-    #         action_dist = [None]*self.action_spec_len
-    #         for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-    #         loss['action'] = self.loss_PG(action_dist, inputs['actions'], inputs['returns'])
-
-    #     gradients = tape.gradient(loss['action'], self.rep.trainable_variables + self.action.trainable_variables)
-    #     self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-
-    #     # loss['entropy'] = self.loss_entropy(action_dist)
-    #     return loss
-
     def PG_learner_onestep(self, inputs, training=True):
         print("tracing -> GeneralAI PG_learner_onestep")
         loss = {}
@@ -649,21 +629,23 @@ class GeneralAI(tf.keras.Model):
         loss['action'] = loss_actions.concat()
         return loss
 
-    def PG_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI PG_run_episode")
-        # TODO how unlimited length episodes without sacrificing returns signal?
-        total_steps, total_reward, total_loss = tf.constant(0,tf.int32), tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype)
-        log_metrics = [True,True,True,True,True,True,True,True,True,True]
-        while not inputs['dones'][-1][0]:
+    def PG(self):
+        print("tracing -> GeneralAI PG")
+        episode, stop = tf.constant(0), tf.constant(False)
+        while episode < self.max_episodes and not stop:
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+
+            # TODO how unlimited length episodes without sacrificing returns signal?
             self.reset_states(); outputs, inputs = self.PG_actor(inputs)
+            util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, ema, snr, std = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
+
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
+            # util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); ma, ema, snr, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
 
-            total_steps += tf.shape(outputs['dones'])[0]
-            total_reward += tf.math.reduce_sum(outputs['rewards'])
-            total_loss += tf.math.reduce_sum(loss['action'])
-            ma, ema, snr, std = util.update_stats(self.action.stats_rwd, total_reward, self.float64_eps, tf.float64)
-            # ma, ema, snr, std = util.update_stats(self.action.stats_loss, total_loss / tf.cast(total_steps,self.compute_dtype), self.float_eps, self.compute_dtype)
-
+            log_metrics = [True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), # tf.math.reduce_mean(outputs['returns']),
                 ma, ema, snr, std
@@ -673,15 +655,6 @@ class GeneralAI(tf.keras.Model):
                 inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-    def PG(self):
-        print("tracing -> GeneralAI PG")
-        episode, stop = tf.constant(0), tf.constant(False)
-        while episode < self.max_episodes and not stop:
-            tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.PG_run_episode(inputs, episode)
             stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
             episode += 1
 
@@ -737,48 +710,6 @@ class GeneralAI(tf.keras.Model):
         outputs['obs'], outputs['actions'], outputs['rewards'], outputs['dones'], outputs['returns'] = out_obs, out_actions, rewards.stack(), dones.stack(), returns.stack()
         return outputs, inputs
 
-    # def AC_learner(self, inputs, training=True):
-    #     print("tracing -> GeneralAI AC_learner")
-    #     loss = {}
-
-    #     inputs_lat = {'obs':self.latent_zero}
-    #     with tf.GradientTape(persistent=True) as tape_value, tf.GradientTape(persistent=True) as tape_action:
-    #         batch_size = tf.shape(inputs['rewards'])[0]
-    #         rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
-    #         inputs_lat['obs'] = rep_dist.sample()
-
-    #     returns = inputs['returns']
-    #     # with tf.GradientTape() as tape_value:
-    #     #     rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
-    #     #     inputs_lat['obs'] = rep_dist.sample()
-    #     with tape_value:
-    #         if self.value_cont:
-    #             value_logits = self.value(inputs_lat, training=training); value_dist = self.value.dist[0](value_logits[0])
-    #             loss['value'] = self.loss_likelihood(value_dist, returns)
-    #             values = value_dist.sample()
-    #         else:
-    #             values = self.value(inputs_lat, training=training)
-    #             loss['value'] = self.loss_diff(values, returns)
-    #     gradients = tape_value.gradient(loss['value'], self.rep.trainable_variables + self.value.trainable_variables)
-    #     self.value.optimizer['value'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
-
-    #     returns = tf.cast(returns, self.compute_dtype)
-    #     # with tf.GradientTape() as tape_action:
-    #     #     rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
-    #     #     inputs_lat['obs'] = rep_dist.sample()
-    #     with tape_action:
-    #         advantages = returns - values # new chance of chosen action: if over predict = push away, if under predict = push closer, if can predict = stay
-    #         action_logits = self.action(inputs_lat, batch_size=batch_size, training=training)
-    #         action_dist = [None]*self.action_spec_len
-    #         for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-    #         loss['action'] = self.loss_PG(action_dist, inputs['actions'], advantages)
-    #     gradients = tape_action.gradient(loss['action'], self.rep.trainable_variables + self.action.trainable_variables)
-    #     self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
-
-    #     # loss['entropy'] = self.loss_entropy(action_dist)
-    #     loss['advantages'] = advantages
-    #     return loss
-
     def AC_learner_onestep(self, inputs, training=True):
         print("tracing -> GeneralAI AC_learner_onestep")
         loss = {}
@@ -829,14 +760,19 @@ class GeneralAI(tf.keras.Model):
         loss['advantages'] = metric_advantages.concat()
         return loss
 
-    def AC_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI AC_run_episode")
-        log_metrics = [True,True,True,True,True,True,True,True,True,True]
-        while not inputs['dones'][-1][0]:
-            # tf.autograph.experimental.set_loop_options(parallel_iterations=1)
-            outputs, inputs = self.AC_actor(inputs)
-            loss = self.AC_learner_onestep(outputs)
+    def AC(self):
+        print("tracing -> GeneralAI AC")
+        episode, stop = tf.constant(0), tf.constant(False)
+        while episode < self.max_episodes and not stop:
+            tf.autograph.experimental.set_loop_options(parallel_iterations=1) # TODO parallel wont work with single instance env, will this work multiple?
+            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
+            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
+            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
 
+            self.reset_states(); outputs, inputs = self.AC_actor(inputs)
+            self.reset_states(); loss = self.AC_learner_onestep(outputs)
+
+            log_metrics = [True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
                 tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
@@ -846,16 +782,6 @@ class GeneralAI(tf.keras.Model):
                 inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-    def AC(self):
-        print("tracing -> GeneralAI AC")
-        episode, stop = tf.constant(0), tf.constant(False)
-        while episode < self.max_episodes and not stop:
-            tf.autograph.experimental.set_loop_options(parallel_iterations=1) # TODO parallel wont work with single instance env, will this work multiple?
-            self.reset_states()
-            np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
-            for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.AC_run_episode(inputs, episode)
             stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
             episode += 1
 
@@ -915,34 +841,6 @@ class GeneralAI(tf.keras.Model):
         outputs['obs'], outputs['actions'], outputs['rewards'], outputs['targets'] = out_obs, out_actions, rewards.stack(), out_targets
         return outputs, inputs
 
-    # def TRANS_learner(self, inputs, training=True):
-    #     print("tracing -> GeneralAI TRANS_learner")
-    #     loss = {}
-
-    #     # inputs_rep = {'obs':self.latent_zero}
-    #     inputs_rep = {'obs':self.latent_zero, 'actions':inputs['actions']}
-    #     with tf.GradientTape() as tape:
-    #         batch_size = tf.shape(inputs['rewards'])[0]
-    #         rep_logits = self.rep(inputs, training=training); rep_dist = self.rep.dist(rep_logits)
-    #         inputs_rep['obs'] = rep_dist.sample()
-
-    #         trans_logits = self.trans(inputs_rep, training=training); trans_dist = self.trans.dist(trans_logits)
-    #         inputs_rep['obs'] = trans_dist.sample()
-    #         # latents_next = latents_next.write(step, inputs_rep['obs'][-1])
-
-    #         action_logits = self.action(inputs_rep, batch_size=batch_size, training=training)
-    #         action_dist = [None]*self.action_spec_len
-    #         for i in range(self.action_spec_len):
-    #             action_dist[i] = self.action.dist[i](action_logits[i])
-    #             # action_dist[i] = action_dist[i].sample() # force_det_out
-    #         loss['action'] = self.loss_likelihood(action_dist, inputs['targets'])
-    #         # loss['action'] = self.loss_diff(action_dist, inputs['targets']) # force_det_out
-
-    #     gradients = tape.gradient(loss['action'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
-    #     self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
-
-    #     return loss
-
     def TRANS_learner_onestep(self, inputs, training=True):
         print("tracing -> GeneralAI TRANS_learner_onestep")
         loss = {}
@@ -976,17 +874,6 @@ class GeneralAI(tf.keras.Model):
         loss['action'] = loss_actions.concat()
         return loss
 
-    def TRANS_run_episode(self, inputs, episode, training=True):
-        print("tracing -> GeneralAI TRANS_run_episode")
-        log_metrics = [True,True,True,True,True,True,True,True,True,True]
-        while not inputs['dones'][-1][0]:
-            self.reset_states(); outputs, inputs = self.TRANS_actor(inputs)
-            self.reset_states(); loss = self.TRANS_learner_onestep(outputs)
-
-            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['action'])]
-            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
-
     def TRANS(self):
         print("tracing -> GeneralAI TRANS")
         episode, stop = tf.constant(0), tf.constant(False)
@@ -995,7 +882,15 @@ class GeneralAI(tf.keras.Model):
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            self.TRANS_run_episode(inputs, episode)
+
+            self.reset_states(); outputs, inputs = self.TRANS_actor(inputs)
+            self.reset_states(); loss = self.TRANS_learner_onestep(outputs)
+
+            log_metrics = [True,True,True,True,True,True,True,True,True,True]
+            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss['action'])]
+            dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
+
             stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
             episode += 1
 
@@ -1004,7 +899,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 1000
+max_episodes = 100
 learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -1049,8 +944,8 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-arch = 'PG' # Policy Gradient agent, PG loss
-# arch = 'AC' # Actor Critic, PG and advantage loss
+# arch = 'PG' # Policy Gradient agent, PG loss
+arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
