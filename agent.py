@@ -113,7 +113,7 @@ class RepNet(tf.keras.Model):
         # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
         out = tf.concat(out_accu, axis=0)
         if self.net_attn_io2: out = self.layer_attn_io2(out)
-        
+
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
@@ -155,7 +155,7 @@ class TransNet(tf.keras.Model):
                 self.layer_lstm += [tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i))]
                 self.layer_mlp += [tf.keras.layers.Dense(latent_size, name='dense_{:02d}'.format(i))]
             else: self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=evo, residual=False, name='mlp_{:02d}'.format(i))]
-        
+
         if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
         if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
         if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
@@ -187,7 +187,7 @@ class TransNet(tf.keras.Model):
         out_accu[-1] = tf.cast(inputs['obs'], self.compute_dtype)
         # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
         out = tf.concat(out_accu, axis=0)
-        
+
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
@@ -259,7 +259,7 @@ class GenNet(tf.keras.Model):
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, batch_size=tf.constant(1), store_memory=True, use_img=False, store_real=False, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
-        
+
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
@@ -308,7 +308,7 @@ class ValueNet(tf.keras.Model):
         for layer in self.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
         out = tf.cast(inputs['obs'], self.compute_dtype)
-        
+
         for i in range(self.net_blocks):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
@@ -519,7 +519,7 @@ class GeneralAI(tf.keras.Model):
                 if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
                 else: loss_group[k] = [[] for i in range(max_episodes)]
         self.metrics_loss = metrics_loss
-        
+
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.reset_states()
@@ -718,7 +718,7 @@ class GeneralAI(tf.keras.Model):
     #         returns_updt = returns_updt + inputs['rewards'][-1]
     #         returns = returns.unstack(returns_updt)
     #         returns = returns.write(step, [self.float64_zero])
-            
+
     #         loss_actions = loss_actions.write(step, loss_action)
     #         metric_entropy = metric_entropy.write(step, entropy)
     #         metric_returns_pred = metric_returns_pred.write(step, returns_pred[0])
@@ -766,7 +766,7 @@ class GeneralAI(tf.keras.Model):
     #                 loss_return = self.loss_diff(values, returns)
     #         gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables)
     #         self.net.optimizer['act'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.value.trainable_variables))
-            
+
     #         loss_returns = loss_returns.write(step, loss_return)
 
     #     loss['return'] = loss_returns.concat()
@@ -1886,8 +1886,8 @@ class GeneralAI(tf.keras.Model):
             #     inputs_step_dyn['obs'] = trans_dist.sample()
             #     loss_tran = self.loss_likelihood(trans_dist, rep_target)
             #     # loss_tran = self.loss_diff(inputs_step_dyn['obs'], rep_target)
-            # gradients = tape_trans.gradient(loss_tran, self.trans.trainable_variables) # self.rep.trainable_variables + 
-            # self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables)) # self.rep.trainable_variables + 
+            # gradients = tape_trans.gradient(loss_tran, self.trans.trainable_variables) # self.rep.trainable_variables +
+            # self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables)) # self.rep.trainable_variables +
             # loss_trans = loss_trans.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran, axis=0), axis=0))
             # dyn_img_obs = inputs_step_dyn['obs']
 
@@ -1911,16 +1911,16 @@ class GeneralAI(tf.keras.Model):
             # with tape_reward:
             #     rwd_logits = self.rwd(inputs_step_dyn); rwd_dist = self.rwd.dist[0](rwd_logits[0])
             #     loss_reward = self.loss_likelihood(rwd_dist, inputs['rewards'])
-            # gradients = tape_reward.gradient(loss_reward, self.rwd.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables + 
-            # self.rwd.optimizer['rwd'].apply_gradients(zip(gradients, self.rwd.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables + 
+            # gradients = tape_reward.gradient(loss_reward, self.rwd.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables +
+            # self.rwd.optimizer['rwd'].apply_gradients(zip(gradients, self.rwd.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables +
             # loss_rewards = loss_rewards.write(step, loss_reward)
 
             # # with tf.GradientTape() as tape_done:
             # with tape_done:
             #     done_logits = self.done(inputs_step_dyn); done_dist = self.done.dist[0](done_logits[0])
             #     loss_done = self.loss_likelihood(done_dist, inputs['dones'])
-            # gradients = tape_done.gradient(loss_done, self.done.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables + 
-            # self.done.optimizer['done'].apply_gradients(zip(gradients, self.done.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables + 
+            # gradients = tape_done.gradient(loss_done, self.done.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables +
+            # self.done.optimizer['done'].apply_gradients(zip(gradients, self.done.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables +
             # loss_dones = loss_dones.write(step, loss_done)
 
 
@@ -1934,8 +1934,8 @@ class GeneralAI(tf.keras.Model):
             #     dyn_img_obs = trans_dist.sample()
             #     loss_tran = self.loss_likelihood(trans_dist, rep_target)
             #     # loss_tran = self.loss_diff(dyn_img_obs, rep_target)
-            # gradients = tape_trans.gradient(loss_tran, self.trans.trainable_variables) # self.rep.trainable_variables + 
-            # self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables)) # self.rep.trainable_variables + 
+            # gradients = tape_trans.gradient(loss_tran, self.trans.trainable_variables) # self.rep.trainable_variables +
+            # self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables)) # self.rep.trainable_variables +
             # loss_trans = loss_trans.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran, axis=0), axis=0))
 
 
@@ -2428,8 +2428,8 @@ class GeneralAI(tf.keras.Model):
     #         #     action_dist = [None]*self.action_spec_len
     #         #     for i in range(self.action_spec_len): action_dist[i] = self.actout.dist[i](action_logits[i])
     #         #     loss_action = self.loss_likelihood(action_dist, action)
-    #         # gradients = tape_act.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables) # self.rep.trainable_variables + 
-    #         # self.actout.optimizer['act'].apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables)) # self.rep.trainable_variables + 
+    #         # gradients = tape_act.gradient(loss_action, self.actin.trainable_variables + self.actout.trainable_variables) # self.rep.trainable_variables +
+    #         # self.actout.optimizer['act'].apply_gradients(zip(gradients, self.actin.trainable_variables + self.actout.trainable_variables)) # self.rep.trainable_variables +
     #         # loss_act = loss_act.write(step, loss_action)
 
 
@@ -2674,9 +2674,7 @@ class GeneralAI(tf.keras.Model):
 
             gen, episode_gen = episode%num_gen, episode//num_gen
             log_metrics, train = [True,True,True,True,True,True,True,True,True,True,True,True,True,True], True
-            return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns     
-        return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns     
-            return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns     
+            return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns
             # return_goal_alt = tf.constant([[10.0]], tf.float64)
             return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
             if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,True,True,True,False,False,False,True,True,False,False], True, 0 # action/PG
@@ -2824,7 +2822,7 @@ if __name__ == '__main__':
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
         model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, entropy_contrib, returns_disc, value_cont, force_cont_obs, force_cont_action, latent_size, latent_dist, net_attn_io, aio_max_latents, attn_mem_multi, aug_data_step, aug_data_pos)
         name = "gym-{}-{}-{}".format(arch, env_name, ['Ldet','Lcat','Lcon'][latent_dist])
-        
+
         ## debugging
         # model.build(()); model.action.summary(); quit(0)
         # inputs = {'obs':model.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
