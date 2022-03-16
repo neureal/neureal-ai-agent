@@ -388,12 +388,12 @@ class GeneralAI(tf.keras.Model):
             opt_spec = [
                 {'name':'act', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'PG', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
-                {'name':'PGL', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-9, tf.float64), 'float_eps':self.float_eps},
+                {'name':'PGL', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'trans', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'rwd', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
                 {'name':'done', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps},
             ]
-            self.rep = RepNet('RN', inputs, opt_spec, self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', inputs, opt_spec, self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs, step=0); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
@@ -401,12 +401,12 @@ class GeneralAI(tf.keras.Model):
             for spec in opt_spec: self.rep.optimizer_weights += util.optimizer_build(self.rep.optimizer[spec['name']], self.rep.trainable_variables)
             util.net_build(self.rep, self.initializer)
 
-        opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
+        opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-4, tf.float64), 'float_eps':self.float_eps}]
         self.action = GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
         util.net_build(self.action, self.initializer)
         if arch in ('MU4',):
-            opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(1e-9, tf.float64), 'float_eps':self.float_eps}]
+            opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-9, tf.float64), 'float_eps':self.float_eps}]
             self.actionL = GenNet('ANL', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actionL(inputs)
             self.actionL.optimizer_weights = util.optimizer_build(self.actionL.optimizer['action'], self.actionL.trainable_variables)
             util.net_build(self.actionL, self.initializer)
@@ -414,7 +414,7 @@ class GeneralAI(tf.keras.Model):
             memory_size_actin = (lat_batch_size+2) * max_steps # return_goal and step_size
             inputs['actions'] = [tf.constant([[0]],tf.float64)]
             query_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':1, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
-            self.actin = TransNet('ACT1', inputs, [], query_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin); outputs = self.actin(inputs)
+            self.actin = TransNet('ACT1', inputs, [], query_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_actin); outputs = self.actin(inputs)
             opt_spec = [{'name':'act', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             self.actout = GenNet('ACT2', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.actout(inputs)
             self.actout.optimizer_weights = util.optimizer_build(self.actout.optimizer['act'], self.actin.trainable_variables + self.actout.trainable_variables)
@@ -433,7 +433,7 @@ class GeneralAI(tf.keras.Model):
             inputs['actions'] = self.action_zero_out
             opt_spec = [{'name':'trans', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             latent_dist = 2; latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans, 'event_shape':(latent_size,), 'num_components':8}
-            self.trans = TransNet('TN', inputs, opt_spec, self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=4, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
+            self.trans = TransNet('TN', inputs, opt_spec, self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
             self.trans.optimizer_weights = util.optimizer_build(self.trans.optimizer['trans'], self.trans.trainable_variables)
             util.net_build(self.trans, self.initializer)
         if arch in ('MU','MU2','MU3','MU4',):
@@ -499,7 +499,7 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1rewards3*'] = {'-ma_PGL':np.float64, '-rewards_PGL_total+':np.float64, '-rewards_PGL_final=':np.float64}
             # metrics_loss['1extra'] = {'returns_pred':np.float64}
             metrics_loss['1nets'] = {'loss_PG':np.float64}; metrics_loss['1netsS'] = {'-std_PG':np.float64}
-            metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-std_PGL':np.float64}
+            # metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-std_PGL':np.float64}
             # metrics_loss['1nets4'] = {'loss_act':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64, 'loss_trans_img':np.float64}
@@ -2679,7 +2679,7 @@ class GeneralAI(tf.keras.Model):
             return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
             if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,True,True,True,False,False,False,True,True,False,False], True, 0 # action/PG
             if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True,False,False,False,False,False,False,False,False,False,False], False, 1 # actout/act
-            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,False,False,True,True], True, 2 # random, actionL/PGL
+            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,False,False,False,False], True, 2 # random, actionL/PGL
             if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False,False,False,False,False,False,False,False,False,False,False], True, 1 # act alt
 
 
@@ -2708,14 +2708,15 @@ class GeneralAI(tf.keras.Model):
                 # self.reset_states(); loss_dyn = self.MU4_dyn_learner2(outputs, gen) # _dyn8
                 # self.reset_states(); loss_dyn = self.MU4_dyn_learner3(outputs) # _dyn9
 
-                if gen == 0: util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); _, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
+                if gen == 0:
+                    util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); ma_loss, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
+                    maL, _, _, _ = util.stats_get(self.actionL.stats_rwd, self.float64_eps, tf.float64)
+                    if self.action.stats_loss['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
+                        if ma > maL: util.net_copy(self.action, self.actionL)
+                        util.net_reset(self.action)
+                        # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
                 if gen == 1: util.stats_update(self.actout.stats_loss, tf.math.reduce_mean(loss_act['act']), self.compute_dtype); _, _, _, std = util.stats_get(self.actout.stats_loss, self.float_eps, self.compute_dtype)
                 if gen == 2: util.stats_update(self.actionL.stats_loss, tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); _, _, _, std = util.stats_get(self.actionL.stats_loss, self.float_eps, self.compute_dtype)
-
-                # if episode_gen%10 == 0:
-                #     # tf.print(episode_gen)
-                #     util.net_copy(self.action, self.actionL)
-                #     util.net_reset(self.action)
 
 
             metrics = [log_metrics, episode_gen, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
@@ -2723,7 +2724,7 @@ class GeneralAI(tf.keras.Model):
                 ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 # tf.math.reduce_mean(loss_actor['returns_pred']),
                 tf.math.reduce_mean(loss_act['PG']), std,
-                tf.math.reduce_mean(loss_act['PG']), std,
+                # tf.math.reduce_mean(loss_act['PG']), std,
                 # tf.math.reduce_mean(loss_act['act']),
                 # tf.math.reduce_mean(loss_rep['trans']),
                 # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
