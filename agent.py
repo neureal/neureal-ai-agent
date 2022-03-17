@@ -407,13 +407,13 @@ class GeneralAI(tf.keras.Model):
 
 
         metrics_loss = OrderedDict()
-        metrics_loss['2rewards*'] = {'rewards_total+':np.float64, 'rewards_final=':np.float64}
+        metrics_loss['2rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
         if arch == 'PG':
             metrics_loss['1nets'] = {'loss_action':np.float64}
             # metrics_loss['1extras'] = {'returns':np.float64}
-            metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
-            metrics_loss['1extras3'] = {'-snr':np.float64}
+            # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
+            # metrics_loss['1extras3'] = {'-snr':np.float64}
             metrics_loss['1extras4'] = {'-std':np.float64}
         if arch == 'AC':
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
@@ -640,15 +640,15 @@ class GeneralAI(tf.keras.Model):
 
             # TODO how unlimited length episodes without sacrificing returns signal?
             self.reset_states(); outputs, inputs = self.PG_actor(inputs)
-            util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, ema, snr, std = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
+            util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
-            # util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); ma, ema, snr, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
+            util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); _, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
-            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['action']), # tf.math.reduce_mean(outputs['returns']),
-                ma, ema, snr, std
+            metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+                tf.math.reduce_mean(loss['action']), std, # tf.math.reduce_mean(outputs['returns']),
+                # ma, ema, snr, std
             ]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
                 tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
@@ -770,10 +770,11 @@ class GeneralAI(tf.keras.Model):
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
 
             self.reset_states(); outputs, inputs = self.AC_actor(inputs)
+            util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
             self.reset_states(); loss = self.AC_learner_onestep(outputs)
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
-            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+            metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
                 tf.math.reduce_mean(outputs['returns']), tf.math.reduce_mean(loss['advantages']),
             ]
@@ -884,10 +885,11 @@ class GeneralAI(tf.keras.Model):
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
 
             self.reset_states(); outputs, inputs = self.TRANS_actor(inputs)
+            util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
             self.reset_states(); loss = self.TRANS_learner_onestep(outputs)
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
-            metrics = [log_metrics, episode, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
+            metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action'])]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
@@ -944,8 +946,8 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG' # Policy Gradient agent, PG loss
-arch = 'AC' # Actor Critic, PG and advantage loss
+arch = 'PG' # Policy Gradient agent, PG loss
+# arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
 # arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
