@@ -69,7 +69,11 @@ def stats_get(stats_spec, float_eps, dtype):
     if ema < float_eps: ema = float_eps
 
     snr = tf.math.abs(ma) / ema
-    std = ema - tf.math.abs(ma)
+    # ma = tf.math.abs(ma)
+    # if ma < float_eps: ma = float_eps
+    # snr =  ema / ma # -snr2
+    # std = ema - tf.math.abs(ma)
+    std = ema - ma # -std2
 
     if ma < zero: ema = -ema
     return ma, ema, snr, std

@@ -401,7 +401,7 @@ class GeneralAI(tf.keras.Model):
             for spec in opt_spec: self.rep.optimizer_weights += util.optimizer_build(self.rep.optimizer[spec['name']], self.rep.trainable_variables)
             util.net_build(self.rep, self.initializer)
 
-        opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-4, tf.float64), 'float_eps':self.float_eps}]
+        opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(6e-4, tf.float64), 'float_eps':self.float_eps}]
         self.action = GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
         util.net_build(self.action, self.initializer)
@@ -495,8 +495,8 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets3'] = {'loss_rwd_dyn':np.float64, 'loss_done_dyn':np.float64}
             metrics_loss['1extra2'] = {'return_entropy':np.float64}
         if arch == 'MU4':
-            metrics_loss['1rewards2*'] = {'-ma_PG':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
             metrics_loss['1rewards3*'] = {'-ma_PGL':np.float64, '-rewards_PGL_total+':np.float64, '-rewards_PGL_final=':np.float64}
+            metrics_loss['1rewards2*'] = {'-ma_PG':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
             # metrics_loss['1extra'] = {'returns_pred':np.float64}
             metrics_loss['1nets'] = {'loss_PG':np.float64}; metrics_loss['1netsS'] = {'-std_PG':np.float64}
             # metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-std_PGL':np.float64}
@@ -2677,20 +2677,17 @@ class GeneralAI(tf.keras.Model):
             return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns
             # return_goal_alt = tf.constant([[10.0]], tf.float64)
             return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
-            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,True,True,True,False,False,False,True,True,False,False], True, 0 # action/PG
+            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,True,True,False,False], True, 0 # action/PG
             if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True,False,False,False,False,False,False,False,False,False,False], False, 1 # actout/act
-            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,False,False,False,False], True, 2 # random, actionL/PGL
+            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,True,True,True,False,False,False,False,False,False,False], True, 2 # random, actionL/PGL
             if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False,False,False,False,False,False,False,False,False,False,False], True, 1 # act alt
 
 
             self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
-            # train Meta: input previous ma & std, train with loss_PG using previous learn_rate and tf.math.reduce_sum(outputs['rewards'])
-            if gen == 0: util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
-            if gen == 1: util.stats_update(self.actout.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.actout.stats_rwd, self.float64_eps, tf.float64)
-            if gen == 2: util.stats_update(self.actionL.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.actionL.stats_rwd, self.float64_eps, tf.float64)
-
-            # inference Meta: input current ma, outputs learn_rate
-            # self.action.optimizer.learning_rate = learn_rate
+            rewards_total = outputs['returns'][-1][0][0]
+            if gen == 0: util.stats_update(self.action.stats_rwd, rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
+            if gen == 1: util.stats_update(self.actout.stats_rwd, rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.actout.stats_rwd, self.float64_eps, tf.float64)
+            if gen == 2: util.stats_update(self.actionL.stats_rwd, rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.actionL.stats_rwd, self.float64_eps, tf.float64)
 
 
             loss_rep = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
@@ -2751,7 +2748,7 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 10
-learn_rate = 2e-5 # 5 = testing, 6 = more stable/slower
+learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
@@ -2766,7 +2763,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_rp200_gen012_pgl-1e9' # _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 1, '_rp200_gen012_pgl-2e9_a-6e4-std2' # _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
