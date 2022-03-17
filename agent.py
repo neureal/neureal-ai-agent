@@ -417,7 +417,7 @@ class GeneralAI(tf.keras.Model):
         metrics_loss['2rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
         if arch == 'PG':
-            metrics_loss['1nets'] = {'loss_action':np.float64}
+            metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'returns':np.float64}
             # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
             # metrics_loss['1extras3'] = {'-snr':np.float64}
@@ -640,7 +640,7 @@ class GeneralAI(tf.keras.Model):
 
     def PG(self):
         print("tracing -> GeneralAI PG")
-        ma, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype)
+        ma, ma_loss, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype)
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -679,8 +679,8 @@ class GeneralAI(tf.keras.Model):
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                tf.math.reduce_mean(loss['action']), std, # tf.math.reduce_mean(outputs['returns']),
-                # ma, ema, snr, std
+                ma_loss, tf.math.reduce_mean(loss['action']), # tf.math.reduce_mean(outputs['returns']),
+                std, # ma, ema, snr, std
                 self.action.optimizer['action'].learning_rate,
                 loss_meta[0],
             ]
