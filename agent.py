@@ -384,7 +384,7 @@ class GeneralAI(tf.keras.Model):
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step_size':1}
         if arch in ('PG','AC','TRANS',):
-            self.rep = RepNet('RN', inputs, [], self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = RepNet('RN', inputs, [], self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
@@ -673,8 +673,8 @@ class GeneralAI(tf.keras.Model):
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
             util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); ma_loss, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
             if self.action.stats_loss['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
-                tf.print("net_reset (action) at:", episode)
-                util.net_reset(self.action)
+                util.net_reset(self.rep); util.net_reset(self.action)
+                tf.print("net_reset (rep,action) at:", episode)
 
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
@@ -1027,7 +1027,7 @@ if __name__ == '__main__':
             model_name = "{}-{}-a{}".format(net.net_arch, machine, device)
             model_file = "{}/tf-data-models-local/{}.h5".format(curdir, model_name); loaded_model = False
             model_files[net.name] = model_file
-            if load_model and tf.io.gfile.exists(model_file):
+            if (load_model or net.name == 'M') and tf.io.gfile.exists(model_file):
                 net.load_weights(model_file, by_name=True, skip_mismatch=True)
                 print("LOADED {} weights from {}".format(net.name, model_file)); loaded_model = True
             name_opt = "-O{}{}".format(net.opt_spec['type'], ('' if net.opt_spec['schedule_type']=='' else '-S'+net.opt_spec['schedule_type'])) if hasattr(net, 'opt_spec') else ''
