@@ -4,7 +4,7 @@ np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 import tensorflow_datasets as tfds
 import gym
-import model_util as util
+import gym_util
 
 
 class DataEnv(gym.Env):
@@ -60,8 +60,8 @@ class DataEnv(gym.Env):
         # ds = ds[:16]
         self.ds, self.ds_idx, self.ds_max = ds, 0, 64
 
-        self.action_zero = util.gym_get_space_zero(self.action_space)
-        self.obs_zero = util.gym_get_space_zero(self.observation_space)
+        self.action_zero = gym_util.get_space_zero(self.action_space)
+        self.obs_zero = gym_util.get_space_zero(self.observation_space)
         self.state = self.action_zero, self.obs_zero, np.float64(0.0), False, {}
         self.item_accu = []
         self.episode = 0

@@ -16,12 +16,12 @@ tf.keras.backend.set_floatx('float64')
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
-import model_util as util
 import gym, gym_algorithmic, procgen, pybullet_envs
 
 # CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.6.0, tensorflow_probability==0.14.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
+import gym_util, model_util as util, model_nets as nets
 
 # TODO add Fourier prior like PercieverIO or https://github.com/zongyi-li/fourier_neural_operator
 # TODO add S4 layer https://github.com/HazyResearch/state-spaces
@@ -37,286 +37,6 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 # TODO how to incorporate ARS random policy search?
 # TODO try out the 'lottery ticket hypothosis' pruning during training
 # TODO use numba to make things faster on CPU
-
-
-class RepNet(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io2=False, num_heads=1, memory_size=None, aug_data_step=False, aug_data_pos=False):
-        super(RepNet, self).__init__(name=name)
-        inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io2, self.aug_data_step = net_blocks, net_attn, net_lstm, net_attn_io2, aug_data_step
-        self.layer_flatten = tf.keras.layers.Flatten()
-
-        # TODO how to loop through inputs?
-        # self.net_inputs = ['obs']*len(spec_in)+['rewards','dones']
-        self.net_ins = len(spec_in); self.net_ins_all, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = self.net_ins, [None]*self.net_ins, [None]*self.net_ins, [None]*self.net_ins
-        for i in range(self.net_ins):
-            event_shape, event_size, channels, num_latents = spec_in[i]['event_shape'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['num_latents']
-            if aug_data_pos and event_size > 1:
-                    pos_idx = np.indices(spec_in[i]['event_shape'][:-1])
-                    pos_idx = np.moveaxis(pos_idx, 0, -1)
-                    # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
-                    self.pos_idx_in[i] = tf.constant(pos_idx, dtype=self.compute_dtype)
-                    channels += pos_idx.shape[-1]
-            if net_attn_io and event_size > 1:
-                self.layer_attn_in[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))
-            self.layer_mlp_in[i] = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))
-        if aug_data_step:
-            self.net_ins_all += 1
-            # self.layer_rwd_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='rwd_in')
-            # self.layer_done_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='done_in')
-            self.layer_step_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_in')
-        if net_attn_io2: self.layer_attn_io2 = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=latent_spec['num_latents'], channels=latent_size, name='attn_io2')
-
-        self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
-        for i in range(net_blocks):
-            if self.net_attn:
-                self.layer_attn += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_{:02d}'.format(i))]
-                self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
-            elif self.net_lstm:
-                self.layer_lstm += [tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i))]
-                self.layer_mlp += [tf.keras.layers.Dense(latent_size, name='dense_{:02d}'.format(i))]
-            else: self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=evo, residual=False, name='mlp_{:02d}'.format(i))]
-
-        if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
-        if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
-        if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
-        self.layer_dense_out_logits = tf.keras.layers.Dense(params_size, name='dense_out_logits')
-
-        self.optimizer = OrderedDict()
-        for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
-
-        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}x{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_spec['num_latents'], latent_size, latent_spec['num_components'])
-
-    def reset_states(self, use_img=False):
-        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
-        for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, step=tf.constant(0), store_memory=True, use_img=False, store_real=False, training=None):
-        out_accu = [None]*self.net_ins_all
-        for i in range(self.net_ins):
-            out = tf.cast(inputs['obs'][i], self.compute_dtype)
-            # out = tf.expand_dims(out, axis=-1) # TODO try splitting down to individual scaler level
-            if self.pos_idx_in[i] is not None:
-                shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[i].shape], axis=0)
-                pos_idx = tf.broadcast_to(self.pos_idx_in[i], shape)
-                out = tf.concat([out, pos_idx], axis=-1)
-            if self.layer_attn_in[i] is not None: out = self.layer_attn_in[i](out)
-            else: out = self.layer_flatten(out)
-            out_accu[i] = self.layer_mlp_in[i](out)
-        if self.aug_data_step:
-            # out = tf.cast(inputs['rewards'], self.compute_dtype)
-            # out_accu[-3] = self.layer_rwd_in(out)
-            # out = tf.cast(inputs['dones'], self.compute_dtype)
-            # out_accu[-2] = self.layer_done_in(out)
-            step = tf.reshape(tf.cast(step, self.compute_dtype), [1,1])
-            out_accu[-1] = self.layer_step_in(step)
-        # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
-        out = tf.concat(out_accu, axis=0)
-        if self.net_attn_io2: out = self.layer_attn_io2(out)
-        
-        for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
-            out = self.layer_mlp[i](out)
-
-        out = self.layer_dense_out_logits(out)
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
-        if isinfnan > 0: tf.print('rep net out:', out)
-        return out
-
-
-# transition dynamics within latent space
-class TransNet(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, spec_in, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None): # spec_in=[] for no action conditioning
-        super(TransNet, self).__init__(name=name)
-        inp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io, self.lat_batch_size = net_blocks, net_attn, net_lstm, net_attn_io, latent_spec['num_latents']
-        self.layer_flatten = tf.keras.layers.Flatten()
-
-        # self.net_inputs = ['actions']*len(spec_in)+['obs'] # action conditioning/embedding
-        self.net_ins = len(spec_in); self.net_ins_all, self.layer_attn_in, self.layer_mlp_in = self.net_ins+2, [None]*self.net_ins, [None]*self.net_ins
-        for i in range(self.net_ins):
-            event_shape, event_size, channels, num_latents = spec_in[i]['event_shape'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['num_latents']
-            # TODO add aug_data_pos?
-            if net_attn_io and event_size > 1:
-                self.layer_attn_in[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{:02d}'.format(i))
-            self.layer_mlp_in[i] = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{:02d}'.format(i))
-        self.layer_step_size_in = util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='step_size_in')
-        # TODO add net_attn_io2
-        # TODO add aug_data_step
-
-        self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
-        for i in range(net_blocks):
-            if self.net_attn:
-                self.layer_attn += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_{:02d}'.format(i))]
-                self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
-            elif self.net_lstm:
-                self.layer_lstm += [tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i))]
-                self.layer_mlp += [tf.keras.layers.Dense(latent_size, name='dense_{:02d}'.format(i))]
-            else: self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=evo, residual=False, name='mlp_{:02d}'.format(i))]
-        
-        if latent_dist == 0: params_size, self.dist = util.Deterministic.params_size(latent_spec['event_shape']), util.Deterministic(latent_spec['event_shape'])
-        if latent_dist == 1: params_size, self.dist = util.CategoricalRP.params_size(latent_spec['event_shape']), util.CategoricalRP(latent_spec['event_shape'])
-        if latent_dist == 2: params_size, self.dist = util.MixtureLogistic.params_size(latent_spec['num_components'], latent_spec['event_shape']), util.MixtureLogistic(latent_spec['num_components'], latent_spec['event_shape'])
-        # if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=params_size, num_heads=1, norm=True, hidden_size=mid, evo=evo, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
-        if net_attn_io: self.layer_attn_out = util.MultiHeadAttention(latent_size=params_size, num_heads=1, norm=False, residual=False, cross_type=1, num_latents=self.lat_batch_size, channels=latent_size, name='attn_out')
-        else: self.layer_dense_out_logits = tf.keras.layers.Dense(self.lat_batch_size*params_size, name='dense_out_logits')
-
-        self.optimizer = OrderedDict()
-        for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
-
-        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.net_arch = "{}[inD{}-{:02d}{}{}D{}{}-lat{}x{}-{}]".format(name, inp, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''), latent_spec['num_latents_trans'], latent_size, latent_spec['num_components'])
-
-    def reset_states(self, use_img=False):
-        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
-        for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
-        out_accu = [None]*self.net_ins_all
-        for i in range(self.net_ins):
-            out = tf.cast(inputs['actions'][i], self.compute_dtype)
-            if self.layer_attn_in[i] is not None: out = self.layer_attn_in[i](out)
-            else: out = self.layer_flatten(out)
-            # TODO better to add latents for conditioning/prompting?
-            # shape = tf.concat([tf.shape(inputs['obs'])[:1], tf.shape(out)[1:]], axis=0)
-            # out = tf.broadcast_to(out, shape)
-            out_accu[i] = self.layer_mlp_in[i](out)
-        step_size = tf.reshape(tf.cast(inputs['step_size'], self.compute_dtype), [1,1])
-        out_accu[-2] = self.layer_step_size_in(step_size)
-        out_accu[-1] = tf.cast(inputs['obs'], self.compute_dtype)
-        # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
-        out = tf.concat(out_accu, axis=0)
-        
-        for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
-            out = self.layer_mlp[i](out)
-
-        if self.net_attn_io: out = self.layer_attn_out(out)
-        else:
-            out = self.layer_flatten(tf.expand_dims(out, axis=0))
-            out = self.layer_dense_out_logits(out)
-            out = tf.reshape(out, (self.lat_batch_size, -1))
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
-        if isinfnan > 0: tf.print('trans net out:', out)
-        return out
-
-
-class GenNet(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, spec_out, force_cont, latent_size, net_blocks=0, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, max_steps=1, force_det_out=False):
-        super(GenNet, self).__init__(name=name)
-        outp, mid, evo = latent_size*4, latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, net_attn_io
-        self.layer_flatten = tf.keras.layers.Flatten()
-        mixture_size = 8 # int(latent_size/2)
-
-        # TODO duplicate per net_outs for better gen?
-        self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
-        for i in range(net_blocks):
-            if self.net_attn:
-                self.layer_attn += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_{:02d}'.format(i))]
-                self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
-            elif self.net_lstm:
-                self.layer_lstm += [tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i))]
-                self.layer_mlp += [tf.keras.layers.Dense(latent_size, name='dense_{:02d}'.format(i))]
-            else: self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=evo, residual=False, name='mlp_{:02d}'.format(i))]
-
-        self.net_outs = len(spec_out); params_size, self.dist, self.logits_step_shape, arch_out = [], [], [], "O"
-        for i in range(self.net_outs):
-            num_components, event_shape = spec_out[i]['num_components'], spec_out[i]['event_shape']
-            if force_det_out:
-                params_size += [util.Deterministic.params_size(event_shape)]; self.dist += [util.Deterministic(event_shape)]; typ = 'd'
-            elif not force_cont and spec_out[i]['is_discrete']:
-                params_size += [util.Categorical.params_size(num_components, event_shape)]; self.dist += [util.Categorical(num_components, event_shape)]; typ = 'c'
-            else:
-                num_components *= mixture_size
-                params_size += [util.MixtureLogistic.params_size(num_components, event_shape)]; self.dist += [util.MixtureLogistic(num_components, event_shape)]; typ = 'mx'
-                # params_size += [tfp.layers.MixtureLogistic.params_size(num_components, event_shape)]; self.dist += [tfp.layers.MixtureLogistic(num_components, event_shape)] # makes NaNs
-                # params_size += [MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=2)]; self.dist += [MixtureMultiNormalTriL(num_components, event_shape, matrix_size=2)]; typ = 'mt'
-            self.logits_step_shape += [tf.TensorShape([1]+[params_size[i]])]
-            arch_out += "{}{}".format(typ, num_components)
-
-        self.layer_attn_out, self.layer_mlp_out_logits = [], []
-        for i in range(self.net_outs):
-            # if net_attn_io: self.layer_attn_out += [util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{:02d}'.format(i))]
-            self.layer_mlp_out_logits += [util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{:02d}'.format(i))]
-
-        self.optimizer = OrderedDict()
-        for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
-
-        self.stats_rwd = {'b1':tf.constant(0.99,tf.float64), 'b1_n':tf.constant(0.01,tf.float64), 'b2':tf.constant(0.99,tf.float64), 'b2_n':tf.constant(0.01,tf.float64),
-            'ma':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_rwd/ma'.format(name)), 'ema':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_rwd/ema'.format(name)), 'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_rwd/iter'.format(name)),}
-        self.stats_loss = {'b1':tf.constant(0.99,self.compute_dtype), 'b1_n':tf.constant(0.01,self.compute_dtype), 'b2':tf.constant(0.99,self.compute_dtype), 'b2_n':tf.constant(0.01,self.compute_dtype),
-            'ma':tf.Variable(0, dtype=self.compute_dtype, trainable=False, name='{}/stats_loss/ma'.format(name)), 'ema':tf.Variable(0, dtype=self.compute_dtype, trainable=False, name='{}/stats_loss/ema'.format(name)), 'iter':tf.Variable(0, dtype=self.compute_dtype, trainable=False, name='{}/stats_loss/iter'.format(name)),}
-
-        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.net_arch = "{}[{:02d}{}{}D{}-{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, arch_out, ('-hds'+str(num_heads) if self.net_attn else ''))
-
-    def reset_states(self, use_img=False):
-        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
-        for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, batch_size=tf.constant(1), store_memory=True, use_img=False, store_real=False, training=None):
-        out = tf.cast(inputs['obs'], self.compute_dtype)
-        
-        for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
-            out = self.layer_mlp[i](out)
-
-        # if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
-        out = tf.reshape(out, (batch_size, -1))
-        out_logits = [None]*self.net_outs
-        for i in range(self.net_outs):
-            # out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
-            # out_logits[i] = self.layer_mlp_out_logits[i](out_logits[i])
-            out_logits[i] = self.layer_mlp_out_logits[i](out)
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
-        if isinfnan > 0: tf.print('action net out:', out)
-        return out_logits
-
-
-class ValueNet(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, latent_size, net_blocks=0, net_attn=False, net_lstm=False, num_heads=1, memory_size=None):
-        super(ValueNet, self).__init__(name=name)
-        mid, evo = latent_size*2, int(latent_size/2)
-        self.net_blocks, self.net_attn, self.net_lstm = net_blocks, net_attn, net_lstm
-        self.layer_flatten = tf.keras.layers.Flatten()
-
-        self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
-        for i in range(net_blocks):
-            if self.net_attn:
-                self.layer_attn += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_{:02d}'.format(i))]
-                self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
-            elif self.net_lstm:
-                self.layer_lstm += [tf.keras.layers.LSTM(mid, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i))]
-                self.layer_mlp += [tf.keras.layers.Dense(latent_size, name='dense_{:02d}'.format(i))]
-            else: self.layer_mlp += [util.MLPBlock(hidden_size=mid, latent_size=latent_size, evo=evo, residual=False, name='mlp_{:02d}'.format(i))]
-
-        self.layer_dense_out = tf.keras.layers.Dense(1, name='dense_out')
-
-        self.optimizer = OrderedDict()
-        for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
-
-        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.net_arch = "{}[{:02d}{}{}D{}{}]".format(name, net_blocks, ('AT+' if self.net_attn else ''), ('LS+' if self.net_lstm else ''), mid, ('-hds'+str(num_heads) if self.net_attn else ''))
-
-    def reset_states(self, use_img=False):
-        for layer in self.layer_attn: layer.reset_states(use_img=use_img)
-        for layer in self.layer_lstm: layer.reset_states()
-    def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
-        out = tf.cast(inputs['obs'], self.compute_dtype)
-        
-        for i in range(self.net_blocks):
-            if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
-            if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
-            out = self.layer_mlp[i](out)
-
-        out = tf.reshape(out, (1, -1))
-        out = self.layer_dense_out(out)
-        return out
 
 
 class GeneralAI(tf.keras.Model):
@@ -336,8 +56,8 @@ class GeneralAI(tf.keras.Model):
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
         self.initializer = tf.keras.initializers.GlorotUniform()
 
-        self.obs_spec, self.obs_zero, _ = util.gym_get_spec(env.observation_space, self.compute_dtype, force_cont=force_cont_obs)
-        self.action_spec, _, self.action_zero_out = util.gym_get_spec(env.action_space, self.compute_dtype, force_cont=force_cont_action)
+        self.obs_spec, self.obs_zero, _ = gym_util.get_spec(env.observation_space, self.compute_dtype, force_cont=force_cont_obs)
+        self.action_spec, _, self.action_zero_out = gym_util.get_spec(env.action_space, self.compute_dtype, force_cont=force_cont_action)
         self.obs_spec_len, self.action_spec_len = len(self.obs_spec), len(self.action_spec)
         self.gym_step_shapes = [feat['step_shape'] for feat in self.obs_spec] + [tf.TensorShape((1,1)), tf.TensorShape((1,1))]
         self.gym_step_dtypes = [feat['dtype'] for feat in self.obs_spec] + [tf.float64, tf.bool]
@@ -378,20 +98,20 @@ class GeneralAI(tf.keras.Model):
         inputs = {'obs':tf.constant([[0,0,0]],compute_dtype)}
         opt_spec = [{'name':'meta', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]
         self.meta_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-        self.meta = GenNet('M', inputs, opt_spec, self.meta_spec, False, latent_size, net_blocks=2, net_attn=False, net_lstm=False, net_attn_io=False, force_det_out=False); outputs = self.meta(inputs)
+        self.meta = nets.GenNet('M', inputs, opt_spec, self.meta_spec, False, latent_size, net_blocks=2, net_attn=False, net_lstm=False, net_attn_io=False, force_det_out=False); outputs = self.meta(inputs)
         self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
         util.net_build(self.meta, self.initializer)
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step_size':1}
         if arch in ('PG','AC','TRANS',):
-            self.rep = RepNet('RN', inputs, [], self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
+            self.rep = nets.RepNet('RN', inputs, [], self.obs_spec, latent_spec, latent_dist, latent_size, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io2=net_attn_io2, num_heads=4, memory_size=memory_size, aug_data_step=aug_data_step, aug_data_pos=aug_data_pos)
             outputs = self.rep(inputs); rep_dist = self.rep.dist(outputs)
             self.latent_zero = tf.zeros_like(rep_dist.sample(), latent_spec['dtype'])
             inputs['obs'] = self.latent_zero
             util.net_build(self.rep, self.initializer)
 
         opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
-        self.action = GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
+        self.action = nets.GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.action.trainable_variables)
         util.net_build(self.action, self.initializer)
 
@@ -399,15 +119,15 @@ class GeneralAI(tf.keras.Model):
             opt_spec = [{'name':'value', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-                self.value = GenNet('VN', inputs, opt_spec, value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
-            else: self.value = ValueNet('VN', inputs, opt_spec, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
+                self.value = nets.GenNet('VN', inputs, opt_spec, value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)
+            else: self.value = nets.ValueNet('VN', inputs, opt_spec, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, num_heads=4, memory_size=memory_size); outputs = self.value(inputs)
             self.value.optimizer_weights = util.optimizer_build(self.value.optimizer['value'], self.rep.trainable_variables + self.value.trainable_variables)
             util.net_build(self.value, self.initializer)
 
         if arch in ('TRANS',):
             inputs['actions'] = self.action_zero_out
             # latent_dist = 2; latent_spec = {'dtype':compute_dtype, 'num_latents':lat_batch_size, 'num_latents_trans':lat_batch_size_trans, 'event_shape':(latent_size,), 'num_components':8}
-            self.trans = TransNet('TN', inputs, [], self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
+            self.trans = nets.TransNet('TN', inputs, [], self.action_spec, latent_spec, latent_dist, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size_trans); outputs = self.trans(inputs)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             util.net_build(self.trans, self.initializer)
 
@@ -462,17 +182,17 @@ class GeneralAI(tf.keras.Model):
     def env_reset(self, dummy):
         obs, reward, done = self.env.reset(), 0.0, False
         if self.env_render: self.env.render()
-        if hasattr(self.env,'np_struc'): rtn = util.gym_struc_to_feat(obs)
-        else: rtn = util.gym_space_to_feat(obs, self.env.observation_space)
+        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
+        else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool)]
         return rtn
     def env_step(self, *args): # args = tuple of ndarrays
-        if hasattr(self.env,'np_struc'): action = util.gym_out_to_struc(list(args), self.env.action_dtype)
-        else: action = util.gym_out_to_space(args, self.env.action_space, [0])
+        if hasattr(self.env,'np_struc'): action = gym_util.out_to_struc(list(args), self.env.action_dtype)
+        else: action = gym_util.out_to_space(args, self.env.action_space, [0])
         obs, reward, done, _ = self.env.step(action)
         if self.env_render: self.env.render()
-        if hasattr(self.env,'np_struc'): rtn = util.gym_struc_to_feat(obs)
-        else: rtn = util.gym_space_to_feat(obs, self.env.observation_space)
+        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
+        else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool)]
         return rtn
 
@@ -488,74 +208,6 @@ class GeneralAI(tf.keras.Model):
     def reset_states(self, use_img=False):
         for net in self.layers:
             if hasattr(net, 'reset_states'): net.reset_states(use_img=use_img)
-
-
-    def loss_diff(self, out, targets=None): # deterministic difference
-        if isinstance(out, list):
-            loss = self.compute_zero
-            for i in range(len(out)):
-                o, t = tf.cast(out[i], self.compute_dtype), tf.cast(targets[i], self.compute_dtype)
-                loss = loss + tf.math.abs(tf.math.subtract(o, t)) # MAE
-                # loss = loss + tf.math.square(tf.math.subtract(o, t)) # MSE
-        else:
-            out = tf.cast(out, self.compute_dtype)
-            if targets is None: diff = out
-            else:
-                targets = tf.cast(targets, self.compute_dtype)
-                diff = tf.math.subtract(out, targets)
-            # loss = tf.where(tf.math.less(diff, self.compute_zero), tf.math.negative(diff), diff) # MAE
-            loss = tf.math.abs(diff) # MAE
-            # loss = tf.math.square(diff) # MSE
-        loss = tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss)))
-        return loss
-
-    def loss_likelihood(self, dist, targets, probs=False):
-        if isinstance(dist, list):
-            loss = self.compute_zero
-            for i in range(len(dist)):
-                t = tf.cast(targets[i], dist[i].dtype)
-                if probs: loss = loss - tf.math.exp(dist[i].log_prob(t))
-                else: loss = loss - dist[i].log_prob(t)
-        else:
-            targets = tf.cast(targets, dist.dtype)
-            if probs: loss = -tf.math.exp(dist.log_prob(targets))
-            else: loss = -dist.log_prob(targets)
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('NaN/Inf likelihood loss:', loss)
-        return loss
-
-    def loss_bound(self, dist, targets):
-        loss = -self.loss_likelihood(dist, targets)
-        # if not self.categorical: loss = loss - self.dist_prior.log_prob(targets)
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('NaN/Inf bound loss:', loss)
-        return loss
-
-    def loss_entropy(self, dist): # "Soft Actor Critic" = try increase entropy
-        loss = self.compute_zero
-        if self.entropy_contrib > 0.0:
-            if isinstance(dist, list):
-                for i in range(len(dist)): loss = loss + dist[i].entropy()
-            else: loss = dist.entropy()
-            loss = -loss * self.entropy_contrib
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
-        return loss
-
-    def loss_PG(self, dist, targets, returns, values=None, returns_target=None): # policy gradient, actor/critic
-        returns = tf.squeeze(tf.cast(returns, self.compute_dtype), axis=-1)
-        loss_lik = self.loss_likelihood(dist, targets, probs=False)
-        # loss_lik = loss_lik -self.float_maxroot # -self.float_maxroot, +self.float_log_min_prob, -np.e*17.0, -154.0, -308.0
-        if returns_target is not None: returns = tf.squeeze(tf.cast(returns_target, self.compute_dtype), axis=-1) - returns
-        if values is not None: returns = returns - tf.squeeze(tf.cast(values, self.compute_dtype), axis=-1)
-        loss = loss_lik * returns # / self.float_maxroot
-
-        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
-        if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
-        return loss
 
 
 
@@ -630,7 +282,7 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_PG(action_dist, action, returns)
+                loss_action = util.loss_PG(action_dist, action, returns, compute_dtype=self.compute_dtype)
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
@@ -661,19 +313,21 @@ class GeneralAI(tf.keras.Model):
             learn_rate = self.action.optimizer['action'].learning_rate
             with tf.GradientTape() as tape_meta:
                 meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
-                loss_meta = self.loss_PG(meta_dist, tf.reshape(learn_rate,(1,1)), tf.reshape(rewards_total,(1,1)))
+                loss_meta = util.loss_PG(meta_dist, tf.reshape(learn_rate,(1,1)), tf.reshape(rewards_total,(1,1)), compute_dtype=self.compute_dtype)
             gradients = tape_meta.gradient(loss_meta, self.meta.trainable_variables)
             self.meta.optimizer['meta'].apply_gradients(zip(gradients, self.meta.trainable_variables))
 
             meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
             learn_rate = meta_dist.sample()
             self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0], False)
+            # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
 
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
             util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); ma_loss, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
             if self.action.stats_loss['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
                 util.net_reset(self.rep); util.net_reset(self.action)
+                # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
                 tf.print("net_reset (rep,action) at:", episode)
 
 
@@ -767,11 +421,11 @@ class GeneralAI(tf.keras.Model):
             with tape_value:
                 if self.value_cont:
                     value_logits = self.value(inputs_step); value_dist = self.value.dist[0](value_logits[0])
-                    loss_return = self.loss_likelihood(value_dist, returns)
+                    loss_return = util.loss_likelihood(value_dist, returns, compute_dtype=self.compute_dtype)
                     values = value_dist.sample()
                 else:
                     values = self.value(inputs_step)
-                    loss_return = self.loss_diff(values, returns)
+                    loss_return = util.loss_diff(values, returns, compute_dtype=self.compute_dtype)
             gradients = tape_value.gradient(loss_return, self.rep.trainable_variables + self.value.trainable_variables)
             self.value.optimizer['value'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
             loss_returns = loss_returns.write(step, loss_return)
@@ -780,9 +434,9 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_PG(action_dist, action, returns, values)
-                # loss_action = self.loss_PG(action_dist, action, returns, values, returns_target=return_goal) # lPGt
-                # loss_action = self.loss_PG(action_dist, action, loss_return) # lPGv
+                loss_action = util.loss_PG(action_dist, action, returns, values, compute_dtype=self.compute_dtype)
+                # loss_action = util.loss_PG(action_dist, action, returns, values, returns_target=return_goal, compute_dtype=self.compute_dtype) # lPGt
+                # loss_action = util.loss_PG(action_dist, action, loss_return, compute_dtype=self.compute_dtype) # lPGv
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
@@ -901,7 +555,7 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = self.loss_likelihood(action_dist, targets)
+                loss_action = util.loss_likelihood(action_dist, targets, compute_dtype=self.compute_dtype)
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
@@ -935,8 +589,8 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 100
-learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
+max_episodes = 10
+learn_rate = 2e-5 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
 value_cont = True
