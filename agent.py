@@ -703,7 +703,7 @@ if __name__ == '__main__':
                 for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
-        name = "{}-{}-a{}-{}{}".format(name, machine, device, time.strftime("%y-%m-%d-%H-%M-%S"), extra)
+        name = "{}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
         total_steps = int(np.sum(metrics_loss['1steps']['steps+']))
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)

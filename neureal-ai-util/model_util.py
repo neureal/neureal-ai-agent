@@ -341,9 +341,11 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         output_shape = tf.concat([batch_size, params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
         
-        scale_params = tf.math.abs(scale_params)
-        # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
-        scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        # scale_params = tf.math.abs(scale_params)
+        # # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
+        # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        scale_params = tf.math.softplus(scale_params)
+        scale_params = scale_params + eps
         scale_params = tf.reshape(scale_params, output_shape)
 
         dist_mixture = tfp.distributions.Categorical(logits=mixture_params)
