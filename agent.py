@@ -95,12 +95,12 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 2: latent_spec.update({'event_shape':(latent_size,), 'num_components':int(latent_size/16)}) # continuous
         self.latent_spec = latent_spec
 
-        inputs = {'obs':tf.constant([[0,0,0]],compute_dtype)}
-        opt_spec = [{'name':'meta', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]
-        self.meta_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-        self.meta = nets.GenNet('M', inputs, opt_spec, self.meta_spec, False, latent_size, net_blocks=2, net_attn=False, net_lstm=False, net_attn_io=False, force_det_out=False); outputs = self.meta(inputs)
-        self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
-        util.net_build(self.meta, self.initializer)
+        # inputs = {'obs':tf.constant([[0,0,0]],compute_dtype)}
+        # opt_spec = [{'name':'meta', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]
+        # self.meta_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+        # self.meta = nets.GenNet('M', inputs, opt_spec, self.meta_spec, False, latent_size, net_blocks=2, net_attn=False, net_lstm=False, net_attn_io=False, force_det_out=False); outputs = self.meta(inputs)
+        # self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
+        # util.net_build(self.meta, self.initializer)
 
         inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step_size':1}
         if arch in ('PG','AC','TRANS',):
@@ -142,8 +142,8 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
             # metrics_loss['1extras3'] = {'-snr':np.float64}
             metrics_loss['1extras4'] = {'-std':np.float64}
-            metrics_loss['1extra3'] = {'learn_rate':np.float64}
-            metrics_loss['1extra4'] = {'loss_meta':np.float64}
+            # metrics_loss['1extra3'] = {'learn_rate':np.float64}
+            # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if arch == 'AC':
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
             metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
@@ -302,41 +302,41 @@ class GeneralAI(tf.keras.Model):
 
             # TODO how unlimited length episodes without sacrificing returns signal?
             self.reset_states(); outputs, inputs = self.PG_actor(inputs)
-            # util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
-            rewards_total = outputs['returns'][0][0]
-            util.stats_update(self.action.stats_rwd, rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
+            util.stats_update(self.action.stats_rwd, tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
+            # rewards_total = outputs['returns'][0][0]
+            # util.stats_update(self.action.stats_rwd, rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.action.stats_rwd, self.float64_eps, tf.float64)
 
-            _, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
-            obs = [self.action.stats_loss['iter'].value(), tf.cast(ma,self.compute_dtype), std]
-            inputs_meta = {'obs':tf.expand_dims(tf.stack(obs,0),0)}
+            # _, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
+            # obs = [self.action.stats_loss['iter'].value(), tf.cast(ma,self.compute_dtype), std]
+            # inputs_meta = {'obs':tf.expand_dims(tf.stack(obs,0),0)}
 
-            learn_rate = self.action.optimizer['action'].learning_rate
-            with tf.GradientTape() as tape_meta:
-                meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
-                loss_meta = util.loss_PG(meta_dist, tf.reshape(learn_rate,(1,1)), tf.reshape(rewards_total,(1,1)), compute_dtype=self.compute_dtype)
-            gradients = tape_meta.gradient(loss_meta, self.meta.trainable_variables)
-            self.meta.optimizer['meta'].apply_gradients(zip(gradients, self.meta.trainable_variables))
+            # learn_rate = self.action.optimizer['action'].learning_rate
+            # with tf.GradientTape() as tape_meta:
+            #     meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
+            #     loss_meta = util.loss_PG(meta_dist, tf.reshape(learn_rate,(1,1)), tf.reshape(rewards_total,(1,1)), compute_dtype=self.compute_dtype)
+            # gradients = tape_meta.gradient(loss_meta, self.meta.trainable_variables)
+            # self.meta.optimizer['meta'].apply_gradients(zip(gradients, self.meta.trainable_variables))
 
-            meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
-            learn_rate = meta_dist.sample()
-            self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0], False)
-            # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
+            # meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
+            # learn_rate = meta_dist.sample()
+            # self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0], False)
+            # # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
 
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
             util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); ma_loss, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
-            if self.action.stats_loss['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
-                util.net_reset(self.rep); util.net_reset(self.action)
-                # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
-                tf.print("net_reset (rep,action) at:", episode)
+            # if self.action.stats_loss['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
+            #     util.net_reset(self.rep); util.net_reset(self.action)
+            #     # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
+            #     tf.print("net_reset (rep,action) at:", episode)
 
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 ma_loss, tf.math.reduce_mean(loss['action']), # tf.math.reduce_mean(outputs['returns']),
                 std, # ma, ema, snr, std
-                self.action.optimizer['action'].learning_rate,
-                loss_meta[0],
+                # self.action.optimizer['action'].learning_rate,
+                # loss_meta[0],
             ]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
                 tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
@@ -726,7 +726,7 @@ if __name__ == '__main__':
                 # plt.plot(xrng, bottleneck.move_mean(metric, window=max_episodes//10+2, min_count=1), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 if metric_name.startswith('-'): plt.plot(xrng, metric, alpha=1.0, label=metric_name)
                 else: plt.plot(xrng, util.ewma(metric, window=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
-                plt.ylabel('value'); plt.xlabel('episode'); plt.legend(loc='upper left'); col+=1
+                plt.ylabel('value'); plt.legend(loc='upper left'); col+=1
             if combine: spg.set_ylim(np.min(m_min), np.max(m_max))
             if i == 0: plt.title(title)
             i+=rows

@@ -180,7 +180,12 @@ def loss_PG(dist, targets, returns, values=None, returns_target=None, compute_dt
     returns = tf.squeeze(tf.cast(returns, compute_dtype), axis=-1)
     loss_lik = loss_likelihood(dist, targets, probs=False, compute_dtype=compute_dtype)
     # loss_lik = loss_lik -float_maxroot # -float_maxroot, +float_log_min_prob, -np.e*17.0, -154.0, -308.0
-    if returns_target is not None: returns = tf.squeeze(tf.cast(returns_target, compute_dtype), axis=-1) - returns
+    if returns_target is not None:
+        returns_target = tf.squeeze(tf.cast(returns_target, compute_dtype), axis=-1)
+        returns = returns_target - returns # _lRt
+        # returns = returns - returns_target # _lRtn
+        # returns = tf.abs(returns_target - returns) / returns_target # _lRtan
+        # returns = tf.abs(returns_target - returns) # _lRta
     if values is not None: returns = returns - tf.squeeze(tf.cast(values, compute_dtype), axis=-1)
     loss = loss_lik * returns # / float_maxroot
 
