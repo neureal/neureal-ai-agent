@@ -1,9 +1,8 @@
-from collections import OrderedDict
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 import tensorflow_addons as tfa
-import gym, numba
+import numba
 
 # TODO put this in seperate repo
 # TODO test to make sure looping constructs are working like I think, ie python loop only happens once on first trace and all refs are correct on subsequent runs
@@ -69,9 +68,6 @@ def stats_get(stats_spec, float_eps, dtype):
     if ema < float_eps: ema = float_eps
 
     snr = tf.math.abs(ma) / ema
-    # ma = tf.math.abs(ma)
-    # if ma < float_eps: ma = float_eps
-    # snr =  ema / ma # -snr2
     # std = ema - tf.math.abs(ma)
     std = ema - ma # -std2
 
@@ -122,6 +118,80 @@ def optimizer_build(optimizer, variables):
     optimizer.apply_gradients(zip(variables, variables))
     for w in optimizer.weights: w.assign(tf.zeros_like(w))
     return optimizer.weights
+
+
+
+def loss_diff(out, targets=None, compute_dtype=tf.float64): # deterministic difference
+    if isinstance(out, list):
+        loss = tf.constant(0, compute_dtype)
+        for i in range(len(out)):
+            o, t = tf.cast(out[i], compute_dtype), tf.cast(targets[i], compute_dtype)
+            loss = loss + tf.math.abs(tf.math.subtract(o, t)) # MAE
+            # loss = loss + tf.math.square(tf.math.subtract(o, t)) # MSE
+    else:
+        out = tf.cast(out, compute_dtype)
+        if targets is None: diff = out
+        else:
+            targets = tf.cast(targets, compute_dtype)
+            diff = tf.math.subtract(out, targets)
+        # loss = tf.where(tf.math.less(diff, compute_zero), tf.math.negative(diff), diff) # MAE
+        loss = tf.math.abs(diff) # MAE
+        # loss = tf.math.square(diff) # MSE
+    loss = tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss)))
+    return loss
+
+def loss_likelihood(dist, targets, probs=False, compute_dtype=tf.float64):
+    if isinstance(dist, list):
+        loss = tf.constant(0, compute_dtype)
+        for i in range(len(dist)):
+            t = tf.cast(targets[i], dist[i].dtype)
+            if probs: loss = loss - tf.math.exp(dist[i].log_prob(t))
+            else: loss = loss - dist[i].log_prob(t)
+    else:
+        targets = tf.cast(targets, dist.dtype)
+        if probs: loss = -tf.math.exp(dist.log_prob(targets))
+        else: loss = -dist.log_prob(targets)
+
+    isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+    if isinfnan > 0: tf.print('NaN/Inf likelihood loss:', loss)
+    return loss
+
+def loss_bound(dist, targets, compute_dtype=tf.float64):
+    loss = -loss_likelihood(dist, targets, compute_dtype=compute_dtype)
+    # if not categorical: loss = loss - dist_prior.log_prob(targets)
+
+    isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+    if isinfnan > 0: tf.print('NaN/Inf bound loss:', loss)
+    return loss
+
+def loss_entropy(dist, entropy_contrib, compute_dtype=tf.float64): # "Soft Actor Critic" = try increase entropy
+    loss = tf.constant(0, compute_dtype)
+    if entropy_contrib > 0.0:
+        if isinstance(dist, list):
+            for i in range(len(dist)): loss = loss + dist[i].entropy()
+        else: loss = dist.entropy()
+        loss = -loss * entropy_contrib
+
+    isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+    if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
+    return loss
+
+def loss_PG(dist, targets, returns, values=None, returns_target=None, compute_dtype=tf.float64): # policy gradient, actor/critic
+    returns = tf.squeeze(tf.cast(returns, compute_dtype), axis=-1)
+    loss_lik = loss_likelihood(dist, targets, probs=False, compute_dtype=compute_dtype)
+    # loss_lik = loss_lik -float_maxroot # -float_maxroot, +float_log_min_prob, -np.e*17.0, -154.0, -308.0
+    if returns_target is not None:
+        returns_target = tf.squeeze(tf.cast(returns_target, compute_dtype), axis=-1)
+        returns = returns_target - returns # _lRt
+        # returns = returns - returns_target # _lRtn
+        # returns = tf.abs(returns_target - returns) / returns_target # _lRtan
+        # returns = tf.abs(returns_target - returns) # _lRta
+    if values is not None: returns = returns - tf.squeeze(tf.cast(values, compute_dtype), axis=-1)
+    loss = loss_lik * returns # / float_maxroot
+
+    isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
+    if isinfnan > 0: tf.print('NaN/Inf PG loss:', loss)
+    return loss
 
 
 
@@ -276,9 +346,11 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         output_shape = tf.concat([batch_size, params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
         
-        scale_params = tf.math.abs(scale_params)
-        # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
-        scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        # scale_params = tf.math.abs(scale_params)
+        # # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
+        # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
+        scale_params = tf.math.softplus(scale_params)
+        scale_params = scale_params + eps
         scale_params = tf.reshape(scale_params, output_shape)
 
         dist_mixture = tfp.distributions.Categorical(logits=mixture_params)
@@ -460,111 +532,3 @@ class MLPBlock(tf.keras.layers.Layer):
         out = self._layer_dense_logits(out)
         if self._residual: out = input + out * self._residual_amt # Rezero
         return out
-
-
-
-
-def gym_get_space_zero(space):
-    if isinstance(space, gym.spaces.Discrete): zero = np.asarray(0, space.dtype)
-    elif isinstance(space, gym.spaces.Box): zero = np.zeros(space.shape, space.dtype)
-    elif isinstance(space, gym.spaces.Tuple):
-        zero = [None]*len(space.spaces)
-        for i,s in enumerate(space.spaces): zero[i] = gym_get_space_zero(s)
-        zero = tuple(zero)
-    elif isinstance(space, gym.spaces.Dict):
-        zero = OrderedDict()
-        for k,s in space.spaces.items(): zero[k] = gym_get_space_zero(s)
-    return zero
-
-# TODO add different kinds of net_type? 0 = Dense, 1 = 2 layer Dense, 2 = Conv2D, etc
-def gym_get_spec(space, compute_dtype='float64', force_cont=False):
-    if isinstance(space, gym.spaces.Discrete):
-        dtype = tf.dtypes.as_dtype(space.dtype)
-        dtype_out = compute_dtype if force_cont else 'int32'
-        dtype_out = tf.dtypes.as_dtype(dtype_out)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1))}]
-        zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
-    elif isinstance(space, gym.spaces.Box):
-        dtype = tf.dtypes.as_dtype(space.dtype)
-        dtype_out = tf.dtypes.as_dtype(compute_dtype)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':int(np.prod(space.shape).item()), 'event_shape':space.shape, 'event_size':int(np.prod(space.shape[:-1]).item()), 'channels':space.shape[-1], 'step_shape':tf.TensorShape([1]+list(space.shape))}]
-        zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
-    elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
-        spec, zero, zero_out = [], [], []
-        loop = space.spaces.items() if isinstance(space, gym.spaces.Dict) else enumerate(space.spaces)
-        for k,s in loop:
-            spec_sub, zero_sub, zero_out_sub = gym_get_spec(s, compute_dtype, force_cont)
-            spec += spec_sub; zero += zero_sub; zero_out += zero_out_sub
-    return spec, zero, zero_out
-
-
-# TODO test tf.nest.flatten(data)
-def gym_space_to_feat(data, space):
-    feat = []
-    if isinstance(data, tuple):
-        for i,v in enumerate(data): feat += gym_space_to_feat(v, space[i])
-    elif isinstance(data, dict):
-        for k,v in data.items(): feat += gym_space_to_feat(v, space[k])
-    elif isinstance(data, np.ndarray): feat = [np.expand_dims(data,0)]
-    else: feat = [np.asarray([[data]], space.dtype)]
-    return feat
-
-# TODO test tf.nest.pack_sequence_as(out, space)
-def gym_out_to_space(out, space, idx):
-    if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
-        data = out[idx[0]]
-        if isinstance(space, gym.spaces.Box): data = np.reshape(data, space.shape)
-        if isinstance(space, gym.spaces.Discrete): data = data.item() # numpy.int64 is coming in here in graph mode
-        idx[0] += 1
-    elif isinstance(space, gym.spaces.Tuple):
-        data = [None]*len(space.spaces)
-        for i,s in enumerate(space.spaces): data[i] = gym_out_to_space(out, s, idx)
-        data = tuple(data)
-    elif isinstance(space, gym.spaces.Dict):
-        data = OrderedDict()
-        for k,s in space.spaces.items(): data[k] = gym_out_to_space(out, s, idx)
-    return data
-
-
-def gym_struc_to_feat(data):
-    if data.dtype.names is None:
-        if len(data.shape) == 1: data = np.expand_dims(data,-1)
-        feat = [data]
-    else:
-        feat = []
-        for k in data.dtype.names: feat += gym_struc_to_feat(data[k])
-    return feat
-
-def gym_out_to_struc(out, dtype):
-    for i in range(len(out)): out[i] = np.frombuffer(out[i], dtype=np.uint8)
-    out = np.concatenate(out)
-    out = np.frombuffer(out, dtype=dtype)
-    return out
-
-
-def gym_space_to_bytes(data, space):
-    byts = []
-    if isinstance(data, tuple):
-        for i,v in enumerate(data): byts += gym_space_to_bytes(v, space[i])
-    elif isinstance(data, dict):
-        for k,v in data.items(): byts += gym_space_to_bytes(v, space[k])
-    else:
-        if not isinstance(data, np.ndarray): data = np.asarray(data, space.dtype)
-        byts = [np.frombuffer(data, dtype=np.uint8)]
-    return byts
-
-def gym_bytes_to_space(byts, space, idxs, idx):
-    if isinstance(space, (gym.spaces.Discrete, gym.spaces.Box)):
-        data = byts[idxs[idx[0]]:idxs[idx[0]+1]]
-        if space.dtype != np.uint8: data = np.frombuffer(data, dtype=space.dtype)
-        if isinstance(space, gym.spaces.Box): data = np.reshape(data, space.shape)
-        if isinstance(space, gym.spaces.Discrete): data = data.item()
-        idx[0] += 1
-    elif isinstance(space, gym.spaces.Tuple):
-        data = [None]*len(space.spaces)
-        for i,s in enumerate(space.spaces): data[i] = gym_bytes_to_space(byts, s, idxs, idx)
-        data = tuple(data)
-    elif isinstance(space, gym.spaces.Dict):
-        data = OrderedDict()
-        for k,s in space.spaces.items(): data[k] = gym_bytes_to_space(byts, s, idxs, idx)
-    return data

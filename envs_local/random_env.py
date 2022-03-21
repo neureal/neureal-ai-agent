@@ -2,7 +2,7 @@ import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 import gym
-import model_util as util
+import gym_util
 
 # TODO auto make the dtype struc from space for numpy dtype compatability with gym, need to include space it has more info like low,high
 # def gym_space_to_dtype(space):
@@ -16,8 +16,8 @@ class RandomEnv(gym.Env):
         self.action_space = self._action_space()
         self.reward_range = (-np.inf,+np.inf)
         # self.obs_zero = gym.spaces.flatten(self.observation_space, self.observation_space.sample())
-        # self.action_spec, self.action_zero, self.action_zero_out = util.gym_get_spec(self.action_space)
-        # self.obs_spec, self.obs_zero, self.obs_zero_out = util.gym_get_spec(self.observation_space)
+        # self.action_spec, self.action_zero, self.action_zero_out = gym_util.get_spec(self.action_space)
+        # self.obs_spec, self.obs_zero, self.obs_zero_out = gym_util.get_spec(self.observation_space)
         # obs_dtype = gym_space_to_dtype(self.observation_space)
         # action_smpl = self.action_space.sample()
         # obs_smpl = self.observation_space.sample()
@@ -30,8 +30,8 @@ class RandomEnv(gym.Env):
             action_zero = np.zeros((1,), self.action_dtype)
             obs_zero = np.zeros((1,), self.obs_dtype)
         else:
-            action_zero = util.gym_get_space_zero(self.action_space)
-            obs_zero = util.gym_get_space_zero(self.observation_space)
+            action_zero = gym_util.get_space_zero(self.action_space)
+            obs_zero = gym_util.get_space_zero(self.observation_space)
         self.action_zero, self.obs_zero = action_zero, obs_zero
 
         self.state = self.action_zero, self.obs_zero, np.float64(0.0), False, {}
@@ -214,25 +214,25 @@ if __name__ == '__main__':
     obs = env.reset()
     # env.render()
     if hasattr(env,'np_struc'):
-        # test_spec, test_obs_zero, test_obs_zero_out = util.gym_get_spec(env.observation_space, compute_dtype='float32')
+        # test_spec, test_obs_zero, test_obs_zero_out = gym_util.get_spec(env.observation_space, compute_dtype='float32')
         # test_obs = gym_struc_to_feat(obs)
 
         action = np.random.randint(32, size=env.action_dtype.itemsize, dtype=np.uint8)
         action = np.frombuffer(action, dtype=env.action_dtype)
         # action = np.zeros((2,), env.action_dtype)
         # print("{}".format(action))
-        test_out = util.gym_struc_to_feat(action)
+        test_out = gym_util.struc_to_feat(action)
         # print("{}".format(test_out))
-        test_action = util.gym_out_to_struc(test_out, env.action_dtype)
+        test_action = gym_util.out_to_struc(test_out, env.action_dtype)
         # print("{}".format(test_action))
     else:
-        test_spec, test_obs_zero, test_obs_zero_out = util.gym_get_spec(env.observation_space, compute_dtype='float32')
-        test_obs = util.gym_space_to_feat(obs, env.observation_space)
+        test_spec, test_obs_zero, test_obs_zero_out = gym_util.get_spec(env.observation_space, compute_dtype='float32')
+        test_obs = gym_util.space_to_feat(obs, env.observation_space)
 
         action = env.action_space.sample()
         # test_out = [np.asarray([2],np.int64), np.asarray([3],np.int64)]
-        test_out = util.gym_space_to_feat(action, env.action_space)
-        test_action = util.gym_out_to_space(test_out, env.action_space, [0])
+        test_out = gym_util.space_to_feat(action, env.action_space)
+        test_action = gym_util.out_to_space(test_out, env.action_space, [0])
 
     obs, reward, done, info = env.step(action)
     # env.render()

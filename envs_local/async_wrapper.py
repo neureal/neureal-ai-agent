@@ -5,7 +5,7 @@ import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 import gym
-import model_util as util
+import gym_util
 
 
 class AsyncWrapperEnv(gym.Env):
@@ -45,11 +45,11 @@ class AsyncWrapperEnv(gym.Env):
             self._obs_idx, self._done_idx = -(reward_size + done_size), -done_size
             action_size, obs_size = env.action_dtype.itemsize, self.obs_dtype.itemsize + reward_size + done_size
         else:
-            idx = 0; action_idxs = util.gym_space_to_bytes(env.action_space.sample(), env.action_space)
+            idx = 0; action_idxs = gym_util.space_to_bytes(env.action_space.sample(), env.action_space)
             for i in range(len(action_idxs)): idx += action_idxs[i].size; action_idxs[i] = idx
             action_idxs = [0] + action_idxs
 
-            idx = 0; obs_idxs = util.gym_space_to_bytes(self.observation_space.sample(), self.observation_space)
+            idx = 0; obs_idxs = gym_util.space_to_bytes(self.observation_space.sample(), self.observation_space)
             obs_idxs += reward_done_zero
             for i in range(len(obs_idxs)): idx += obs_idxs[i].size; obs_idxs[i] = idx
             obs_idxs = [0] + obs_idxs
@@ -72,7 +72,7 @@ class AsyncWrapperEnv(gym.Env):
             else:
                 obs = OrderedDict({'timestamp': timestamp, 'origspace': obs})
         if self._env_np_struc: obs = [np.frombuffer(obs, dtype=np.uint8)]
-        else: obs = util.gym_space_to_bytes(obs, self.observation_space)
+        else: obs = gym_util.space_to_bytes(obs, self.observation_space)
         obs += reward_done
         obs = np.concatenate(obs)
         return obs
@@ -96,7 +96,7 @@ class AsyncWrapperEnv(gym.Env):
                 with self._action_shared.get_lock():
                     if not np.array_equal(action_view, action): np.copyto(action, action_view, casting='no')
                 if self._env_np_struc: action_space = np.frombuffer(action, dtype=self.env.action_dtype)
-                else: action_space = util.gym_bytes_to_space(action, self.env.action_space, self._action_idxs, [0])
+                else: action_space = gym_util.bytes_to_space(action, self.env.action_space, self._action_idxs, [0])
 
                 # print("proc action", action_space)
                 obs, reward, done, _ = self.env.step(action_space)
@@ -133,7 +133,7 @@ class AsyncWrapperEnv(gym.Env):
 
         with self._obs_shared.get_lock(): np.copyto(obs, obs_view, casting='no')
         if self._env_np_struc: obs = np.frombuffer(obs[:self._obs_idx], dtype=self.obs_dtype)
-        else: obs = util.gym_bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
+        else: obs = gym_util.bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         return obs
 
     def step(self, action):
@@ -148,7 +148,7 @@ class AsyncWrapperEnv(gym.Env):
             action = action['origspace']
         if self._env_np_struc: action = np.frombuffer(action, dtype=np.uint8)
         else:
-            action = util.gym_space_to_bytes(action, self.env.action_space)
+            action = gym_util.space_to_bytes(action, self.env.action_space)
             action = np.concatenate(action)
         with self._action_shared.get_lock():
             if not np.array_equal(action_view, action): np.copyto(action_view, action, casting='no')
@@ -163,7 +163,7 @@ class AsyncWrapperEnv(gym.Env):
         else:
             reward = obs[self._obs_idxs[-3]:self._obs_idxs[-2]]
             done = obs[self._obs_idxs[-2]:self._obs_idxs[-1]]
-            obs = util.gym_bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
+            obs = gym_util.bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         reward = np.frombuffer(reward, dtype=np.float64).item()
         done = np.frombuffer(done, dtype=np.bool).item()
         return obs, reward, done, {}
