@@ -96,7 +96,7 @@ class GeneralAI(tf.keras.Model):
         self.latent_spec = latent_spec
 
         # inputs = {'obs':tf.constant([[0,0,0]],compute_dtype)}
-        # opt_spec = [{'name':'meta', 'type':'ar', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]
+        # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]
         # self.meta_spec = [{'net_type':0, 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
         # self.meta = nets.GenNet('M', inputs, opt_spec, self.meta_spec, False, latent_size, net_blocks=2, net_attn=False, net_lstm=False, net_attn_io=False, force_det_out=False); outputs = self.meta(inputs)
         # self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
@@ -110,13 +110,13 @@ class GeneralAI(tf.keras.Model):
             inputs['obs'] = self.latent_zero
             util.net_build(self.rep, self.initializer)
 
-        opt_spec = [{'name':'action', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
+        opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
         self.action = nets.GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.action.trainable_variables)
         util.net_build(self.action, self.initializer)
 
         if arch in ('AC',):
-            opt_spec = [{'name':'value', 'type':'ar', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]
+            opt_spec = [{'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5,tf.float64), 'float_eps':self.float_eps}]
             if value_cont:
                 value_spec = [{'net_type':0, 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'is_discrete':False, 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
                 self.value = nets.GenNet('VN', inputs, opt_spec, value_spec, False, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.value(inputs)

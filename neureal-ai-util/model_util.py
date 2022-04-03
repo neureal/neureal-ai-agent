@@ -94,6 +94,7 @@ def net_copy(source, dest):
     for i in range(len(dest.weights)): dest.weights[i].assign(source.weights[i].value())
 
 def optimizer(net_name, opt_spec):
+    beta_1, beta_2, decay = tf.constant(0.9,tf.float64), tf.constant(0.999,tf.float64), 0 # tf.constant(0.0,tf.float64)
     typ, schedule_type, learn_rate, float_eps = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps']
     maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64)
     def schedule_r(): return tf.random.uniform((), dtype=tf.float64, maxval=maxval, minval=minval)
@@ -104,7 +105,8 @@ def optimizer(net_name, opt_spec):
     if schedule_type == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
     if schedule_type == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
     if typ == 's': return tf.keras.optimizers.SGD(learning_rate=learn_rate, name='{}/optimizer_{}/SGD'.format(net_name, opt_spec['name']))
-    if typ == 'a': return tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+    if typ == 'a': return tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+    if typ == 'am': return tf.keras.optimizers.Adamax(beta_1=beta_1, beta_2=beta_2, decay=decay, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
     if typ == 'aw': return tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/AdamW'.format(net_name, opt_spec['name']))
     if typ == 'ar': return tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/RectifiedAdam'.format(net_name, opt_spec['name']))
     if typ == 'ab': return tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True, name='{}/optimizer_{}/AdaBelief'.format(net_name, opt_spec['name']))
@@ -349,7 +351,9 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         # scale_params = tf.math.abs(scale_params)
         # # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
         # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
-        scale_params = tf.math.softplus(scale_params)
+        sharpness = tf.constant(1e-2, scale_params.dtype)
+        scale_params = tf.math.softplus(scale_params*sharpness)/sharpness
+        # scale_params = tf.math.softplus(scale_params)
         scale_params = scale_params + eps
         scale_params = tf.reshape(scale_params, output_shape)
 
