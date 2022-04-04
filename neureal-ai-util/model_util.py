@@ -94,7 +94,7 @@ def net_copy(source, dest):
     for i in range(len(dest.weights)): dest.weights[i].assign(source.weights[i].value())
 
 def optimizer(net_name, opt_spec):
-    beta_1, beta_2, decay = tf.constant(0.9,tf.float64), tf.constant(0.999,tf.float64), 0 # tf.constant(0.0,tf.float64)
+    beta_1, beta_2, decay = tf.constant(0.99,tf.float64), tf.constant(0.99,tf.float64), 0 # tf.constant(0.0,tf.float64)
     typ, schedule_type, learn_rate, float_eps = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps']
     maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64)
     def schedule_r(): return tf.random.uniform((), dtype=tf.float64, maxval=maxval, minval=minval)
@@ -121,6 +121,23 @@ def optimizer_build(optimizer, variables):
     for w in optimizer.weights: w.assign(tf.zeros_like(w))
     return optimizer.weights
 
+class LearnRateThresh():
+    def __init__(self, thresh, thresh_rates):
+        # thresh = [0.1,2.0]
+        # thresh_rate = [71,51,31] # 2e12 107, 2e10 89, 2e8 71, 2e6 53, 2e5 44, 2e4 35, 2e3 26, 2e2 17
+        self.thresh, self.thresh_rates = tf.constant(thresh,tf.float64), tf.constant(thresh_rates,tf.int32)
+        float64_eps = tf.constant(tf.experimental.numpy.finfo(tf.float64).eps,tf.float64)
+        x = tf.constant([9,8,7,6,5,4,3,2,1], tf.float64)
+        # x = tf.constant([1], tf.float64)
+        d = int(np.ceil(-np.log10(float64_eps)))
+        learn_rate_cats = tf.math.pow(10.0, -tf.range(tf.constant(1,tf.float64), d+1))
+        x, y = tf.meshgrid(x, learn_rate_cats)
+        self.learn_rate_cats = tf.concat([tf.constant([1], tf.float64), tf.reshape(x*y,(-1))], 0)
+    def __call__(self, metric):
+        thresh_idx = tf.searchsorted(self.thresh, tf.reshape(tf.cast(metric,tf.float64),(1,)))
+        learn_rate_idx = self.thresh_rates[thresh_idx[0]]
+        learn_rate = self.learn_rate_cats[learn_rate_idx]
+        return learn_rate
 
 
 def loss_diff(out, targets=None, compute_dtype=tf.float64): # deterministic difference
