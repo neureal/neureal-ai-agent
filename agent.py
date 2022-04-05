@@ -114,6 +114,8 @@ class GeneralAI(tf.keras.Model):
         self.action = nets.GenNet('AN', inputs, opt_spec, self.action_spec, force_cont_action, latent_size, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=memory_size, max_steps=max_steps, force_det_out=False); outputs = self.action(inputs)
         self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.action.trainable_variables)
         util.net_build(self.action, self.initializer)
+        thresh = [7e-3,0.1]; thresh_rates = [64,54,44] # 2e-12 107, 2e-10 89, 2e-8 71, 2e-6 53, 2e-5 44, 2e-4 35, 2e-3 26, 2e-2 17
+        self.action_get_learn_rate = util.LearnRateThresh(thresh, thresh_rates)
 
         if arch in ('AC',):
             opt_spec = [{'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5,tf.float64), 'float_eps':self.float_eps}]
@@ -140,9 +142,9 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'returns':np.float64}
             # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
-            # metrics_loss['1extras3'] = {'-snr':np.float64}
+            metrics_loss['1extras3'] = {'-snr':np.float64}
             metrics_loss['1extras4'] = {'-std':np.float64}
-            # metrics_loss['1extra3'] = {'learn_rate':np.float64}
+            metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if arch == 'AC':
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
@@ -264,14 +266,18 @@ class GeneralAI(tf.keras.Model):
     def PG_learner_onestep(self, inputs, training=True):
         print("tracing -> GeneralAI PG_learner_onestep")
         loss = {}
+        loss_actions_lik = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
+        inputs_returns = inputs['returns'] / 200.0 # normalize CartPole
+        # inputs_returns = (inputs['returns']  + 1000.0) / 1300.0 # normalize LunarLander
+        inputs_returns = tf.squeeze(tf.cast(inputs_returns, self.compute_dtype), axis=-1)
         for step in tf.range(tf.shape(inputs['dones'])[0]):
             obs = [None]*self.obs_spec_len
             for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
-            returns = inputs['returns'][step:step+1]
+            returns = inputs_returns[step]
 
             inputs_step = {'obs':obs}
             with tf.GradientTape(persistent=True) as tape_action:
@@ -282,17 +288,21 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = util.loss_PG(action_dist, action, returns, compute_dtype=self.compute_dtype)
+                # loss_action = util.loss_PG(action_dist, action, returns, compute_dtype=self.compute_dtype)
+                loss_action_lik = util.loss_likelihood(action_dist, action, compute_dtype=self.compute_dtype)
+                loss_action = loss_action_lik * returns
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
+            loss_actions_lik = loss_actions_lik.write(step, loss_action_lik)
             loss_actions = loss_actions.write(step, loss_action)
 
-        loss['action'] = loss_actions.concat()
+        loss['action_lik'], loss['action'] = loss_actions_lik.concat(), loss_actions.concat()
         return loss
 
     def PG(self):
         print("tracing -> GeneralAI PG")
-        ma, ma_loss, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype)
+        ma, ma_loss, std, loss_meta = tf.constant(0,tf.float64), self.float_maxroot, tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype)
+        ma_loss_lowest = self.float_maxroot
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -322,20 +332,23 @@ class GeneralAI(tf.keras.Model):
             # self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0], False)
             # # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
 
+            self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss)
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
-            util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action']), self.compute_dtype); ma_loss, _, _, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
+            util.stats_update(self.action.stats_loss, tf.math.reduce_mean(loss['action_lik']), self.compute_dtype); ma_loss, ema, snr, std = util.stats_get(self.action.stats_loss, self.float_eps, self.compute_dtype)
+            if ma_loss < ma_loss_lowest: ma_loss_lowest = ma_loss
             # if self.action.stats_loss['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
-            #     util.net_reset(self.rep); util.net_reset(self.action)
-            #     # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
-            #     tf.print("net_reset (rep,action) at:", episode)
+            if snr < 0.5 and std < 0.01 and tf.math.abs(ma_loss) < 1e-3:
+                util.net_reset(self.rep); util.net_reset(self.action)
+                # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
+                tf.print("net_reset (rep,action) at:", episode, ma_loss)
 
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                ma_loss, tf.math.reduce_mean(loss['action']), # tf.math.reduce_mean(outputs['returns']),
-                std, # ma, ema, snr, std
-                # self.action.optimizer['action'].learning_rate,
+                ma_loss, tf.math.reduce_mean(loss['action_lik']), # tf.math.reduce_mean(outputs['returns']),
+                snr, std, # ma, ema, snr, std
+                self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
             ]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
@@ -345,6 +358,7 @@ class GeneralAI(tf.keras.Model):
 
             stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
             episode += 1
+        tf.print("ma_loss_lowest", ma_loss_lowest)
 
 
 
@@ -589,7 +603,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model = False, False
-max_episodes = 10
+max_episodes = 100
 learn_rate = 2e-5 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 entropy_contrib = 0 # 1e-8
 returns_disc = 1.0
@@ -713,15 +727,15 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
         plt.figure(num=name, figsize=(34, 18), tight_layout=True)
-        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.01
+        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.001
         for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
         for loss_group_name, loss_group in metrics_loss.items():
-            rows, col, m_min, m_max, combine = int(loss_group_name[0]), 0, [0]*len(loss_group), [0]*len(loss_group), loss_group_name.endswith('*')
-            if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows, xlim=(0, max_episodes)); plt.grid(axis='y',alpha=0.3)
+            rows, col, m_min, m_max, combine, yscale = int(loss_group_name[0]), 0, [0]*len(loss_group), [0]*len(loss_group), loss_group_name.endswith('*'), ('log' if loss_group_name[1] == '~' else 'linear')
+            if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows, xlim=(0, max_episodes), yscale=yscale); plt.grid(axis='y',alpha=0.3)
             for metric_name, metric in loss_group.items():
                 metric = np.asarray(metric, np.float64); m_min[col], m_max[col] = np.nanquantile(metric, lim), np.nanquantile(metric, 1.0-lim)
-                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col])); plt.grid(axis='y',alpha=0.3)
+                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3)
                 # plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 # plt.plot(xrng, bottleneck.move_mean(metric, window=max_episodes//10+2, min_count=1), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 if metric_name.startswith('-'): plt.plot(xrng, metric, alpha=1.0, label=metric_name)
