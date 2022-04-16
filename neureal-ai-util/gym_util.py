@@ -16,23 +16,24 @@ def get_space_zero(space):
     return zero
 
 # TODO add different kinds of net_type? 0 = Dense, 1 = 2 layer Dense, 2 = Conv2D, etc
-def get_spec(space, compute_dtype='float64', force_cont=False):
+def get_spec(space, space_name='obs', name='', compute_dtype='float64', net_attn_io=False, aio_max_latents=16, mixture_multi=4):
     if isinstance(space, gym.spaces.Discrete):
-        dtype = tf.dtypes.as_dtype(space.dtype)
-        dtype_out = compute_dtype if force_cont else 'int32'
-        dtype_out = tf.dtypes.as_dtype(dtype_out)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out), 'is_discrete':True, 'num_components':space.n, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1))}]
+        dtype, dtype_out = tf.dtypes.as_dtype(space.dtype), tf.dtypes.as_dtype('int32')
+        spec = [{'space_name':space_name, 'name':name, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(0,dtype_out), 'max':tf.constant(space.n-1,dtype_out),
+            'dist_type':'c', 'num_components':space.n, 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]
         zero, zero_out = [tf.constant([[0]], dtype)], [tf.constant([[0]], dtype_out)]
     elif isinstance(space, gym.spaces.Box):
-        dtype = tf.dtypes.as_dtype(space.dtype)
-        dtype_out = tf.dtypes.as_dtype(compute_dtype)
-        spec = [{'net_type':0, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out), 'is_discrete':False, 'num_components':int(np.prod(space.shape).item()), 'event_shape':space.shape, 'event_size':int(np.prod(space.shape[:-1]).item()), 'channels':space.shape[-1], 'step_shape':tf.TensorShape([1]+list(space.shape))}]
+        dtype, dtype_out = tf.dtypes.as_dtype(space.dtype), tf.dtypes.as_dtype(compute_dtype)
+        event_size = int(np.prod(space.shape[:-1]).item())
+        num_latents = 1 if not net_attn_io else aio_max_latents if event_size > aio_max_latents else event_size
+        spec = [{'space_name':space_name, 'name':name, 'dtype':dtype, 'dtype_out':dtype_out, 'min':tf.constant(space.low,dtype_out), 'max':tf.constant(space.high,dtype_out),
+            'dist_type':'mx', 'num_components':int(np.prod(space.shape).item()*mixture_multi), 'event_shape':space.shape, 'event_size':event_size, 'channels':space.shape[-1], 'step_shape':tf.TensorShape([1]+list(space.shape)), 'num_latents':num_latents}]
         zero, zero_out = [tf.zeros([1]+list(space.shape), dtype)], [tf.zeros([1]+list(space.shape), dtype_out)]
     elif isinstance(space, (gym.spaces.Tuple, gym.spaces.Dict)):
         spec, zero, zero_out = [], [], []
         loop = space.spaces.items() if isinstance(space, gym.spaces.Dict) else enumerate(space.spaces)
         for k,s in loop:
-            spec_sub, zero_sub, zero_out_sub = get_spec(s, compute_dtype, force_cont)
+            spec_sub, zero_sub, zero_out_sub = get_spec(s, space_name=space_name, name=('' if name=='' else name+'_')+str(k), compute_dtype=compute_dtype, net_attn_io=net_attn_io, aio_max_latents=aio_max_latents, mixture_multi=mixture_multi)
             spec += spec_sub; zero += zero_sub; zero_out += zero_out_sub
     return spec, zero, zero_out
 

@@ -16,8 +16,7 @@ def replace_infnan(inputs, replace):
     return tf.where(isinfnan, replace, inputs)
 
 # TODO tf.keras.layers.Discretization ?
-def discretize(inputs, spec, force_cont):
-    if force_cont and spec['is_discrete']: inputs = tf.math.round(inputs)
+def discretize(inputs, spec):
     if spec['dtype'] == tf.uint8 or spec['dtype'] == tf.int32 or spec['dtype'] == tf.int64: inputs = tf.math.round(inputs)
     inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])
     inputs = tf.cast(inputs, spec['dtype'])
@@ -252,6 +251,16 @@ class EvoNormS0(tf.keras.layers.Layer):
 
 
 
+def distribution(dist_spec):
+    dist_type, num_components, event_shape = dist_spec['dist_type'], dist_spec['num_components'], dist_spec['event_shape']
+    if dist_type == 'd': params_size, dist = Deterministic.params_size(event_shape), Deterministic(event_shape)
+    if dist_type == 'c': params_size, dist = Categorical.params_size(num_components, event_shape), Categorical(num_components, event_shape)
+    # if dist_type == 'c': params_size, dist = CategoricalRP.params_size(event_shape), CategoricalRP(event_shape)
+    if dist_type == 'mx': params_size, dist = MixtureLogistic.params_size(num_components, event_shape), MixtureLogistic(num_components, event_shape)
+    # if dist_type == 'mx': params_size, dist = tfp.layers.MixtureLogistic.params_size(num_components, event_shape), tfp.layers.MixtureLogistic(num_components, event_shape) # makes NaNs
+    # if dist_type == 'mt': params_size, dist = MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=2), MixtureMultiNormalTriL(num_components, event_shape, matrix_size=2)
+    return params_size, dist
+
 class Deterministic(tfp.layers.DistributionLambda):
     def __init__(self, event_shape=(), **kwargs):
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
@@ -422,11 +431,11 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
                 # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
                 if cross_type == 1: # input, batch = different latents
-                    init_zero = np.linspace(-1.0, 1.0, num_latents) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, num_latents) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=-1)
                     init_zero = np.repeat(init_zero, latent_size, axis=-1)
                 if cross_type == 2: # output, batch = actual batch
-                    init_zero = np.linspace(-1.0, 1.0, channels) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, channels) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=0)
                     init_zero = np.repeat(init_zero, num_latents, axis=0)
                 init_zero = np.expand_dims(init_zero, axis=0)
@@ -475,6 +484,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             if use_img and store_real: value_mem = tf.concat([self._memory[:,self._mem_idx:-time_size], value, self._memory_img[:,self._mem_idx_img+time_size:]], axis=1)
             elif use_img: value_mem = tf.concat([self._memory[:,self._mem_idx:], self._memory_img[:,self._mem_idx_img:-time_size], value], axis=1)
             else: value_mem = tf.concat([self._memory[:,self._mem_idx:-time_size], value], axis=1)
+            # TODO add mem/img relative to current location (mem-,img+)
         else: value_mem = value
 
         # TODO loop through value or query if too big for memory?
@@ -542,7 +552,7 @@ class MLPBlock(tf.keras.layers.Layer):
         super(MLPBlock, self).__init__(**kwargs)
         if evo is None: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=tf.keras.activations.gelu, use_bias=False, name='dense')
         else: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense')
-        self._layer_dense_logits = tf.keras.layers.Dense(latent_size, name='dense_logits')
+        self._layer_dense_latent = tf.keras.layers.Dense(latent_size, name='dense_latent')
         self._residual = residual
         
     def build(self, input_shape):
@@ -550,6 +560,6 @@ class MLPBlock(tf.keras.layers.Layer):
 
     def call(self, input):
         out = self._layer_dense(input)
-        out = self._layer_dense_logits(out)
+        out = self._layer_dense_latent(out)
         if self._residual: out = input + out * self._residual_amt # Rezero
         return out
