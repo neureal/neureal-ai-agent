@@ -21,10 +21,10 @@ class ArchFull(tf.keras.Model):
             'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_in = "{}D{}~{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
+        arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
         arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
-        arch_out = "{}D{}~{}".format(('Aio+' if net_attn_io_out else ''), latent_spec['outp'], self.out.arch_out)
-        self.arch_desc = "{}[in{}-net{}-out{}-{}]".format(name, arch_in, arch_net, arch_out, self.inp.arch_lat)
+        arch_out = "{}D{}-{}".format(('Aio+' if net_attn_io_out else ''), latent_spec['outp'], self.out.arch_out)
+        self.arch_desc = "{}[in{}_net{}_out{}_{}]".format(name, arch_in, arch_net, arch_out, self.inp.arch_lat)
 
     def reset_states(self, use_img=False):
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
@@ -55,9 +55,9 @@ class ArchTrans(tf.keras.Model):
             'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_in = "{}D{}~{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
+        arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
         arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
-        self.arch_desc = "{}[in{}-net{}-{}]".format(name, arch_in, arch_net, self.net.arch_lat)
+        self.arch_desc = "{}[in{}_net{}_{}]".format(name, arch_in, arch_net, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
@@ -83,8 +83,8 @@ class ArchRep(tf.keras.Model):
             'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_in = "{}D{}~{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
-        self.arch_desc = "{}[in{}-{}]".format(name, arch_in, self.inp.arch_lat)
+        arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
+        self.arch_desc = "{}[in{}_{}]".format(name, arch_in, self.inp.arch_lat)
 
     def reset_states(self, use_img=False): return
     def call(self, inputs, training=None):
@@ -111,8 +111,8 @@ class ArchGen(tf.keras.Model):
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
-        arch_out = "{}D{}~{}".format(('Aio+' if net_attn_io_out else ''), latent_spec['outp'], self.out.arch_out)
-        self.arch_desc = "{}[net{}-out{}-{}]".format(name, arch_net, arch_out, self.net.arch_lat)
+        arch_out = "{}D{}-{}".format(('Aio+' if net_attn_io_out else ''), latent_spec['outp'], self.out.arch_out)
+        self.arch_desc = "{}[net{}_out{}_{}]".format(name, arch_net, arch_out, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
@@ -158,7 +158,7 @@ class In(tf.keras.layers.Layer):
         if obs_latent: self.net_ins += 1; self.num_latents += latent_spec['num_latents']
         else: latent_spec.update({'num_latents':self.num_latents})
 
-        self.arch_in, self.arch_lat = "I{}{}".format(self.net_ins, ('io2' if self.net_attn_io2 else '')), "L{}{}x{}".format(latent_spec['dist_type'], self.num_latents, latent_size)
+        self.arch_in, self.arch_lat = "Ï{}{}".format(len(spec_in), ('io2' if self.net_attn_io2 else '')), "L{}{}x{}".format(latent_spec['dist_type'], self.num_latents, latent_size)
 
     def call(self, inputs, training=None):
         out_accu, out_accu_i = [None]*self.net_ins, 0
@@ -223,7 +223,7 @@ class Out(tf.keras.layers.Layer):
         outp, evo, latent_size = latent_spec['outp'], latent_spec['evo'], latent_spec['latent_size']
         self.net_attn_io = net_attn_io
 
-        self.net_outs = len(spec_out); params_size, self.dist, self.layer_attn_out, self.layer_out_logits, self.logits_step_shape, self.arch_out = [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, "O"
+        self.net_outs = len(spec_out); params_size, self.dist, self.layer_attn_out, self.layer_out_logits, self.logits_step_shape, self.arch_out = [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, "Ö"
         for i in range(self.net_outs):
             space_name, output_name, dist_type, num_components = spec_out[i]['space_name'], spec_out[i]['name'], spec_out[i]['dist_type'], spec_out[i]['num_components']
 
