@@ -272,8 +272,8 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                # loss_action = util.loss_PG(action_dist, action, returns, compute_dtype=self.compute_dtype)
-                loss_action_lik = util.loss_likelihood(action_dist, action, compute_dtype=self.compute_dtype)
+                # loss_action = util.loss_PG(action_dist, action, returns)
+                loss_action_lik = util.loss_likelihood(action_dist, action)
 
                 tape_action.watch(returns)
                 returns = returns / 200.0  # normalize CartPole
@@ -311,7 +311,7 @@ class GeneralAI(tf.keras.Model):
             # learn_rate = self.action.optimizer['action'].learning_rate
             # with tf.GradientTape() as tape_meta:
             #     meta_logits = self.meta(inputs_meta); meta_dist = self.meta.dist[0](meta_logits[0])
-            #     loss_meta = util.loss_PG(meta_dist, tf.reshape(learn_rate,(1,1)), tf.reshape(rewards_total,(1,1)), compute_dtype=self.compute_dtype)
+            #     loss_meta = util.loss_PG(meta_dist, tf.reshape(learn_rate,(1,1)), tf.reshape(rewards_total,(1,1)))
             # gradients = tape_meta.gradient(loss_meta, self.meta.trainable_variables)
             # self.meta.optimizer['meta'].apply_gradients(zip(gradients, self.meta.trainable_variables))
 
@@ -420,8 +420,8 @@ class GeneralAI(tf.keras.Model):
             with tape_value:
                 value_logits = self.value(latent_rep); value_dist = self.value.dist[0](value_logits[0])
                 values = value_dist.sample()
-                if self.value_cont: loss_value = util.loss_likelihood(value_dist, returns, compute_dtype=self.compute_dtype)
-                else: loss_value = util.loss_diff(values, returns, compute_dtype=self.compute_dtype)
+                if self.value_cont: loss_value = util.loss_likelihood(value_dist, returns)
+                else: loss_value = util.loss_diff(values, returns)
             gradients = tape_value.gradient(loss_value, self.rep.trainable_variables + self.value.trainable_variables)
             self.value.optimizer['value'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.value.trainable_variables))
             loss_values = loss_values.write(step, loss_value)
@@ -430,9 +430,9 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(latent_rep)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = util.loss_PG(action_dist, action, returns, values, compute_dtype=self.compute_dtype)
-                # loss_action = util.loss_PG(action_dist, action, returns, values, returns_target=return_goal, compute_dtype=self.compute_dtype) # lPGt
-                # loss_action = util.loss_PG(action_dist, action, loss_value, compute_dtype=self.compute_dtype) # lPGv
+                loss_action = util.loss_PG(action_dist, action, returns, values)
+                # loss_action = util.loss_PG(action_dist, action, returns, values, returns_target=return_goal) # lPGt
+                # loss_action = util.loss_PG(action_dist, action, loss_value) # lPGv
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
@@ -548,7 +548,7 @@ class GeneralAI(tf.keras.Model):
                 action_logits = self.action(latent_trans)
                 action_dist = [None]*self.action_spec_len
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
-                loss_action = util.loss_likelihood(action_dist, targets, compute_dtype=self.compute_dtype)
+                loss_action = util.loss_likelihood(action_dist, targets)
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)

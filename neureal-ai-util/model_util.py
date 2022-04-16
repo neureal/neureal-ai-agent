@@ -112,8 +112,6 @@ def optimizer(net_name, opt_spec):
     if typ == 'co': return tfa.optimizers.COCOB(alpha=100.0, use_locking=True, name='{}/optimizer_{}/COCOB'.format(net_name, opt_spec['name']))
     if typ == 'ws': return tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10, name='{}/optimizer_{}/SWA'.format(net_name, opt_spec['name'])) # has error with floatx=float64
     if typ == 'sw': return tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/SGDW'.format(net_name, opt_spec['name']))
-    # TODO subclass model.save_weights and add include_optimizer https://www.tensorflow.org/api_docs/python/tf/keras/Model#save_weights
-    # self.action.optimizer['act'].apply_gradients(zip(self.rep.trainable_variables + self.action.trainable_variables, self.rep.trainable_variables + self.action.trainable_variables))
 
 def optimizer_build(optimizer, variables):
     optimizer.apply_gradients(zip(variables, variables))
@@ -139,7 +137,8 @@ class LearnRateThresh():
         return learn_rate
 
 
-def loss_diff(out, targets=None, compute_dtype=tf.float64): # deterministic difference
+def loss_diff(out, targets=None): # deterministic difference
+    compute_dtype = tf.keras.backend.floatx()
     if isinstance(out, list):
         loss = tf.constant(0, compute_dtype)
         for i in range(len(out)):
@@ -158,9 +157,9 @@ def loss_diff(out, targets=None, compute_dtype=tf.float64): # deterministic diff
     loss = tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss)))
     return loss
 
-def loss_likelihood(dist, targets, probs=False, compute_dtype=tf.float64):
+def loss_likelihood(dist, targets, probs=False):
     if isinstance(dist, list):
-        loss = tf.constant(0, compute_dtype)
+        loss = tf.constant(0, tf.keras.backend.floatx())
         for i in range(len(dist)):
             t = tf.cast(targets[i], dist[i].dtype)
             if probs: loss = loss - tf.math.exp(dist[i].log_prob(t))
@@ -174,16 +173,16 @@ def loss_likelihood(dist, targets, probs=False, compute_dtype=tf.float64):
     if isinfnan > 0: tf.print('NaN/Inf likelihood loss:', loss)
     return loss
 
-def loss_bound(dist, targets, compute_dtype=tf.float64):
-    loss = -loss_likelihood(dist, targets, compute_dtype=compute_dtype)
+def loss_bound(dist, targets):
+    loss = -loss_likelihood(dist, targets)
     # if not categorical: loss = loss - dist_prior.log_prob(targets)
 
     isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
     if isinfnan > 0: tf.print('NaN/Inf bound loss:', loss)
     return loss
 
-def loss_entropy(dist, entropy_contrib, compute_dtype=tf.float64): # "Soft Actor Critic" = try increase entropy
-    loss = tf.constant(0, compute_dtype)
+def loss_entropy(dist, entropy_contrib): # "Soft Actor Critic" = try increase entropy
+    loss = tf.constant(0, tf.keras.backend.floatx())
     if entropy_contrib > 0.0:
         if isinstance(dist, list):
             for i in range(len(dist)): loss = loss + dist[i].entropy()
@@ -194,9 +193,10 @@ def loss_entropy(dist, entropy_contrib, compute_dtype=tf.float64): # "Soft Actor
     if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
     return loss
 
-def loss_PG(dist, targets, returns, values=None, returns_target=None, compute_dtype=tf.float64): # policy gradient, actor/critic
+def loss_PG(dist, targets, returns, values=None, returns_target=None): # policy gradient, actor/critic
+    compute_dtype = tf.keras.backend.floatx()
     returns = tf.squeeze(tf.cast(returns, compute_dtype), axis=-1)
-    loss_lik = loss_likelihood(dist, targets, probs=False, compute_dtype=compute_dtype)
+    loss_lik = loss_likelihood(dist, targets, probs=False)
     # loss_lik = loss_lik -float_maxroot # -float_maxroot, +float_log_min_prob, -np.e*17.0, -154.0, -308.0
     if returns_target is not None:
         returns_target = tf.squeeze(tf.cast(returns_target, compute_dtype), axis=-1)
