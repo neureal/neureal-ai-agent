@@ -407,14 +407,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
         self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = memory_size, sort_memory, norm, residual, cross_type
-
-        if memory_size is not None:
-            mem_channels = latent_size if cross_type != 1 else channels
-            mem_zero = tf.constant(np.full((1, memory_size, mem_channels), 0), tf.keras.backend.floatx())
-            self._mem_zero = tf.identity(mem_zero)
-            if sort_memory:
-                mem_score_zero = tf.constant(np.full((1, memory_size), 0), tf.keras.backend.floatx())
-                self._mem_score_zero = tf.identity(mem_score_zero)
+        self._mem_channels = latent_size if cross_type != 1 else channels
 
         if norm:
             # float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
@@ -444,9 +437,14 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
     def build(self, input_shape):
         if self._mem_size is not None:
+            mem_zero = tf.constant(np.full((self._mem_size, input_shape[1], self._mem_channels), 0), tf.keras.backend.floatx())
+            self._mem_zero = tf.identity(mem_zero)
             self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
             self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
-            if self._sort_memory: self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
+            # if self._sort_memory:
+            #     mem_score_zero = tf.constant(np.full((self._mem_size, input_shape[1]), 0), tf.keras.backend.floatx())
+            #     self._mem_score_zero = tf.identity(mem_score_zero)
+            #     self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
         if self._cross_type: self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
@@ -458,33 +456,38 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         return attn_output, attn_scores
 
     def call(self, value, attention_mask=None, auto_mask=None, store_memory=True, use_img=False, store_real=False, num_latents=None):
+        latent_size = tf.shape(value)[-1]
         if self._cross_type:
             # value[0](batch) = time dim, value[1:-2] = space/feat dim, value[-1] = channel dim
-            value = tf.reshape(value, (1, -1, tf.shape(value)[-1]))
+            value = tf.reshape(value, (1, -1, latent_size))
             query = self._init_latent if num_latents is None else self._init_latent[:,:num_latents]
         else: query = value
-        time_size = tf.shape(value)[1]
+        batch_size = 1; neg_batch_size = -1; time_size = tf.shape(value)[1]
+        # batch_size = tf.shape(value)[0]; neg_batch_size = -batch_size; time_size = tf.shape(value)[1]
         if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
 
         if self._mem_size is not None and store_memory:
             if use_img and not store_real: mem_idx, memory = self._mem_idx_img, self._memory_img
             else: mem_idx, memory = self._mem_idx, self._memory
 
-            drop_off = tf.roll(memory, shift=-time_size, axis=1)
+            drop_off = tf.roll(memory, shift=neg_batch_size, axis=0)
             memory.assign(drop_off)
-            memory[:,-time_size:].assign(value)
+            memory[neg_batch_size:].assign(value)
 
             if mem_idx > 0:
-                mem_idx_next = mem_idx - time_size
+                mem_idx_next = mem_idx - batch_size
                 if mem_idx_next < 0: mem_idx_next = 0
                 mem_idx.assign(mem_idx_next)
 
         if self._mem_size is not None:
             # value_mem = memory[:,mem_idx:] # gradients not always working with this
-            if use_img and store_real: value_mem = tf.concat([self._memory[:,self._mem_idx:-time_size], value, self._memory_img[:,self._mem_idx_img+time_size:]], axis=1)
-            elif use_img: value_mem = tf.concat([self._memory[:,self._mem_idx:], self._memory_img[:,self._mem_idx_img:-time_size], value], axis=1)
-            else: value_mem = tf.concat([self._memory[:,self._mem_idx:-time_size], value], axis=1)
-            # TODO add mem/img relative to current location (mem-,img+)
+            memory, mem_idx, memory_img, mem_idx_img = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img
+            # TODO add mem/img index relative to current location (mem-,img+)
+            if use_img and store_real: value_mem = tf.concat([memory[mem_idx:neg_batch_size], value, memory_img[mem_idx_img+batch_size:]], axis=0)
+            elif use_img: value_mem = tf.concat([memory[mem_idx:], memory_img[mem_idx_img:neg_batch_size], value], axis=0)
+            else: value_mem = tf.concat([memory[mem_idx:neg_batch_size], value], axis=0)
+            value_mem = tf.reshape(value_mem, (1, -1, latent_size))
+            # query = tf.reshape(query, (1, -1, latent_size))
         else: value_mem = value
 
         # TODO loop through value or query if too big for memory?
@@ -505,30 +508,30 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
 
-        if self._mem_size is not None and store_memory and self._sort_memory and (store_real or not use_img):
-            drop_off = tf.roll(self._mem_score, shift=-time_size, axis=1)
-            self._mem_score.assign(drop_off)
-            zero = self._mem_score_zero[:,-time_size:]
-            self._mem_score[:,-time_size:].assign(zero)
+        # if self._mem_size is not None and store_memory and self._sort_memory and (store_real or not use_img):
+        #     drop_off = tf.roll(self._mem_score, shift=-time_size, axis=1)
+        #     self._mem_score.assign(drop_off)
+        #     zero = self._mem_score_zero[:,-time_size:]
+        #     self._mem_score[:,-time_size:].assign(zero)
 
-            # scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx]
-            # scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
-            # scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
-            # self._memory[:,self._mem_idx:].assign(scores)
+        #     # scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx]
+        #     # scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
+        #     # scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+        #     # self._memory[:,self._mem_idx:].assign(scores)
 
-            scores = tf.math.reduce_mean(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx] # heads
-            # norm = tf.cast(tf.shape(scores)[0], dtype=self.compute_dtype)
-            # scores = tf.math.multiply(scores, norm)
-            scores = tf.math.add(self._mem_score[:,self._mem_idx:], scores)
-            self._mem_score[:,self._mem_idx:].assign(scores)
+        #     scores = tf.math.reduce_mean(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx] # heads
+        #     # norm = tf.cast(tf.shape(scores)[0], dtype=self.compute_dtype)
+        #     # scores = tf.math.multiply(scores, norm)
+        #     scores = tf.math.add(self._mem_score[:,self._mem_idx:], scores)
+        #     self._mem_score[:,self._mem_idx:].assign(scores)
 
-            scores = tf.argsort(scores[0], axis=-1, direction='ASCENDING', stable=True)
+        #     scores = tf.argsort(scores[0], axis=-1, direction='ASCENDING', stable=True)
 
-            mem_sorted = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
-            self._memory[:,self._mem_idx:].assign(mem_sorted)
+        #     mem_sorted = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+        #     self._memory[:,self._mem_idx:].assign(mem_sorted)
 
-            scores_sorted = tf.gather(self._mem_score[:,self._mem_idx:], scores, axis=1)
-            self._mem_score[:,self._mem_idx:].assign(scores_sorted)
+        #     scores_sorted = tf.gather(self._mem_score[:,self._mem_idx:], scores, axis=1)
+        #     self._mem_score[:,self._mem_idx:].assign(scores_sorted)
 
         attn_output = self._output_dense(attn_output)
         if self._residual: attn_output = query + attn_output * self._residual_amt # ReZero
@@ -543,7 +546,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             else:
                 self._mem_idx.assign(self._mem_size)
                 self._memory.assign(self._mem_zero)
-                if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
+                # if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
 
 
 
