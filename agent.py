@@ -256,8 +256,6 @@ class GeneralAI(tf.keras.Model):
         loss_actions_lik = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        # inputs_returns = inputs['returns'] / 200.0 # normalize CartPole
-        # inputs_returns = (inputs['returns']  + 1000.0) / 1300.0 # normalize LunarLander
         inputs_returns = tf.squeeze(tf.cast(inputs['returns'], self.compute_dtype), axis=-1)
         input_rewards = tf.concat([self.rewards_zero, inputs['rewards']], axis=0)
         for step in tf.range(tf.shape(inputs['dones'])[0]):
@@ -274,10 +272,6 @@ class GeneralAI(tf.keras.Model):
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
                 # loss_action = util.loss_PG(action_dist, action, returns)
                 loss_action_lik = util.loss_likelihood(action_dist, action)
-
-                tape_action.watch(returns)
-                returns = returns / 200.0  # normalize CartPole
-                # returns = (returns + 1000.0) / 1300.0  # normalize LunarLander
                 loss_action = loss_action_lik * returns
             gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
