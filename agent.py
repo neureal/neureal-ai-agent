@@ -83,8 +83,8 @@ class GeneralAI(tf.keras.Model):
             self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
-            thresh = [2e-5,2e-3]; thresh_rates = [77,57,44] # 2e-12 107, 2e-10 89, 2e-8 71, 2e-6 53, 2e-5 44, 2e-4 35, 2e-3 26, 2e-2 17
-            self.action_get_learn_rate = util.LearnRateThresh(thresh, thresh_rates)
+            # thresh = [2e-5,2e-3]; thresh_rates = [77,57,44] # 2e-12 107, 2e-10 89, 2e-8 71, 2e-6 53, 2e-5 44, 2e-4 35, 2e-3 26, 2e-2 17
+            # self.action_get_learn_rate = util.LearnRateThresh(thresh, thresh_rates)
 
         if arch in ('AC','TRANS',):
             self.rep = nets.ArchRep('RN', inputs, [], [], self.obs_spec, latent_spec, net_attn_io=net_attn_io, num_heads=4, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
@@ -111,10 +111,10 @@ class GeneralAI(tf.keras.Model):
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             util.net_build(self.trans, self.initializer)
 
-        # inputs = {'obs':tf.constant([[0,0,0]],compute_dtype)}
-        # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]
-        # self.meta_spec = [{'space_name':'meta', 'name':'learn_rate', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-        # self.meta = nets.GenNet('M', inputs, opt_spec, self.meta_spec, False, latent_size, net_blocks=2, net_attn=False, net_lstm=False, net_attn_io=False); outputs = self.meta(inputs)
+        # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99}]
+        # inputs_meta = {'obs':tf.constant([[0,0,0]],compute_dtype)}; meta_spec_in = [{'space_name':'obs', 'name':'', 'event_shape':(3,), 'event_size':1, 'channels':3, 'num_latents':1}]
+        # self.meta_spec = [{'space_name':'meta', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
+        # self.meta = nets.ArchFull('M', inputs_meta, opt_spec, stats_spec, meta_spec_in, self.meta_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io); outputs = self.meta(inputs_meta)
         # self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
         # util.net_build(self.meta, self.initializer)
 
@@ -126,10 +126,10 @@ class GeneralAI(tf.keras.Model):
         if arch == 'PG':
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'returns':np.float64}
-            # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
-            metrics_loss['1extras3'] = {'-snr':np.float64}
-            metrics_loss['1extras4'] = {'-std':np.float64}
-            metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
+            # # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
+            # metrics_loss['1extras3'] = {'-snr':np.float64}
+            # metrics_loss['1extras4'] = {'-std':np.float64}
+            # metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if arch == 'AC':
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
@@ -295,6 +295,8 @@ class GeneralAI(tf.keras.Model):
             # TODO how unlimited length episodes without sacrificing returns signal?
             self.reset_states(); outputs, inputs = self.PG_actor(inputs)
             util.stats_update(self.action.stats['rwd'], tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats['rwd'], self.float64_eps, tf.float64)
+
+            # # meta learn the optimizer learn rate / step size
             # rewards_total = outputs['returns'][0][0]
             # util.stats_update(self.action.stats['rwd'], rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.action.stats['rwd'], self.float64_eps, tf.float64)
 
@@ -314,23 +316,23 @@ class GeneralAI(tf.keras.Model):
             # self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0])
             # # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
 
-            self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss)
+            # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss) # learning_rate schedule based on average loss
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
             util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss['action_lik']), self.compute_dtype); ma_loss, ema, snr, std = util.stats_get(self.action.stats['loss'], self.float_eps, self.compute_dtype)
-            if ma_loss < ma_loss_lowest: ma_loss_lowest = ma_loss
-            # if self.action.stats['loss']['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
-            if snr < 0.5 and std < 0.01 and tf.math.abs(ma_loss) < 1e-3:
-                util.net_reset(self.action)
-                # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
-                tf.print("net_reset (action) at:", episode, ma_loss)
+            # if ma_loss < ma_loss_lowest: ma_loss_lowest = ma_loss
+            # # if self.action.stats['loss']['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
+            # if snr < 0.5 and std < 0.01 and tf.math.abs(ma_loss) < 1e-3:
+            #     util.net_reset(self.action)
+            #     # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
+            #     tf.print("net_reset (action) at:", episode, ma_loss)
 
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 ma_loss, tf.math.reduce_mean(loss['action_lik']), # tf.math.reduce_mean(outputs['returns']),
-                snr, std, # ma, ema, snr, std
-                self.action.optimizer['action'].learning_rate,
+                # snr, std, # ma, ema, snr, std
+                # self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
             ]
             if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
@@ -340,7 +342,7 @@ class GeneralAI(tf.keras.Model):
 
             stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
             episode += 1
-        tf.print("ma_loss_lowest", ma_loss_lowest)
+        # tf.print("ma_loss_lowest", ma_loss_lowest)
 
 
 
