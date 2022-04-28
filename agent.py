@@ -694,7 +694,7 @@ if __name__ == '__main__':
         total_steps = int(np.sum(metrics_loss['1steps']['steps+']))
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
-        title += "     |     lr:{}    al:{}    am:{}    ms:{}".format(learn_rate, aio_max_latents, attn_mem_base, max_steps)
+        title += "     |     lr:{:.0e}    al:{}    am:{}    ms:{}".format(learn_rate, aio_max_latents, attn_mem_base, max_steps)
         title += "     |     a-clk:{}    a-spd:{}    aug:{}{}    aio:{}".format(env_async_clock, env_async_speed, ('S' if aug_data_step else ''), ('P' if aug_data_pos else ''), ('Y' if net_attn_io else 'N')); print(title)
 
         import matplotlib as mpl
