@@ -72,24 +72,22 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 'c': latent_spec.update({'dist_type':'c', 'num_components':0, 'event_shape':(latent_size, latent_size)}) # categorical
         if latent_dist == 'mx': latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
 
-        # self.obs_spec += [{'space_name':'rewards', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-        # self.obs_spec += [{'space_name':'step_size', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
+        self.obs_spec += [{'space_name':'rewards', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         if aug_data_step: self.obs_spec += [{'space_name':'step', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-
-        inputs = {'obs':self.obs_zero, 'rewards':self.rewards_zero, 'dones':self.dones_zero, 'step':self.step_zero, 'step_size':self.step_size_one}
+        inputs = {'obs':self.obs_zero, 'rewards':[self.rewards_zero], 'step':[self.step_zero]}
 
         if arch in ('PG',):
             opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99}, {'name':'loss', 'b1':0.99, 'b2':0.99}, {'name':'delta', 'b1':0.99, 'b2':0.99}]
-            self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs)
+            self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec, self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
             # thresh = [2e-5,2e-3]; thresh_rates = [77,57,44] # 2e-12 107, 2e-10 89, 2e-8 71, 2e-6 53, 2e-5 44, 2e-4 35, 2e-3 26, 2e-2 17
             # self.action_get_learn_rate = util.LearnRateThresh(thresh, thresh_rates)
 
         if arch in ('AC','TRANS',):
-            self.rep = nets.ArchRep('RN', inputs, [], [], self.obs_spec, latent_spec, net_attn_io=net_attn_io, num_heads=4, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
+            self.rep = nets.ArchTrans('RN', inputs, [], [], self.obs_spec, latent_spec, obs_latent=False, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
             util.net_build(self.rep, self.initializer)
-            self.latent_zero = tf.zeros_like(outputs)
+            rep_dist = self.rep.dist(outputs); self.latent_zero = tf.zeros_like(rep_dist.sample())
 
             opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99}]
             self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.action(self.latent_zero)
@@ -107,7 +105,7 @@ class GeneralAI(tf.keras.Model):
         if arch in ('TRANS',):
             inputs['obs'], inputs['actions'] = self.latent_zero, self.action_zero_out
             # latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
-            self.trans = nets.ArchTrans('TN', inputs, [], [], self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.trans(inputs)
+            self.trans = nets.ArchTrans('TN', inputs, [], [], self.action_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.trans(inputs)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             util.net_build(self.trans, self.initializer)
 
@@ -207,7 +205,7 @@ class GeneralAI(tf.keras.Model):
         dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=0, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        step, inputs['step'] = tf.constant(0), self.step_zero
+        step = tf.constant(0)
         # while step < self.max_steps and not inputs['dones'][-1][0]:
         while not inputs['dones'][-1][0]:
             # tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -215,11 +213,11 @@ class GeneralAI(tf.keras.Model):
             # tf.autograph.experimental.set_loop_options(shape_invariants=[(outputs['rewards'], [None,1]), (outputs['dones'], [None,1]), (outputs['returns'], [None,1])])
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
 
-            inputs['step'] = tf.reshape(step,(1,1))
             action = [None]*self.action_spec_len
             # for i in range(self.action_spec_len):
             #     action[i] = tf.random.uniform((self.action_spec[i]['step_shape']), minval=self.action_spec[i]['min'], maxval=self.action_spec[i]['max'], dtype=self.action_spec[i]['dtype_out'])
-            action_logits = self.action(inputs)
+            inputs_step = {'obs':inputs['obs'], 'rewards':[inputs['rewards']], 'step':[tf.reshape(step,(1,1))]}
+            action_logits = self.action(inputs_step)
             for i in range(self.action_spec_len):
                 action_dist = self.action.dist[i](action_logits[i])
                 action[i] = action_dist.sample()
@@ -265,7 +263,7 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             returns = inputs_returns[step]
 
-            inputs_step = {'obs':obs, 'rewards':input_rewards[step:step+1], 'step':tf.reshape(step,(1,1))}
+            inputs_step = {'obs':obs, 'rewards':[input_rewards[step:step+1]], 'step':[tf.reshape(step,(1,1))]}
             with tf.GradientTape() as tape_action:
                 action_logits = self.action(inputs_step)
                 action_dist = [None]*self.action_spec_len
@@ -355,12 +353,13 @@ class GeneralAI(tf.keras.Model):
         dones = tf.TensorArray(tf.bool, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         returns = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        step, inputs['step'] = tf.constant(0), self.step_zero
+        step = tf.constant(0)
         while not inputs['dones'][-1][0]:
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
 
-            inputs['step'] = tf.reshape(step,(1,1))
-            latent_rep = self.rep(inputs)
+            inputs_step = {'obs':inputs['obs'], 'rewards':[inputs['rewards']], 'step':[tf.reshape(step,(1,1))]}
+            rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
+            latent_rep = rep_dist.sample()
 
             action = [None]*self.action_spec_len
             action_logits = self.action(latent_rep)
@@ -409,9 +408,10 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             returns = inputs['returns'][step:step+1]
 
-            inputs_step = {'obs':obs, 'rewards':input_rewards[step:step+1], 'step':tf.reshape(step,(1,1))}
+            inputs_step = {'obs':obs, 'rewards':[input_rewards[step:step+1]], 'step':[tf.reshape(step,(1,1))]}
             with tf.GradientTape(persistent=True) as tape_value, tf.GradientTape(persistent=True) as tape_action:
-                latent_rep = self.rep(inputs_step)
+                rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
+                latent_rep = rep_dist.sample()
 
             with tape_value:
                 value_logits = self.value(latent_rep); value_dist = self.value.dist[0](value_logits[0])
@@ -480,13 +480,14 @@ class GeneralAI(tf.keras.Model):
 
         # inputs_rep = {'obs':self.latent_zero}
         inputs_rep = {'obs':self.latent_zero, 'actions':self.action_zero_out}
-        step, inputs['step'] = tf.constant(0), self.step_zero
+        step = tf.constant(0)
         while not inputs['dones'][-1][0]:
             for i in range(self.obs_spec_len): obs[i] = obs[i].write(step, inputs['obs'][i][-1])
             for i in range(self.action_spec_len): actions[i] = actions[i].write(step, inputs_rep['actions'][i][-1])
 
-            inputs['step'] = tf.reshape(step,(1,1))
-            inputs_rep['obs'] = self.rep(inputs)
+            inputs_step = {'obs':inputs['obs'], 'rewards':[inputs['rewards']], 'step':[tf.reshape(step,(1,1))]}
+            rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
+            inputs_rep['obs'] = rep_dist.sample()
 
             trans_logits = self.trans(inputs_rep); trans_dist = self.trans.dist(trans_logits)
             latent_trans = trans_dist.sample()
@@ -534,9 +535,10 @@ class GeneralAI(tf.keras.Model):
             targets = [None]*self.action_spec_len
             for i in range(self.action_spec_len): targets[i] = inputs['targets'][i][step:step+1]; targets[i].set_shape(self.action_spec[i]['step_shape'])
 
-            inputs_step = {'obs':obs, 'actions':action, 'rewards':input_rewards[step:step+1], 'step':tf.reshape(step,(1,1))}
+            inputs_step = {'obs':obs, 'actions':action, 'rewards':[input_rewards[step:step+1]], 'step':[tf.reshape(step,(1,1))]}
             with tf.GradientTape() as tape_action:
-                inputs_step['obs'] = self.rep(inputs_step)
+                rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
+                inputs_step['obs'] = rep_dist.sample()
 
                 trans_logits = self.trans(inputs_step); trans_dist = self.trans.dist(trans_logits)
                 latent_trans = trans_dist.sample()

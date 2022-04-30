@@ -41,9 +41,9 @@ class ArchFull(tf.keras.Model):
         return out
 
 class ArchTrans(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, aug_data_pos=False):
+    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, aug_data_pos=False):
         super(ArchTrans, self).__init__(name=name)
-        self.inp = In(latent_spec, spec_in, obs_latent=True, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
+        self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
         self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
         self.dist = self.net.dist
 
