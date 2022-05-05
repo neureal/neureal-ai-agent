@@ -16,8 +16,7 @@ def replace_infnan(inputs, replace):
     return tf.where(isinfnan, replace, inputs)
 
 # TODO tf.keras.layers.Discretization ?
-def discretize(inputs, spec, force_cont):
-    if force_cont and spec['is_discrete']: inputs = tf.math.round(inputs)
+def discretize(inputs, spec):
     if spec['dtype'] == tf.uint8 or spec['dtype'] == tf.int32 or spec['dtype'] == tf.int64: inputs = tf.math.round(inputs)
     inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])
     inputs = tf.cast(inputs, spec['dtype'])
@@ -94,6 +93,7 @@ def net_copy(source, dest):
     for i in range(len(dest.weights)): dest.weights[i].assign(source.weights[i].value())
 
 def optimizer(net_name, opt_spec):
+    beta_1, beta_2, decay = tf.constant(0.99,tf.float64), tf.constant(0.99,tf.float64), 0 # tf.constant(0.0,tf.float64)
     typ, schedule_type, learn_rate, float_eps = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps']
     maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64)
     def schedule_r(): return tf.random.uniform((), dtype=tf.float64, maxval=maxval, minval=minval)
@@ -104,24 +104,41 @@ def optimizer(net_name, opt_spec):
     if schedule_type == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
     if schedule_type == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
     if typ == 's': return tf.keras.optimizers.SGD(learning_rate=learn_rate, name='{}/optimizer_{}/SGD'.format(net_name, opt_spec['name']))
-    if typ == 'a': return tf.keras.optimizers.Adam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+    if typ == 'a': return tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+    if typ == 'am': return tf.keras.optimizers.Adamax(beta_1=beta_1, beta_2=beta_2, decay=decay, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
     if typ == 'aw': return tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/AdamW'.format(net_name, opt_spec['name']))
     if typ == 'ar': return tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/RectifiedAdam'.format(net_name, opt_spec['name']))
     if typ == 'ab': return tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True, name='{}/optimizer_{}/AdaBelief'.format(net_name, opt_spec['name']))
     if typ == 'co': return tfa.optimizers.COCOB(alpha=100.0, use_locking=True, name='{}/optimizer_{}/COCOB'.format(net_name, opt_spec['name']))
     if typ == 'ws': return tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10, name='{}/optimizer_{}/SWA'.format(net_name, opt_spec['name'])) # has error with floatx=float64
     if typ == 'sw': return tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/SGDW'.format(net_name, opt_spec['name']))
-    # TODO subclass model.save_weights and add include_optimizer https://www.tensorflow.org/api_docs/python/tf/keras/Model#save_weights
-    # self.action.optimizer['act'].apply_gradients(zip(self.rep.trainable_variables + self.action.trainable_variables, self.rep.trainable_variables + self.action.trainable_variables))
 
 def optimizer_build(optimizer, variables):
     optimizer.apply_gradients(zip(variables, variables))
     for w in optimizer.weights: w.assign(tf.zeros_like(w))
     return optimizer.weights
 
+class LearnRateThresh():
+    def __init__(self, thresh, thresh_rates):
+        # thresh = [0.1,2.0]
+        # thresh_rate = [71,51,31] # 2e12 107, 2e10 89, 2e8 71, 2e6 53, 2e5 44, 2e4 35, 2e3 26, 2e2 17
+        self.thresh, self.thresh_rates = tf.constant(thresh,tf.float64), tf.constant(thresh_rates,tf.int32)
+        float64_eps = tf.constant(tf.experimental.numpy.finfo(tf.float64).eps,tf.float64)
+        x = tf.constant([9,8,7,6,5,4,3,2,1], tf.float64)
+        # x = tf.constant([1], tf.float64)
+        d = int(np.ceil(-np.log10(float64_eps)))
+        learn_rate_cats = tf.math.pow(10.0, -tf.range(tf.constant(1,tf.float64), d+1))
+        x, y = tf.meshgrid(x, learn_rate_cats)
+        self.learn_rate_cats = tf.concat([tf.constant([1], tf.float64), tf.reshape(x*y,(-1))], 0)
+    def __call__(self, metric):
+        thresh_idx = tf.searchsorted(self.thresh, tf.reshape(tf.cast(metric,tf.float64),(1,)))
+        learn_rate_idx = self.thresh_rates[thresh_idx[0]]
+        learn_rate = self.learn_rate_cats[learn_rate_idx]
+        return learn_rate
 
 
-def loss_diff(out, targets=None, compute_dtype=tf.float64): # deterministic difference
+def loss_diff(out, targets=None): # deterministic difference
+    compute_dtype = tf.keras.backend.floatx()
     if isinstance(out, list):
         loss = tf.constant(0, compute_dtype)
         for i in range(len(out)):
@@ -140,9 +157,9 @@ def loss_diff(out, targets=None, compute_dtype=tf.float64): # deterministic diff
     loss = tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss)))
     return loss
 
-def loss_likelihood(dist, targets, probs=False, compute_dtype=tf.float64):
+def loss_likelihood(dist, targets, probs=False):
     if isinstance(dist, list):
-        loss = tf.constant(0, compute_dtype)
+        loss = tf.constant(0, tf.keras.backend.floatx())
         for i in range(len(dist)):
             t = tf.cast(targets[i], dist[i].dtype)
             if probs: loss = loss - tf.math.exp(dist[i].log_prob(t))
@@ -156,16 +173,16 @@ def loss_likelihood(dist, targets, probs=False, compute_dtype=tf.float64):
     if isinfnan > 0: tf.print('NaN/Inf likelihood loss:', loss)
     return loss
 
-def loss_bound(dist, targets, compute_dtype=tf.float64):
-    loss = -loss_likelihood(dist, targets, compute_dtype=compute_dtype)
+def loss_bound(dist, targets):
+    loss = -loss_likelihood(dist, targets)
     # if not categorical: loss = loss - dist_prior.log_prob(targets)
 
     isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
     if isinfnan > 0: tf.print('NaN/Inf bound loss:', loss)
     return loss
 
-def loss_entropy(dist, entropy_contrib, compute_dtype=tf.float64): # "Soft Actor Critic" = try increase entropy
-    loss = tf.constant(0, compute_dtype)
+def loss_entropy(dist, entropy_contrib): # "Soft Actor Critic" = try increase entropy
+    loss = tf.constant(0, tf.keras.backend.floatx())
     if entropy_contrib > 0.0:
         if isinstance(dist, list):
             for i in range(len(dist)): loss = loss + dist[i].entropy()
@@ -176,9 +193,10 @@ def loss_entropy(dist, entropy_contrib, compute_dtype=tf.float64): # "Soft Actor
     if isinfnan > 0: tf.print('NaN/Inf entropy loss:', loss)
     return loss
 
-def loss_PG(dist, targets, returns, values=None, returns_target=None, compute_dtype=tf.float64): # policy gradient, actor/critic
+def loss_PG(dist, targets, returns, values=None, returns_target=None): # policy gradient, actor/critic
+    compute_dtype = tf.keras.backend.floatx()
     returns = tf.squeeze(tf.cast(returns, compute_dtype), axis=-1)
-    loss_lik = loss_likelihood(dist, targets, probs=False, compute_dtype=compute_dtype)
+    loss_lik = loss_likelihood(dist, targets, probs=False)
     # loss_lik = loss_lik -float_maxroot # -float_maxroot, +float_log_min_prob, -np.e*17.0, -154.0, -308.0
     if returns_target is not None:
         returns_target = tf.squeeze(tf.cast(returns_target, compute_dtype), axis=-1)
@@ -232,6 +250,16 @@ class EvoNormS0(tf.keras.layers.Layer):
         return (inputs * tf.math.sigmoid(self._v1 * inputs)) / group_std * self._gamma + self._beta
 
 
+
+def distribution(dist_spec):
+    dist_type, num_components, event_shape = dist_spec['dist_type'], dist_spec['num_components'], dist_spec['event_shape']
+    if dist_type == 'd': params_size, dist = Deterministic.params_size(event_shape), Deterministic(event_shape)
+    if dist_type == 'c': params_size, dist = Categorical.params_size(num_components, event_shape), Categorical(num_components, event_shape)
+    # if dist_type == 'c': params_size, dist = CategoricalRP.params_size(event_shape), CategoricalRP(event_shape)
+    if dist_type == 'mx': params_size, dist = MixtureLogistic.params_size(num_components, event_shape), MixtureLogistic(num_components, event_shape)
+    # if dist_type == 'mx': params_size, dist = tfp.layers.MixtureLogistic.params_size(num_components, event_shape), tfp.layers.MixtureLogistic(num_components, event_shape) # makes NaNs
+    # if dist_type == 'mt': params_size, dist = MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=2), MixtureMultiNormalTriL(num_components, event_shape, matrix_size=2)
+    return params_size, dist
 
 class Deterministic(tfp.layers.DistributionLambda):
     def __init__(self, event_shape=(), **kwargs):
@@ -349,7 +377,9 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         # scale_params = tf.math.abs(scale_params)
         # # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
         # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
-        scale_params = tf.math.softplus(scale_params)
+        sharpness = tf.constant(1e-2, scale_params.dtype)
+        scale_params = tf.math.softplus(scale_params*sharpness)/sharpness
+        # scale_params = tf.math.softplus(scale_params)
         scale_params = scale_params + eps
         scale_params = tf.reshape(scale_params, output_shape)
 
@@ -377,14 +407,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
         self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = memory_size, sort_memory, norm, residual, cross_type
-
-        if memory_size is not None:
-            mem_channels = latent_size if cross_type != 1 else channels
-            mem_zero = tf.constant(np.full((1, memory_size, mem_channels), 0), tf.keras.backend.floatx())
-            self._mem_zero = tf.identity(mem_zero)
-            if sort_memory:
-                mem_score_zero = tf.constant(np.full((1, memory_size), 0), tf.keras.backend.floatx())
-                self._mem_score_zero = tf.identity(mem_score_zero)
+        self._mem_channels = latent_size if cross_type != 1 else channels
 
         if norm:
             # float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
@@ -401,11 +424,11 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
                 # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
                 if cross_type == 1: # input, batch = different latents
-                    init_zero = np.linspace(-1.0, 1.0, num_latents) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, num_latents) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=-1)
                     init_zero = np.repeat(init_zero, latent_size, axis=-1)
                 if cross_type == 2: # output, batch = actual batch
-                    init_zero = np.linspace(-1.0, 1.0, channels) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, channels) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=0)
                     init_zero = np.repeat(init_zero, num_latents, axis=0)
                 init_zero = np.expand_dims(init_zero, axis=0)
@@ -414,9 +437,14 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
     def build(self, input_shape):
         if self._mem_size is not None:
+            mem_zero = tf.constant(np.full((self._mem_size, input_shape[1], self._mem_channels), 0), tf.keras.backend.floatx())
+            self._mem_zero = tf.identity(mem_zero)
             self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
             self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
-            if self._sort_memory: self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
+            # if self._sort_memory:
+            #     mem_score_zero = tf.constant(np.full((self._mem_size, input_shape[1]), 0), tf.keras.backend.floatx())
+            #     self._mem_score_zero = tf.identity(mem_score_zero)
+            #     self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
         if self._cross_type: self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
@@ -428,32 +456,38 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         return attn_output, attn_scores
 
     def call(self, value, attention_mask=None, auto_mask=None, store_memory=True, use_img=False, store_real=False, num_latents=None):
+        latent_size = tf.shape(value)[-1]
         if self._cross_type:
             # value[0](batch) = time dim, value[1:-2] = space/feat dim, value[-1] = channel dim
-            value = tf.reshape(value, (1, -1, tf.shape(value)[-1]))
+            value = tf.reshape(value, (1, -1, latent_size))
             query = self._init_latent if num_latents is None else self._init_latent[:,:num_latents]
         else: query = value
-        time_size = tf.shape(value)[1]
+        batch_size = 1; neg_batch_size = -1; time_size = tf.shape(value)[1]
+        # batch_size = tf.shape(value)[0]; neg_batch_size = -batch_size; time_size = tf.shape(value)[1]
         if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
 
         if self._mem_size is not None and store_memory:
             if use_img and not store_real: mem_idx, memory = self._mem_idx_img, self._memory_img
             else: mem_idx, memory = self._mem_idx, self._memory
 
-            drop_off = tf.roll(memory, shift=-time_size, axis=1)
+            drop_off = tf.roll(memory, shift=neg_batch_size, axis=0)
             memory.assign(drop_off)
-            memory[:,-time_size:].assign(value)
+            memory[neg_batch_size:].assign(value)
 
             if mem_idx > 0:
-                mem_idx_next = mem_idx - time_size
+                mem_idx_next = mem_idx - batch_size
                 if mem_idx_next < 0: mem_idx_next = 0
                 mem_idx.assign(mem_idx_next)
 
         if self._mem_size is not None:
             # value_mem = memory[:,mem_idx:] # gradients not always working with this
-            if use_img and store_real: value_mem = tf.concat([self._memory[:,self._mem_idx:-time_size], value, self._memory_img[:,self._mem_idx_img+time_size:]], axis=1)
-            elif use_img: value_mem = tf.concat([self._memory[:,self._mem_idx:], self._memory_img[:,self._mem_idx_img:-time_size], value], axis=1)
-            else: value_mem = tf.concat([self._memory[:,self._mem_idx:-time_size], value], axis=1)
+            memory, mem_idx, memory_img, mem_idx_img = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img
+            # TODO add mem/img index relative to current location (mem-,img+)
+            if use_img and store_real: value_mem = tf.concat([memory[mem_idx:neg_batch_size], value, memory_img[mem_idx_img+batch_size:]], axis=0)
+            elif use_img: value_mem = tf.concat([memory[mem_idx:], memory_img[mem_idx_img:neg_batch_size], value], axis=0)
+            else: value_mem = tf.concat([memory[mem_idx:neg_batch_size], value], axis=0)
+            value_mem = tf.reshape(value_mem, (1, -1, latent_size))
+            # query = tf.reshape(query, (1, -1, latent_size))
         else: value_mem = value
 
         # TODO loop through value or query if too big for memory?
@@ -474,30 +508,30 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         attn_output, attn_scores = self._compute_attention(query_, key, value, attention_mask)
 
-        if self._mem_size is not None and store_memory and self._sort_memory and (store_real or not use_img):
-            drop_off = tf.roll(self._mem_score, shift=-time_size, axis=1)
-            self._mem_score.assign(drop_off)
-            zero = self._mem_score_zero[:,-time_size:]
-            self._mem_score[:,-time_size:].assign(zero)
+        # if self._mem_size is not None and store_memory and self._sort_memory and (store_real or not use_img):
+        #     drop_off = tf.roll(self._mem_score, shift=-time_size, axis=1)
+        #     self._mem_score.assign(drop_off)
+        #     zero = self._mem_score_zero[:,-time_size:]
+        #     self._mem_score[:,-time_size:].assign(zero)
 
-            # scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx]
-            # scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
-            # scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
-            # self._memory[:,self._mem_idx:].assign(scores)
+        #     # scores = tf.math.reduce_sum(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx]
+        #     # scores = tf.argsort(scores, axis=-1, direction='ASCENDING', stable=True)
+        #     # scores = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+        #     # self._memory[:,self._mem_idx:].assign(scores)
 
-            scores = tf.math.reduce_mean(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx] # heads
-            # norm = tf.cast(tf.shape(scores)[0], dtype=self.compute_dtype)
-            # scores = tf.math.multiply(scores, norm)
-            scores = tf.math.add(self._mem_score[:,self._mem_idx:], scores)
-            self._mem_score[:,self._mem_idx:].assign(scores)
+        #     scores = tf.math.reduce_mean(attn_scores, axis=(1,2))[0][:self._mem_size-self._mem_idx] # heads
+        #     # norm = tf.cast(tf.shape(scores)[0], dtype=self.compute_dtype)
+        #     # scores = tf.math.multiply(scores, norm)
+        #     scores = tf.math.add(self._mem_score[:,self._mem_idx:], scores)
+        #     self._mem_score[:,self._mem_idx:].assign(scores)
 
-            scores = tf.argsort(scores[0], axis=-1, direction='ASCENDING', stable=True)
+        #     scores = tf.argsort(scores[0], axis=-1, direction='ASCENDING', stable=True)
 
-            mem_sorted = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
-            self._memory[:,self._mem_idx:].assign(mem_sorted)
+        #     mem_sorted = tf.gather(self._memory[:,self._mem_idx:], scores, axis=1)
+        #     self._memory[:,self._mem_idx:].assign(mem_sorted)
 
-            scores_sorted = tf.gather(self._mem_score[:,self._mem_idx:], scores, axis=1)
-            self._mem_score[:,self._mem_idx:].assign(scores_sorted)
+        #     scores_sorted = tf.gather(self._mem_score[:,self._mem_idx:], scores, axis=1)
+        #     self._mem_score[:,self._mem_idx:].assign(scores_sorted)
 
         attn_output = self._output_dense(attn_output)
         if self._residual: attn_output = query + attn_output * self._residual_amt # ReZero
@@ -512,7 +546,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             else:
                 self._mem_idx.assign(self._mem_size)
                 self._memory.assign(self._mem_zero)
-                if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
+                # if self._sort_memory: self._mem_score.assign(self._mem_score_zero)
 
 
 
@@ -521,7 +555,7 @@ class MLPBlock(tf.keras.layers.Layer):
         super(MLPBlock, self).__init__(**kwargs)
         if evo is None: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=tf.keras.activations.gelu, use_bias=False, name='dense')
         else: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense')
-        self._layer_dense_logits = tf.keras.layers.Dense(latent_size, name='dense_logits')
+        self._layer_dense_latent = tf.keras.layers.Dense(latent_size, name='dense_latent')
         self._residual = residual
         
     def build(self, input_shape):
@@ -529,6 +563,6 @@ class MLPBlock(tf.keras.layers.Layer):
 
     def call(self, input):
         out = self._layer_dense(input)
-        out = self._layer_dense_logits(out)
+        out = self._layer_dense_latent(out)
         if self._residual: out = input + out * self._residual_amt # Rezero
         return out
