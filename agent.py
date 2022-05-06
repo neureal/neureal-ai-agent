@@ -69,10 +69,10 @@ class GeneralAI(tf.keras.Model):
         latent_spec = {'dtype':compute_dtype, 'latent_size':latent_size, 'num_latents':1, 'max_latents':aio_max_latents}
         latent_spec.update({'inp':latent_size*4, 'midp':latent_size*2, 'outp':latent_size*4, 'evo':int(latent_size/2)})
         if latent_dist == 'd': latent_spec.update({'dist_type':'d', 'num_components':latent_size, 'event_shape':(latent_size,)}) # deterministic
-        if latent_dist == 'c': latent_spec.update({'dist_type':'c', 'num_components':0, 'event_shape':(latent_size, latent_size)}) # categorical
+        if latent_dist == 'c': latent_spec.update({'dist_type':'c', 'num_components':0, 'event_shape':(latent_size, latent_size)}) # categorical # TODO https://keras.io/examples/generative/vq_vae/
         if latent_dist == 'mx': latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
 
-        self.obs_spec += [{'space_name':'rewards', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
+        # self.obs_spec += [{'space_name':'rewards', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         if aug_data_step: self.obs_spec += [{'space_name':'step', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         inputs = {'obs':self.obs_zero, 'rewards':[self.rewards_zero], 'step':[self.step_zero]}
 
@@ -88,6 +88,7 @@ class GeneralAI(tf.keras.Model):
             self.rep = nets.ArchTrans('RN', inputs, [], [], self.obs_spec, latent_spec, obs_latent=False, net_blocks=0, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
             util.net_build(self.rep, self.initializer)
             rep_dist = self.rep.dist(outputs); self.latent_zero = tf.zeros_like(rep_dist.sample())
+            latent_spec.update({'step_shape':self.latent_zero.shape}); self.latent_spec = latent_spec
 
             opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99}]
             self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.action(self.latent_zero)
@@ -104,13 +105,13 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('TRANS',):
             inputs['obs'], inputs['actions'] = self.latent_zero, self.action_zero_out
-            # latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
+            # latent_spec_trans = latent_spec.copy(); latent_spec_trans.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
             self.trans = nets.ArchTrans('TN', inputs, [], [], self.action_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.trans(inputs)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             util.net_build(self.trans, self.initializer)
 
         # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99}]
-        # inputs_meta = {'obs':tf.constant([[0,0,0]],compute_dtype)}; meta_spec_in = [{'space_name':'obs', 'name':'', 'event_shape':(3,), 'event_size':1, 'channels':3, 'num_latents':1}]
+        # inputs_meta = {'obs':[tf.constant([[0,0,0]],compute_dtype)]}; meta_spec_in = [{'space_name':'obs', 'name':'', 'event_shape':(3,), 'event_size':1, 'channels':3, 'num_latents':1}]
         # self.meta_spec = [{'space_name':'meta', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
         # self.meta = nets.ArchFull('M', inputs_meta, opt_spec, stats_spec, meta_spec_in, self.meta_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io); outputs = self.meta(inputs_meta)
         # self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
@@ -295,12 +296,12 @@ class GeneralAI(tf.keras.Model):
             util.stats_update(self.action.stats['rwd'], tf.math.reduce_sum(outputs['rewards']), tf.float64); ma, _, _, _ = util.stats_get(self.action.stats['rwd'], self.float64_eps, tf.float64)
 
             # # meta learn the optimizer learn rate / step size
-            # rewards_total = outputs['returns'][0][0]
+            # rewards_total = outputs['returns'][0][0] # tf.math.reduce_sum(outputs['rewards'])
             # util.stats_update(self.action.stats['rwd'], rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.action.stats['rwd'], self.float64_eps, tf.float64)
 
             # _, _, _, std = util.stats_get(self.action.stats['loss'], self.float_eps, self.compute_dtype)
             # obs = [self.action.stats['loss']['iter'].value(), tf.cast(ma,self.compute_dtype), std]
-            # inputs_meta = {'obs':tf.expand_dims(tf.stack(obs,0),0)}
+            # inputs_meta = {'obs':[tf.expand_dims(tf.stack(obs,0),0)]}
 
             # learn_rate = self.action.optimizer['action'].learning_rate
             # with tf.GradientTape() as tape_meta:
@@ -473,7 +474,7 @@ class GeneralAI(tf.keras.Model):
         for i in range(self.obs_spec_len): obs[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
         actions = [None]*self.action_spec_len
         for i in range(self.action_spec_len): actions[i] = tf.TensorArray(self.action_spec[i]['dtype_out'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.action_spec[i]['event_shape'])
-        # latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['event_shape'])
+        # latents_next = tf.TensorArray(self.latent_spec['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.latent_spec['step_shape'])
         rewards = tf.TensorArray(tf.float64, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         targets = [None]*self.obs_spec_len
         for i in range(self.obs_spec_len): targets[i] = tf.TensorArray(self.obs_spec[i]['dtype'], size=1, dynamic_size=True, infer_shape=False, element_shape=self.obs_spec[i]['event_shape'])
