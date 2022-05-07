@@ -155,12 +155,12 @@ class GeneralAI(tf.keras.Model):
         metrics_loss['1rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
         if arch == 'MU4':
-            metrics_loss['1rewards3*'] = {'-ma_PGL':np.float64, '-rewards_PGL_total+':np.float64, '-rewards_PGL_final=':np.float64}
-            metrics_loss['1rewards2*'] = {'-ma_PG':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
+            # metrics_loss['1rewards3*'] = {'-rewards_PGL_ma':np.float64, '-rewards_PGL_total+':np.float64, '-rewards_PGL_final=':np.float64}
+            metrics_loss['1rewards2*'] = {'-rewards_PG_ma':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
             # metrics_loss['1extra'] = {'returns_pred':np.float64}
             metrics_loss['1nets*'] = {'-loss_PG_ma':np.float64, '-loss_PG':np.float64}
-            metrics_loss['1netsR'] = {'-snr_PG':np.float64}; metrics_loss['1netsS'] = {'-std_PG':np.float64}
-            # metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-std_PGL':np.float64}
+            metrics_loss['1netsR'] = {'-loss_PG_snr':np.float64}; metrics_loss['1netsS'] = {'-loss_PG_std':np.float64}
+            # metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-loss_PGL_std':np.float64}
             # metrics_loss['1nets4'] = {'loss_act':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64, 'loss_trans_img':np.float64}
@@ -1370,7 +1370,7 @@ class GeneralAI(tf.keras.Model):
 
     def MU4(self):
         print("tracing -> GeneralAI MU4")
-        num_gen = 3
+        num_gen = 2
         ma, ma_loss, snr, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype)
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes*num_gen and not stop:
@@ -1380,15 +1380,14 @@ class GeneralAI(tf.keras.Model):
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
 
             gen, episode_gen = episode%num_gen, episode//num_gen
-            log_metrics, train = [True,True,True,True,True,True,True,True,True,True,True,True,True,True,True,True,True,True], True
+            log_metrics, train = [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True
             return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns
             # return_goal_alt = tf.constant([[10.0]], tf.float64)
             return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
-            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,False,False,False,True,True,True,True,True,True,True,True,True,False,False], True, 0 # action/PG
-            if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True,False,False,False,False,False,False,False,False,False,False,False,False,False,False], False, 1 # actout/act # TODO if was not relabling, training here would be like epocs
-            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False,True,True,True,False,False,False,False,False,False,False,False,False,False,False], True, 2 # random, actionL/PGL
-            if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False,False], True, 1 # act alt
-
+            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False]+[True,True,True]+[True,True]+[True,True]+[False,False], True, 0 # action/PG
+            if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 1 # actout/act # TODO if was not relabling, training here would be like epocs
+            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 2 # random, actionL/PGL
+            if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 1 # act alt
 
             self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
             rewards_total = outputs['returns'][-1][0][0] # tf.math.reduce_mean(outputs['rewards'])
@@ -1433,19 +1432,19 @@ class GeneralAI(tf.keras.Model):
 
                 if gen == 0:
                     util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); ma_loss, _, snr, std = util.stats_get(self.action.stats['loss'], self.float_eps, self.compute_dtype)
-                    maL, _, _, _ = util.stats_get(self.actionL.stats['rwd'], self.float64_eps, tf.float64)
+                    # maL, _, _, _ = util.stats_get(self.actionL.stats['rwd'], self.float64_eps, tf.float64)
                     # if self.action.stats['loss']['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
                     if snr < 0.5 and std < 0.1 and tf.math.abs(ma_loss) < 0.1:
-                        if ma > maL: util.net_copy(self.action, self.actionL)
+                        # if ma > maL: util.net_copy(self.action, self.actionL)
                         util.net_reset(self.action) #; util.net_reset(self.rep)
                         # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-4, minval=self.float64_eps)
-                        tf.print("net_reset (action) at:", episode_gen, " copy?", ma > maL)
+                        tf.print("net_reset (action) at:", episode_gen) # , " copy?", ma > maL
                 if gen == 1: util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act']), self.compute_dtype); _, _, _, std = util.stats_get(self.act.stats['loss'], self.float_eps, self.compute_dtype)
                 if gen == 2: util.stats_update(self.actionL.stats['loss'], tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); _, _, _, std = util.stats_get(self.actionL.stats['loss'], self.float_eps, self.compute_dtype)
 
 
             metrics = [log_metrics, episode_gen, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
+                # ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 # tf.math.reduce_mean(loss_actor['returns_pred']),
                 ma_loss, tf.math.reduce_mean(loss_act['PG']),
@@ -1491,7 +1490,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_rp200_gen012_pg2e5_pgl2e9' # _pg2e5_pgl2e9 _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 1, '_rp200_gen01_pg2e5' # _pg2e5_pgl2e9 _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
@@ -1581,7 +1580,7 @@ if __name__ == '__main__':
         metrics_loss = model.metrics_loss
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
-                for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
+                for j in range(len(loss_group[k])): loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
         name = "{}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
