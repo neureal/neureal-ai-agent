@@ -161,7 +161,7 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets*'] = {'-loss_PG_ma':np.float64, '-loss_PG':np.float64}
             metrics_loss['1netsR'] = {'-loss_PG_snr':np.float64}; metrics_loss['1netsS'] = {'-loss_PG_std':np.float64}
             # metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-loss_PGL_std':np.float64}
-            # metrics_loss['1nets4'] = {'loss_act':np.float64}
+            # metrics_loss['1nets*'] = {'-loss_act_ma':np.float64, '-loss_act':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64, 'loss_trans_img':np.float64}
             # metrics_loss['1nets2'] = {'loss_rwd':np.float64, 'loss_done':np.float64}
@@ -497,6 +497,7 @@ class GeneralAI(tf.keras.Model):
 
             action = self.action_zero_out
             if gen == 0:
+                # action = self.gen_rnd()
                 # action = self.gen_PG(inputs_step['obs'], use_img=True, store_real=True) # _img
                 action = self.gen_PG(inputs_step['obs'])
             if gen == 1:
@@ -1449,7 +1450,7 @@ class GeneralAI(tf.keras.Model):
                 # tf.math.reduce_mean(loss_actor['returns_pred']),
                 ma_loss, tf.math.reduce_mean(loss_act['PG']),
                 snr, std,
-                # tf.math.reduce_mean(loss_act['act']),
+                # ma_loss, tf.math.reduce_mean(loss_act['act']),
                 # tf.math.reduce_mean(loss_rep['trans']),
                 # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
                 # tf.math.reduce_mean(loss_actor['trans']), tf.math.reduce_mean(loss_actor['trans_img']),
@@ -1490,7 +1491,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_rp200_gen01_pg2e5' # _pg2e5_pgl2e9 _repL1 _gen0123 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 1, '_rp200_gen01-rnd' # _pg2e5_pgl2e9 _repL1 _gen0123-rnd _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
 env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
