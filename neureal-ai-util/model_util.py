@@ -356,7 +356,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 
         params_shape = [num_components]+list(event_shape)
         reinterpreted_batch_ndims = len(event_shape)
-        
+
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
         num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot = tf.identity(num_components), tf.identity(params_shape), tf.identity(reinterpreted_batch_ndims), tf.identity(tf.constant(eps, compute_dtype)), tf.identity(tf.constant(maxroot, compute_dtype))
         super(MixtureLogistic, self).__init__(lambda input: MixtureLogistic.new(input, num_components, params_shape, reinterpreted_batch_ndims, eps, maxroot), **kwargs)
@@ -373,7 +373,7 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
         batch_size = tf.shape(params)[:-1]
         output_shape = tf.concat([batch_size, params_shape], axis=0)
         loc_params = tf.reshape(loc_params, output_shape)
-        
+
         # scale_params = tf.math.abs(scale_params)
         # # scale_params = tfp.math.clip_by_value_preserve_gradient(scale_params, eps, maxroot)
         # scale_params = tf.clip_by_value(scale_params, eps, maxroot)
@@ -466,6 +466,17 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         # batch_size = tf.shape(value)[0]; neg_batch_size = -batch_size; time_size = tf.shape(value)[1]
         if not self._built_from_signature: self._build_from_signature(query=query, value=value, key=None)
 
+        if self._mem_size is not None:
+            # value_mem = memory[:,mem_idx:] # gradients not always working with this
+            memory, mem_idx, memory_img, mem_idx_img = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img
+            # TODO add mem/img index relative to current location (mem-,img+) # tf.linspace(0.0,1,256)
+            if use_img and store_real: value_mem = tf.concat([memory[mem_idx:], value, memory_img[mem_idx_img+batch_size:]], axis=0)
+            elif use_img: value_mem = tf.concat([memory[mem_idx:], memory_img[mem_idx_img:], value], axis=0)
+            else: value_mem = tf.concat([memory[mem_idx:], value], axis=0)
+            value_mem = tf.reshape(value_mem, (1, -1, latent_size))
+            # query = tf.reshape(query, (1, -1, latent_size))
+        else: value_mem = value
+
         if self._mem_size is not None and store_memory:
             if use_img and not store_real: mem_idx, memory = self._mem_idx_img, self._memory_img
             else: mem_idx, memory = self._mem_idx, self._memory
@@ -478,17 +489,6 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 mem_idx_next = mem_idx - batch_size
                 if mem_idx_next < 0: mem_idx_next = 0
                 mem_idx.assign(mem_idx_next)
-
-        if self._mem_size is not None:
-            # value_mem = memory[:,mem_idx:] # gradients not always working with this
-            memory, mem_idx, memory_img, mem_idx_img = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img
-            # TODO add mem/img index relative to current location (mem-,img+)
-            if use_img and store_real: value_mem = tf.concat([memory[mem_idx:neg_batch_size], value, memory_img[mem_idx_img+batch_size:]], axis=0)
-            elif use_img: value_mem = tf.concat([memory[mem_idx:], memory_img[mem_idx_img:neg_batch_size], value], axis=0)
-            else: value_mem = tf.concat([memory[mem_idx:neg_batch_size], value], axis=0)
-            value_mem = tf.reshape(value_mem, (1, -1, latent_size))
-            # query = tf.reshape(query, (1, -1, latent_size))
-        else: value_mem = value
 
         # TODO loop through value or query if too big for memory?
         query_ = self._query_dense(query)
@@ -557,7 +557,7 @@ class MLPBlock(tf.keras.layers.Layer):
         else: self._layer_dense = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense')
         self._layer_dense_latent = tf.keras.layers.Dense(latent_size, name='dense_latent')
         self._residual = residual
-        
+
     def build(self, input_shape):
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
