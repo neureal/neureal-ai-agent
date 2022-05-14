@@ -145,7 +145,7 @@ class GeneralAI(tf.keras.Model):
                 if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
                 else: loss_group[k] = [[] for i in range(max_episodes)]
         self.metrics_loss = metrics_loss
-        
+
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         self.reset_states()
@@ -627,7 +627,7 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero)
+# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero) # TODO try combining AC actor and critic into one model and adding re-labeling returns as input and return goal
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
@@ -647,7 +647,7 @@ if __name__ == '__main__':
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
         model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
         name = "gym-{}-{}".format(arch, env_name)
-        
+
         ## debugging
         # model.build(()); model.action.summary(); quit(0)
         # inputs = {'obs':model.obs_zero, 'rewards':tf.constant([[0]],tf.float64), 'dones':tf.constant([[False]],tf.bool)}
@@ -690,7 +690,7 @@ if __name__ == '__main__':
         metrics_loss = model.metrics_loss
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
-                for j in range(len(loss_group[k])): loss_group[k][j] = np.mean(loss_group[k][j])
+                for j in range(len(loss_group[k])): loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
         name = "{}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
