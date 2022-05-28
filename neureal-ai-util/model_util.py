@@ -47,15 +47,15 @@ def ewma_ih(arr_in, window): # infinite history, faster
     for i in range(1, n): ewma[i] = arr_in[i] * alpha + ewma[i-1] * (1 - alpha)
     return ewma
 
-def stats_update(stats_spec, value, dtype):
-    b1, b1_n, b2, b2_n, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b1_n'], stats_spec['b2'], stats_spec['b2_n'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
+def stats_update(stats_spec, value):
+    b1, b1_n, b2, b2_n, dtype, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b1_n'], stats_spec['b2'], stats_spec['b2_n'], stats_spec['dtype'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
     one = tf.constant(1, dtype)
     var_ma.assign(b1 * var_ma + b1_n * value)
     var_ema.assign(b2 * var_ema + b2_n * (value * value))
     var_iter.assign_add(one)
-def stats_get(stats_spec, float_eps, dtype):
-    b1, b2, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b2'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
-    zero, one = tf.constant(0, dtype), tf.constant(1, dtype)
+def stats_get(stats_spec):
+    b1, b2, dtype, var_ma, var_ema, var_iter = stats_spec['b1'], stats_spec['b2'], stats_spec['dtype'], stats_spec['ma'], stats_spec['ema'], stats_spec['iter']
+    zero, one, float_eps = tf.constant(0, dtype), tf.constant(1, dtype), tf.constant(tf.experimental.numpy.finfo(dtype).eps, dtype)
 
     ma = one - tf.math.pow(b1, var_iter)
     ema = one - tf.math.pow(b2, var_iter)
@@ -408,9 +408,9 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
         self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = memory_size, sort_memory, norm, residual, cross_type
         self._mem_channels = latent_size if cross_type != 1 else channels
+        float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
 
         if norm:
-            # float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
             # self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
             # self._layer_norm_value = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_value')
             self._layer_dense_key_in = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense_key_in')
@@ -424,13 +424,14 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
                 # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
                 if cross_type == 1: # input, batch = different latents
-                    init_zero = np.linspace(1.0, -1.0, num_latents) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, num_latents, dtype=tf.keras.backend.floatx()) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=-1)
                     init_zero = np.repeat(init_zero, latent_size, axis=-1)
                 if cross_type == 2: # output, batch = actual batch
-                    init_zero = np.linspace(1.0, -1.0, channels) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, channels, dtype=tf.keras.backend.floatx()) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=0)
                     init_zero = np.repeat(init_zero, num_latents, axis=0)
+                init_zero += float_eps
                 init_zero = np.expand_dims(init_zero, axis=0)
             init_zero = tf.constant(init_zero, dtype=tf.keras.backend.floatx())
             self._init_zero = tf.identity(init_zero)
