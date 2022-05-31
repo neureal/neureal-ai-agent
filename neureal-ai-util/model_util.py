@@ -439,7 +439,10 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def build(self, input_shape):
         if self._mem_size is not None:
             mem_zero = tf.constant(np.full((self._mem_size, input_shape[1], self._mem_channels), 0), tf.keras.backend.floatx())
-            self._mem_zero = tf.identity(mem_zero)
+            mem_rel_idx = np.linspace(np.full((input_shape[1], self._mem_channels), self._mem_size), np.full((input_shape[1], self._mem_channels), 0), self._mem_size+2,dtype=tf.keras.backend.floatx())[1:-1]
+            img_rel_idx = np.linspace(np.full((input_shape[1], self._mem_channels), 0), np.full((input_shape[1], self._mem_channels), -1), self._mem_size+2,dtype=tf.keras.backend.floatx())[1:-1]
+            mem_rel_idx, img_rel_idx = tf.constant(mem_rel_idx, tf.keras.backend.floatx()), tf.constant(img_rel_idx, tf.keras.backend.floatx())
+            self._mem_zero, self._mem_rel_idx, self._img_rel_idx = tf.identity(mem_zero), tf.identity(mem_rel_idx), tf.identity(img_rel_idx)
             self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
             self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
             # if self._sort_memory:
@@ -469,11 +472,21 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
 
         if self._mem_size is not None:
             # value_mem = memory[:,mem_idx:] # gradients not always working with this
-            memory, mem_idx, memory_img, mem_idx_img = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img
+            memory, mem_idx, memory_img, mem_idx_img, mem_size = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img, self._mem_size
             # TODO add mem/img index relative to current location (mem-,img+) # tf.linspace(0.0,1,256)
-            if use_img and store_real: value_mem = tf.concat([memory[mem_idx:], value, memory_img[mem_idx_img+batch_size:]], axis=0)
-            elif use_img: value_mem = tf.concat([memory[mem_idx:], memory_img[mem_idx_img:], value], axis=0)
-            else: value_mem = tf.concat([memory[mem_idx:], value], axis=0)
+            if use_img and store_real:
+                value_mem = tf.concat([memory[mem_idx:], value, memory_img[mem_idx_img+batch_size:]], axis=0)
+                # value_mem = tf.concat([memory[mem_idx:]*self._mem_rel_idx[mem_idx:], value, memory_img[mem_idx_img+batch_size:]*self._img_rel_idx[mem_size-mem_idx_img:]], axis=0) # TODO
+            elif use_img:
+                # mem = tf.concat([memory[mem_idx+(mem_size-mem_idx_img):], memory_img[mem_idx_img:]], axis=0) # TODO
+                value_mem = tf.concat([memory[mem_idx+(mem_size-mem_idx_img):], memory_img[mem_idx_img:], value], axis=0)
+            else:
+                value_mem = tf.concat([memory[mem_idx:], value], axis=0)
+                # if mem_idx < mem_size:
+                #     # mem = memory[mem_idx:] * self._mem_rel_idx[mem_idx:] # _mha_relM
+                #     mem = memory[mem_idx:] + self._mem_rel_idx[mem_idx:] # _mha_relP
+                #     value_mem = tf.concat([mem, value], axis=0)
+                # else: value_mem = value
             value_mem = tf.reshape(value_mem, (1, -1, latent_size))
             # query = tf.reshape(query, (1, -1, latent_size))
         else: value_mem = value
