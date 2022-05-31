@@ -47,7 +47,7 @@ class GeneralAI(tf.keras.Model):
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         self.float64_eps = tf.constant(tf.experimental.numpy.finfo(tf.float64).eps, tf.float64)
-        # self.float_log_min_prob = tf.constant(tf.math.log(self.float_eps), compute_dtype)
+        self.float_log_min = tf.constant(tf.math.log(self.float_eps), compute_dtype)
         self.compute_zero, self.int32_max, self.int32_maxbit, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(1073741824, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
         self.arch, self.env, self.trader, self.env_render, self.value_cont = arch, env, trader, env_render, value_cont
@@ -75,7 +75,8 @@ class GeneralAI(tf.keras.Model):
         net_attn, net_lstm = True, False
 
         latent_spec = {'dtype':compute_dtype, 'latent_size':latent_size, 'num_latents':1, 'max_latents':aio_max_latents}
-        latent_spec.update({'inp':latent_size*4, 'midp':latent_size*2, 'outp':latent_size*4, 'evo':int(latent_size/2)})
+        # latent_spec.update({'inp':latent_size*4, 'midp':latent_size*2, 'outp':latent_size*4, 'evo':int(latent_size/2)})
+        latent_spec.update({'inp':512, 'midp':256, 'outp':512, 'evo':int(latent_size/2)})
         if latent_dist == 'd': latent_spec.update({'dist_type':'d', 'num_components':latent_size, 'event_shape':(latent_size,)}) # deterministic
         if latent_dist == 'c': latent_spec.update({'dist_type':'c', 'num_components':0, 'event_shape':(latent_size, latent_size)}) # categorical
         if latent_dist == 'mx': latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
@@ -101,7 +102,7 @@ class GeneralAI(tf.keras.Model):
             rep_dist = self.rep.dist(outputs); self.latent_zero = tf.zeros_like(rep_dist.sample(), dtype=latent_spec['dtype'])
             latent_spec.update({'step_shape':self.latent_zero.shape}); self.latent_spec = latent_spec
 
-            opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-6, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99}, {'name':'loss', 'b1':0.99, 'b2':0.99}]
+            opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-6, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}, {'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
             self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.action(self.latent_zero)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
@@ -109,7 +110,7 @@ class GeneralAI(tf.keras.Model):
             # self.action_get_learn_rate = util.LearnRateThresh(thresh, thresh_rates)
 
         if arch in ('MU4',):
-            opt_spec = [{'name':'actionL', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-9, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99}, {'name':'loss', 'b1':0.99, 'b2':0.99}]
+            opt_spec = [{'name':'actionL', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-9, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}, {'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
             self.actionL = nets.ArchGen('ANL', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.actionL(self.latent_zero)
             self.actionL.optimizer_weights = util.optimizer_build(self.actionL.optimizer['actionL'], self.actionL.trainable_variables)
             util.net_build(self.actionL, self.initializer)
@@ -126,7 +127,7 @@ class GeneralAI(tf.keras.Model):
         if arch in ('MU4',):
             inputs['obs'], inputs['return_goal'] = self.latent_zero, [self.rewards_zero]
             act_spec = [{'space_name':'return_goal', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-            opt_spec = [{'name':'act', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99}, {'name':'loss', 'b1':0.99, 'b2':0.99}]
+            opt_spec = [{'name':'act', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}, {'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
             self.act = nets.ArchFull('ACT', inputs, opt_spec, stats_spec, act_spec, self.action_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.act(inputs)
             self.act.optimizer_weights = util.optimizer_build(self.act.optimizer['act'], self.act.trainable_variables)
             util.net_build(self.act, self.initializer)
@@ -146,12 +147,13 @@ class GeneralAI(tf.keras.Model):
             self.done.optimizer_weights = util.optimizer_build(self.done.optimizer['done'], self.done.trainable_variables)
             util.net_build(self.done, self.initializer)
 
-        # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99}]
+        # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
         # inputs_meta = {'obs':[tf.constant([[0,0,0]],compute_dtype)]}; meta_spec_in = [{'space_name':'obs', 'name':'', 'event_shape':(3,), 'event_size':1, 'channels':3, 'num_latents':1}]
         # self.meta_spec = [{'space_name':'meta', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
         # self.meta = nets.ArchFull('M', inputs_meta, opt_spec, stats_spec, meta_spec_in, self.meta_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io); outputs = self.meta(inputs_meta)
         # self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
         # util.net_build(self.meta, self.initializer)
+
 
 
         metrics_loss = OrderedDict()
@@ -194,7 +196,7 @@ class GeneralAI(tf.keras.Model):
 
     def metrics_update(self, *args):
         args = list(args)
-        for i in range(1,len(args)): args[i] = args[i].item()
+        # for i in range(1,len(args)): args[i] = args[i].item()
         log_metrics, episode, idx = args[0], args[1], 2
         for loss_group in self.metrics_loss.values():
             for k in loss_group.keys():
@@ -268,13 +270,17 @@ class GeneralAI(tf.keras.Model):
         return action
 
     def train_PG(self, inputs, targets, returns, store_memory=True, use_img=False, store_real=False):
+        # returns_calc = tf.squeeze(tf.cast(returns, self.compute_dtype),axis=-1)
+        returns_calc = tf.cast(returns[0], self.compute_dtype)
         with tf.GradientTape() as tape_PG:
             action_logits = self.action(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real)
             action_dist = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
             # loss_action = util.loss_PG(action_dist, action, returns)
             loss_action_lik = util.loss_likelihood(action_dist, targets)
-            loss_action = loss_action_lik * tf.cast(returns[0], self.compute_dtype)
+            loss_action = loss_action_lik * returns_calc # _lEpA
+            # loss_action = loss_action_lik * loss_value # _lEp9
+            # loss_action = loss_action_lik * (returns_calc + loss_value) # _lEp5
         gradients = tape_PG.gradient(loss_action, self.action.trainable_variables)
         self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
         return loss_action_lik
@@ -1439,7 +1445,9 @@ class GeneralAI(tf.keras.Model):
     def MU4(self):
         print("tracing -> GeneralAI MU4")
         num_gen = 1
-        ma, ma_loss, ma_loss2, snr, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype)
+        ma, snr, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,tf.float64), tf.constant(0,tf.float64), tf.constant([0],self.compute_dtype)
+        ma_loss, snr_loss, std_loss = tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype)
+        ma_loss_act, snr_loss_act, std_loss_act = tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype)
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes*num_gen and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -1449,7 +1457,8 @@ class GeneralAI(tf.keras.Model):
 
             gen, episode_gen = episode%num_gen, episode//num_gen
             log_metrics, train = [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True
-            return_goal = tf.constant([[200.0]], tf.float64) # TODO try changing return_goal each episode to incrementally increase above current total returns
+            return_goal = tf.constant([[200.0]], tf.float64)
+            # return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
             # return_goal_alt = tf.constant([[10.0]], tf.float64)
             return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
             if gen == 0: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True, 0 # action/PG
@@ -1460,10 +1469,10 @@ class GeneralAI(tf.keras.Model):
             self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
             rewards_total = outputs['returns'][-1][0][0] # tf.math.reduce_mean(outputs['rewards'])
             if gen == 0:
-                util.stats_update(self.action.stats['rwd'], rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.action.stats['rwd'], self.float64_eps, tf.float64)
+                util.stats_update(self.action.stats['rwd'], rewards_total); ma, _, snr, std = util.stats_get(self.action.stats['rwd'])
 
-                # _, _, _, std = util.stats_get(self.action.stats['loss'], self.float_eps, self.compute_dtype)
-                # obs = [self.action.stats['loss']['iter'].value(), tf.cast(ma,self.compute_dtype), std]
+                # _, _, _, std_loss = util.stats_get(self.action.stats['loss'])
+                # obs = [self.action.stats['loss']['iter'].value(), tf.cast(ma,self.compute_dtype), std_loss]
                 # inputs_meta = {'obs':[tf.expand_dims(tf.stack(obs,0),0)]}
 
                 # learn_rate = self.action.optimizer['action'].learning_rate
@@ -1478,12 +1487,16 @@ class GeneralAI(tf.keras.Model):
                 # self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0])
                 # # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
 
-                # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss) # learning_rate schedule based on average loss
+                # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss) # _lr-loss
+                # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(std) # _lr-rwd-std
+                # self.action.optimizer['action'].learning_rate = tf.math.exp(episode / self.max_episodes * (-16.0 + 11.0) - 11.0) # _lr-scale
+                # self.action.optimizer['action'].learning_rate = self.learn_rate * snr_loss # _lr-loss-snr-scale
+                # self.action.optimizer['action'].learning_rate = self.learn_rate * snr_loss * snr_loss # _lr-loss-snr-scale2
 
             if gen == 1:
-                util.stats_update(self.act.stats['rwd'], rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.act.stats['rwd'], self.float64_eps, tf.float64)
+                util.stats_update(self.act.stats['rwd'], rewards_total); ma, _, _, _ = util.stats_get(self.act.stats['rwd'])
                 self.act.optimizer['act'].learning_rate = self.act_get_learn_rate(tf.math.abs(return_goal[0][0] - ma))
-            if gen == 2: util.stats_update(self.actionL.stats['rwd'], rewards_total, tf.float64); ma, _, _, _ = util.stats_get(self.actionL.stats['rwd'], self.float64_eps, tf.float64)
+            if gen == 2: util.stats_update(self.actionL.stats['rwd'], rewards_total); ma, _, _, _ = util.stats_get(self.actionL.stats['rwd'])
 
 
             loss_rep = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
@@ -1503,17 +1516,19 @@ class GeneralAI(tf.keras.Model):
                 self.reset_states(); loss_act = self.MU4_act_PG_learner(outputs, outputs_rep, gen, return_goal)
 
                 if gen == 0:
-                    util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); ma_loss, _, snr, std = util.stats_get(self.action.stats['loss'], self.float_eps, self.compute_dtype)
-                    util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act']), self.compute_dtype); ma_loss2, _, snr2, std2 = util.stats_get(self.act.stats['loss'], self.float_eps, self.compute_dtype)
-                    # maL, _, _, _ = util.stats_get(self.actionL.stats['rwd'], self.float64_eps, tf.float64)
-                    # if self.action.stats['loss']['iter'] > 10 and std < 1.0 and tf.math.abs(ma_loss) < 1.0:
-                    if snr < 0.5 and std < 0.1 and tf.math.abs(ma_loss) < 0.1:
+                    util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss_act['PG'])); ma_loss, _, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
+                    util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act'])); ma_loss_act, _, snr_loss_act, std_loss_act = util.stats_get(self.act.stats['loss'])
+                    # maL, _, _, _ = util.stats_get(self.actionL.stats['rwd'])
+                    # if self.action.stats['loss']['iter'] > 10 and std_loss < 1.0 and tf.math.abs(ma_loss) < 1.0:
+                    if snr_loss < 0.5 and std_loss < 0.1 and tf.math.abs(ma_loss) < 0.1:
                         # if ma > maL: util.net_copy(self.action, self.actionL)
                         util.net_reset(self.action) #; util.net_reset(self.rep)
-                        # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=2e-3, minval=self.float64_eps)
-                        tf.print("net_reset (action) at:", episode_gen) # , " copy?", ma > maL
-                if gen == 1: util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act']), self.compute_dtype); ma_loss, _, snr, std = util.stats_get(self.act.stats['loss'], self.float_eps, self.compute_dtype)
-                if gen == 2: util.stats_update(self.actionL.stats['loss'], tf.math.reduce_mean(loss_act['PG']), self.compute_dtype); ma_loss, _, snr, std = util.stats_get(self.actionL.stats['loss'], self.float_eps, self.compute_dtype)
+                        # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=self.learn_rate, minval=self.float64_eps) # _lr-rnd-linear
+                        # self.action.optimizer['action'].learning_rate = tf.math.exp(tf.random.uniform((), dtype=tf.float64, maxval=-7, minval=-16)) # _lr-rnd-exp
+                        tf.print("net_reset (action) at:", episode_gen, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss) # , " copy?", ma > maL
+
+                if gen == 1: util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act'])); ma_loss, _, snr_loss, std_loss = util.stats_get(self.act.stats['loss'])
+                if gen == 2: util.stats_update(self.actionL.stats['loss'], tf.math.reduce_mean(loss_act['PG'])); ma_loss, _, snr_loss, std_loss = util.stats_get(self.actionL.stats['loss'])
 
 
             metrics = [log_metrics, episode_gen, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
@@ -1521,8 +1536,8 @@ class GeneralAI(tf.keras.Model):
                 # ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 # tf.math.reduce_mean(loss_actor['returns_pred']),
                 ma_loss, tf.math.reduce_mean(loss_act['PG']),
-                # snr, std,
-                ma_loss2, tf.math.reduce_mean(loss_act['act']),
+                # snr_loss, std_loss,
+                ma_loss_act, tf.math.reduce_mean(loss_act['act']),
                 # tf.math.reduce_mean(loss_rep['trans']),
                 # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
                 # tf.math.reduce_mean(loss_actor['trans']),
@@ -1556,7 +1571,7 @@ latent_size = 128
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
 mixture_multi = 4
 net_attn_io = True
-aio_max_latents = 32
+aio_max_latents = 5
 attn_mem_base = 4 # max_steps must be power of this!
 aug_data_step, aug_data_pos = True, False
 
@@ -1565,10 +1580,10 @@ device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or o
 
 machine, device, extra = 'dev', 1, '_rp200_gen0-pg2e6_img' # _repL1 _gen0123-rnd-pg2e5 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
-trader, env_async, env_async_clock, env_async_speed = False, False, 0.001, 160.0
-env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
-# env_name, max_steps, env_render, env = 'CartPole', 512, False, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    500  475.0
-# env_name, max_steps, env_render, env = 'LunarLand', 1024, False, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
+trader, env_async, env_async_clock, env_async_speed, env_reconfig = False, False, 0.001, 160.0, False
+env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
+# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    500  475.0
+# env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0 # ()6 int64    [()2,()2,()5] int64    200  25.0
 # env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0') # (64,64,3) uint8    ()15 int64    1000 None
 # env_name, max_steps, env_render, env = 'ProcgenCaveflyer', 1024, False, gym.make('procgen-caveflyer-v0') # (64,64,3) uint8    ()15 int64    1000 None
@@ -1576,18 +1591,18 @@ env_name, max_steps, env_render, env = 'CartPole', 256, False, gym.make('CartPol
 # env_name, max_steps, env_render, env = 'MontezumaRevenge', 22528, False, gym.make('MontezumaRevengeNoFrameskip-v4') # (210,160,3) uint8    ()18 int64    400000 None
 # env_name, max_steps, env_render, env = 'MsPacman', 22528, False, gym.make('MsPacmanNoFrameskip-v4') # (210,160,3) uint8    ()9 int64    400000 None
 
-# env_name, max_steps, env_render, env = 'CartPoleCont', 256, False, gym.make('CartPoleContinuousBulletEnv-v0'); env.observation_space.dtype = np.dtype('float64') # (4) float32    (1) float32    200  190.0
-# env_name, max_steps, env_render, env = 'LunarLandCont', 1024, False, gym.make('LunarLanderContinuous-v2') # (8) float32    (2) float32    1000  200
+# env_name, max_steps, env_render, env_reconfig, env = 'CartPoleCont', 256, False, True, gym.make('CartPoleContinuousBulletEnv-v0'); env.observation_space.dtype = np.dtype('float64') # (4) float32    (1) float32    200  190.0
+# env_name, max_steps, env_render, env_reconfig, env = 'LunarLandCont', 1024, False, True, gym.make('LunarLanderContinuous-v2') # (8) float32    (2) float32    1000  200
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
 # env_name, max_steps, env_render, env = 'Hopper', 1024, False, gym.make('HopperBulletEnv-v0') # (15) float32    (3) float32    1000  2500.0
 # env_name, max_steps, env_render, env = 'RacecarZed', 1024, False, gym.make('RacecarZedBulletEnv-v0') # (10,100,4) uint8    (2) float32    1000  5.0
 
 # from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
 
-# import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 16, False, env_.RandomEnv(True)
+# import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*4, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
+# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
 # max_steps = 16 # max replay buffer or train interval or bootstrap
 
@@ -1607,6 +1622,7 @@ if __name__ == '__main__':
     # agent_process.join()
 
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
+    if env_reconfig: import envs_local.reconfig_wrapper as envrw_; env_name, env = env_name+'-r', envrw_.ReconfigWrapperEnv(env)
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
         model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
         name = "gym-{}-{}".format(arch, env_name)

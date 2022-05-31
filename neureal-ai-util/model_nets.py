@@ -16,9 +16,9 @@ class ArchFull(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
         self.stats = OrderedDict()
-        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],tf.float64), 'b1_n':tf.constant(1-spec['b1'],tf.float64), 'b2':tf.constant(spec['b2'],tf.float64), 'b2_n':tf.constant(1-spec['b2'],tf.float64),
-            'ma':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
-            'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
+        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],spec['dtype']), 'b1_n':tf.constant(1-spec['b1'],spec['dtype']), 'b2':tf.constant(spec['b2'],spec['dtype']), 'b2_n':tf.constant(1-spec['b2'],spec['dtype']), 'dtype':spec['dtype'],
+            'ma':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
+            'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
@@ -50,9 +50,9 @@ class ArchTrans(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
         self.stats = OrderedDict()
-        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],tf.float64), 'b1_n':tf.constant(1-spec['b1'],tf.float64), 'b2':tf.constant(spec['b2'],tf.float64), 'b2_n':tf.constant(1-spec['b2'],tf.float64),
-            'ma':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
-            'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
+        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],spec['dtype']), 'b1_n':tf.constant(1-spec['b1'],spec['dtype']), 'b2':tf.constant(spec['b2'],spec['dtype']), 'b2_n':tf.constant(1-spec['b2'],spec['dtype']), 'dtype':spec['dtype'],
+            'ma':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
+            'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
@@ -78,9 +78,9 @@ class ArchRep(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
         self.stats = OrderedDict()
-        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],tf.float64), 'b1_n':tf.constant(1-spec['b1'],tf.float64), 'b2':tf.constant(spec['b2'],tf.float64), 'b2_n':tf.constant(1-spec['b2'],tf.float64),
-            'ma':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
-            'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
+        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],spec['dtype']), 'b1_n':tf.constant(1-spec['b1'],spec['dtype']), 'b2':tf.constant(spec['b2'],spec['dtype']), 'b2_n':tf.constant(1-spec['b2'],spec['dtype']), 'dtype':spec['dtype'],
+            'ma':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
+            'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
@@ -105,9 +105,9 @@ class ArchGen(tf.keras.Model):
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
         self.stats = OrderedDict()
-        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],tf.float64), 'b1_n':tf.constant(1-spec['b1'],tf.float64), 'b2':tf.constant(spec['b2'],tf.float64), 'b2_n':tf.constant(1-spec['b2'],tf.float64),
-            'ma':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
-            'iter':tf.Variable(0, dtype=tf.float64, trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
+        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],spec['dtype']), 'b1_n':tf.constant(1-spec['b1'],spec['dtype']), 'b2':tf.constant(spec['b2'],spec['dtype']), 'b2_n':tf.constant(1-spec['b2'],spec['dtype']), 'dtype':spec['dtype'],
+            'ma':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
+            'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
         arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
@@ -149,12 +149,14 @@ class In(tf.keras.layers.Layer):
                     channels += pos_idx.shape[-1]
             else: self.pos_idx_in[space_name] += [None]
             if net_attn_io and event_size > 1:
-                self.layer_attn_in[space_name] += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=True, hidden_size=inp, evo=evo, residual=False, cross_type=1, num_latents=num_latents, channels=channels, name='attn_in_{}_{}'.format(space_name, input_name))]
+                self.layer_attn_in[space_name] += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, name='attn_in_{}_{}'.format(space_name, input_name))]
+                # self.layer_mlp += [util.MLPBlock(hidden_size=latent_spec['mid'], latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
             else: self.layer_attn_in[space_name] += [None]
             self.layer_mlp_in[space_name] += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{}_{}'.format(space_name, input_name))]
-        if net_attn_io and self.num_latents > aio_max_latents:
+        if net_attn_io and self.num_latents >= aio_max_latents:
             self.net_attn_io2, self.num_latents = True, aio_max_latents
             self.layer_attn_io2 = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=self.num_latents, channels=latent_size, name='attn_io2')
+            # self.layer_mlp += [util.MLPBlock(hidden_size=latent_spec['mid'], latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
         if obs_latent: self.net_ins += 1; self.num_latents += latent_spec['num_latents']
         else: latent_spec.update({'num_latents':self.num_latents})
 
@@ -170,9 +172,13 @@ class In(tf.keras.layers.Layer):
                     shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[input_name][i].shape], axis=0)
                     pos_idx = tf.broadcast_to(self.pos_idx_in[input_name][i], shape)
                     out = tf.concat([out, pos_idx], axis=-1)
-                if self.layer_attn_in[input_name][i] is not None: out = self.layer_attn_in[input_name][i](out)
-                else: out = self.layer_flatten(out)
-                out_accu[out_accu_i] = self.layer_mlp_in[input_name][i](out); out_accu_i += 1
+                if self.layer_attn_in[input_name][i] is not None:
+                    out = self.layer_mlp_in[input_name][i](out)
+                    out_accu[out_accu_i] = self.layer_attn_in[input_name][i](out)
+                else:
+                    out = self.layer_flatten(out)
+                    out_accu[out_accu_i] = self.layer_mlp_in[input_name][i](out)
+                out_accu_i += 1
         if self.obs_latent: out_accu[-1] = tf.cast(inputs['obs'], self.compute_dtype)
         # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
         out = tf.concat(out_accu, axis=0)
@@ -210,7 +216,7 @@ class Net(tf.keras.layers.Layer):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
-        if self.net_attn_io: out = self.layer_attn_out_logits(out)
+        if self.net_attn_io: out = self.layer_attn_out_logits(out) # _net-attnio
         else:
             out = self.layer_flatten(tf.expand_dims(out, axis=0))
             out = self.layer_dense_out_logits(out)
