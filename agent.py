@@ -71,6 +71,7 @@ class GeneralAI(tf.keras.Model):
         self.attn_img_step_sizesT = tf.concat(self.attn_img_step_sizes, axis=0)
         if self.attn_img_step_sizesT.shape == (): self.attn_img_step_sizesT = tf.reshape(self.attn_img_step_sizesT, (1,))
         self.attn_img_step_locs = max_steps - tf.cast(max_steps / self.attn_img_step_sizesT, tf.int32)
+        self.step_size_max = tf.reshape(self.attn_img_step_sizesT[-1],(1,1))
 
         net_attn, net_lstm = True, False
 
@@ -161,12 +162,12 @@ class GeneralAI(tf.keras.Model):
         metrics_loss['1steps'] = {'steps+':np.int64}
         if arch == 'MU4':
             # metrics_loss['1rewards3*'] = {'-rewards_PGL_ma':np.float64, '-rewards_PGL_total+':np.float64, '-rewards_PGL_final=':np.float64}
-            # metrics_loss['1rewards2*'] = {'-rewards_PG_ma':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
+            metrics_loss['1rewards2*'] = {'-rewards_PG_ma':np.float64, '-rewards_PG_total+':np.float64, '-rewards_PG_final=':np.float64}
             # metrics_loss['1extra'] = {'returns_pred':np.float64}
+            metrics_loss['1netsACT*'] = {'-loss_act_ma':np.float64, '-loss_act':np.float64}
             metrics_loss['1netsPG*'] = {'-loss_PG_ma':np.float64, '-loss_PG':np.float64}
             # metrics_loss['1netsR'] = {'-loss_PG_snr':np.float64}; metrics_loss['1netsS'] = {'-loss_PG_std':np.float64}
             # metrics_loss['1nets8'] = {'loss_PGL':np.float64}; metrics_loss['1nets8S'] = {'-loss_PGL_std':np.float64}
-            metrics_loss['1netsACT*'] = {'-loss_act_ma':np.float64, '-loss_act':np.float64}
             # metrics_loss['1nets6'] = {'loss_trans':np.float64}
             # metrics_loss['1nets2'] = {'loss_rwd':np.float64, 'loss_done':np.float64}
             # metrics_loss['1nets7'] = {'loss_trans_img':np.float64}
@@ -269,7 +270,7 @@ class GeneralAI(tf.keras.Model):
             action[i] = action_dist.sample()
         return action
 
-    def train_PG(self, inputs, targets, returns, store_memory=True, use_img=False, store_real=False):
+    def train_PG(self, inputs, targets, returns, loss_value, store_memory=True, use_img=False, store_real=False):
         # returns_calc = tf.squeeze(tf.cast(returns, self.compute_dtype),axis=-1)
         returns_calc = tf.cast(returns[0], self.compute_dtype)
         with tf.GradientTape() as tape_PG:
@@ -278,14 +279,24 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
             # loss_action = util.loss_PG(action_dist, action, returns)
             loss_action_lik = util.loss_likelihood(action_dist, targets)
-            loss_action = loss_action_lik * returns_calc # _lEpA
+            # loss_action = loss_action_lik * returns_calc # _lEpA
             # loss_action = loss_action_lik * loss_value # _lEp9
-            # loss_action = loss_action_lik * (returns_calc + loss_value) # _lEp5
+            loss_action = loss_action_lik * (returns_calc + loss_value) # _lEp5
         gradients = tape_PG.gradient(loss_action, self.action.trainable_variables)
         self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
         return loss_action_lik
 
-    # def train_act(self, inputs, targets, returns, store_memory=True, use_img=False, store_real=False):
+    def train_act(self, inputs, targets, returns, store_memory=True, use_img=False, store_real=False):
+        with tf.GradientTape() as tape_act:
+            action_logits = self.act(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real)
+            action_dist = [None]*self.action_spec_len
+            for i in range(self.action_spec_len): action_dist[i] = self.act.dist[i](action_logits[i])
+            loss_action = util.loss_likelihood(action_dist, targets)
+            # loss_action = util.loss_PG(action_dist, targets, returns, returns_target=return_goal) # _lRt
+            # loss_action = util.loss_PG(action_dist, targets, returns) # _lR
+        gradients = tape_act.gradient(loss_action, self.act.trainable_variables)
+        self.act.optimizer['act'].apply_gradients(zip(gradients, self.act.trainable_variables))
+        return loss_action
 
     def train_trans(self, inputs, target_trans, target_reward, target_done, store_memory=True, training=True):
         with tf.GradientTape() as tape_trans:
@@ -493,10 +504,10 @@ class GeneralAI(tf.keras.Model):
             # TODO collect dyn model loss or entropy in the same fashion as returns ie future based, make actor who tries to maximize it
             # TODO can I use linear layers in the transformer to compress (4 to 1, 64 to 1, full episode to 1, etc) the far (past+future) latents?
 
-            # ## _img
-            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
-            # outputs_img = self.MU4_img(inputs_step, gen)
+            ## _img
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+            self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, gen)
 
             # self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
             # loss_act = self.MU4_img_learner(outputs_img, gen)
@@ -509,14 +520,14 @@ class GeneralAI(tf.keras.Model):
             # self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
             # loss_act = self.MU4_img_learner(outputs_img, 2)
 
-            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
-            outputs_img = self.MU4_img(inputs_step, 0)
+            # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
             # self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
-            # loss_act = self.MU4_img_learner(outputs_img, 0)
-            # loss_actions = loss_actions.write(step, tf.expand_dims(tf.math.reduce_mean(loss_act['PG'], axis=0), axis=0))
-            # action = self.gen_PG(inputs_step['obs'])
-            action = self.gen_PG(inputs_step['obs'], use_img=True, store_real=True) # _img
+            # outputs_img = self.MU4_img(inputs_step, 0)
+            # # self.action.reset_states(use_img=True); self.act.reset_states(use_img=True)
+            # # loss_act = self.MU4_img_learner(outputs_img, 0)
+            # # loss_actions = loss_actions.write(step, tf.expand_dims(tf.math.reduce_mean(loss_act['PG'], axis=0), axis=0))
+            # # action = self.gen_PG(inputs_step['obs'])
+            # action = self.gen_PG(inputs_step['obs'], use_img=True, store_real=True) # _img
 
             # inputs_act = {'obs':inputs_step['obs'], 'step_size':[self.step_size_one], 'return_goal':[outputs_img['returns'][0:1]]}
             # with tf.GradientTape() as tape_act:
@@ -542,25 +553,20 @@ class GeneralAI(tf.keras.Model):
             # loss_actions = loss_actions.write(step, tf.expand_dims(tf.math.reduce_mean(loss_act['act'], axis=0), axis=0))
             # action = self.gen_act(inputs_step, use_img=True, store_real=True) # _img
 
-            inputs_step_store = {'obs':inputs_step['obs'], 'actions':action, 'step_size':[self.step_size_one]}
-            trans_logits = self.trans(inputs_step_store); trans_dist = self.trans.dist(trans_logits)
-            latent_trans = trans_dist.sample()
-            rwd_logits = self.rwd(latent_trans); done_logits = self.done(latent_trans)
 
 
-
-            # action = self.action_zero_out
-            # if gen == 0:
-            #     # action = self.gen_rnd()
-            #     # action = self.gen_PG(inputs_step['obs'], use_img=True, store_real=True) # _img
-            #     action = self.gen_PG(inputs_step['obs'])
-            # if gen == 1:
-            #     # action = self.gen_act(inputs_step, use_img=True, store_real=True) # _img
-            #     action = self.gen_act(inputs_step)
-            # if gen == 2:
-            #     # action = self.gen_rnd()
-            #     # action = self.gen_PGL(inputs_step['obs'], use_img=True, store_real=True) # _img
-            #     action = self.gen_PGL(inputs_step['obs'])
+            action = self.action_zero_out
+            if gen == 0:
+                # action = self.gen_rnd()
+                action = self.gen_PG(inputs_step['obs'], use_img=True, store_real=True) # _img
+                # action = self.gen_PG(inputs_step['obs'])
+            if gen == 1:
+                action = self.gen_act(inputs_step, use_img=True, store_real=True) # _img
+                # action = self.gen_act(inputs_step)
+            if gen == 2:
+                # action = self.gen_rnd()
+                # action = self.gen_PGL(inputs_step['obs'], use_img=True, store_real=True) # _img
+                action = self.gen_PGL(inputs_step['obs'])
 
 
 
@@ -595,63 +601,66 @@ class GeneralAI(tf.keras.Model):
                 returns[step_scale] = returns[step_scale].unstack(returns_updt)
 
 
+            # trans_logits = self.trans(inputs_step_dyn); trans_dist = self.trans.dist(trans_logits)
+            # latent_trans = trans_dist.sample()
+            # rwd_logits = self.rwd(latent_trans); done_logits = self.done(latent_trans)
 
-            # ## _dyn2 (imagination environment)
-            # if step >= 1:
-            #     self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            #     with tf.GradientTape() as tape_trans_img:
-            #     # with tf.GradientTape() as tape_trans_img, tf.GradientTape(persistent=True) as tape_reward_img, tf.GradientTape(persistent=True) as tape_done_img:
-            #         trans_logits = self.trans(inputs_step_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
-            #         latent_trans_img = trans_dist.sample()
-            #         loss_tran = util.loss_likelihood(trans_dist, inputs_step['obs'])
-            #         # loss_tran = util.loss_diff(latent_trans_img, inputs_step['obs'])
-            #     gradients = tape_trans_img.gradient(loss_tran, self.trans.trainable_variables)
-            #     self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables))
-            #     loss_trans_img = loss_trans_img.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran, axis=0), axis=0))
+            ## _dyn2 (imagination environment)
+            if step >= 1:
+                self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+                with tf.GradientTape() as tape_trans_img:
+                # with tf.GradientTape() as tape_trans_img, tf.GradientTape(persistent=True) as tape_reward_img, tf.GradientTape(persistent=True) as tape_done_img:
+                    trans_logits = self.trans(inputs_step_img, use_img=True); trans_dist = self.trans.dist(trans_logits)
+                    latent_trans_img = trans_dist.sample()
+                    loss_tran = util.loss_likelihood(trans_dist, inputs_step['obs'])
+                    # loss_tran = util.loss_diff(latent_trans_img, inputs_step['obs'])
+                gradients = tape_trans_img.gradient(loss_tran, self.trans.trainable_variables)
+                self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables))
+                loss_trans_img = loss_trans_img.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran, axis=0), axis=0))
 
-            #     with tf.GradientTape() as tape_reward_img:
-            #     # with tape_reward_img:
-            #         rwd_logits = self.rwd(latent_trans_img, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
-            #         loss_reward = util.loss_likelihood(rwd_dist, inputs['rewards'])
-            #     gradients = tape_reward_img.gradient(loss_reward, self.rwd.trainable_variables) # self.trans.trainable_variables + self.rwd.trainable_variables
-            #     self.rwd.optimizer['rwd'].apply_gradients(zip(gradients, self.rwd.trainable_variables)) # self.trans.trainable_variables + self.rwd.trainable_variables
-            #     loss_rewards_img = loss_rewards_img.write(step, loss_reward)
+                with tf.GradientTape() as tape_reward_img:
+                # with tape_reward_img:
+                    rwd_logits = self.rwd(latent_trans_img, use_img=True); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+                    loss_reward = util.loss_likelihood(rwd_dist, inputs['rewards'])
+                gradients = tape_reward_img.gradient(loss_reward, self.rwd.trainable_variables) # self.trans.trainable_variables + self.rwd.trainable_variables
+                self.rwd.optimizer['rwd'].apply_gradients(zip(gradients, self.rwd.trainable_variables)) # self.trans.trainable_variables + self.rwd.trainable_variables
+                loss_rewards_img = loss_rewards_img.write(step, loss_reward)
 
-            #     with tf.GradientTape() as tape_done_img:
-            #     # with tape_done_img:
-            #         done_logits = self.done(latent_trans_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
-            #         loss_done = util.loss_likelihood(done_dist, inputs['dones'])
-            #     gradients = tape_done_img.gradient(loss_done, self.done.trainable_variables) # self.trans.trainable_variables + self.done.trainable_variables
-            #     self.done.optimizer['done'].apply_gradients(zip(gradients, self.done.trainable_variables)) # self.trans.trainable_variables + self.done.trainable_variables
-            #     loss_dones_img = loss_dones_img.write(step, loss_done)
+                with tf.GradientTape() as tape_done_img:
+                # with tape_done_img:
+                    done_logits = self.done(latent_trans_img, use_img=True); done_dist = self.done.dist[0](done_logits[0])
+                    loss_done = util.loss_likelihood(done_dist, inputs['dones'])
+                gradients = tape_done_img.gradient(loss_done, self.done.trainable_variables) # self.trans.trainable_variables + self.done.trainable_variables
+                self.done.optimizer['done'].apply_gradients(zip(gradients, self.done.trainable_variables)) # self.trans.trainable_variables + self.done.trainable_variables
+                loss_dones_img = loss_dones_img.write(step, loss_done)
 
 
-            # ## _dyn7 (real environment)
-            # with tf.GradientTape() as tape_trans:
-            # # with tf.GradientTape() as tape_trans, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
-            #     trans_logits = self.trans(inputs_step_dyn); trans_dist = self.trans.dist(trans_logits)
-            #     dyn_img_obs = trans_dist.sample()
-            #     loss_tran = util.loss_likelihood(trans_dist, inputs_step['obs'])
-            #     # loss_tran = util.loss_diff(dyn_img_obs, inputs_step['obs'])
-            # gradients = tape_trans.gradient(loss_tran, self.trans.trainable_variables) # self.rep.trainable_variables +
-            # self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables)) # self.rep.trainable_variables +
-            # loss_trans = loss_trans.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran, axis=0), axis=0))
+            ## _dyn7 (real environment)
+            with tf.GradientTape() as tape_trans:
+            # with tf.GradientTape() as tape_trans, tf.GradientTape(persistent=True) as tape_reward, tf.GradientTape(persistent=True) as tape_done:
+                trans_logits = self.trans(inputs_step_dyn); trans_dist = self.trans.dist(trans_logits)
+                dyn_img_obs = trans_dist.sample()
+                loss_tran = util.loss_likelihood(trans_dist, inputs_step['obs'])
+                # loss_tran = util.loss_diff(dyn_img_obs, inputs_step['obs'])
+            gradients = tape_trans.gradient(loss_tran, self.trans.trainable_variables) # self.rep.trainable_variables +
+            self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables)) # self.rep.trainable_variables +
+            loss_trans = loss_trans.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran, axis=0), axis=0))
 
-            # with tf.GradientTape() as tape_reward:
-            # # with tape_reward:
-            #     rwd_logits = self.rwd(dyn_img_obs); rwd_dist = self.rwd.dist[0](rwd_logits[0])
-            #     loss_reward = util.loss_likelihood(rwd_dist, inputs['rewards'])
-            # gradients = tape_reward.gradient(loss_reward, self.rwd.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables +
-            # self.rwd.optimizer['rwd'].apply_gradients(zip(gradients, self.rwd.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables +
-            # loss_rewards = loss_rewards.write(step, loss_reward)
+            with tf.GradientTape() as tape_reward:
+            # with tape_reward:
+                rwd_logits = self.rwd(dyn_img_obs); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+                loss_reward = util.loss_likelihood(rwd_dist, inputs['rewards'])
+            gradients = tape_reward.gradient(loss_reward, self.rwd.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables +
+            self.rwd.optimizer['rwd'].apply_gradients(zip(gradients, self.rwd.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables +
+            loss_rewards = loss_rewards.write(step, loss_reward)
 
-            # with tf.GradientTape() as tape_done:
-            # # with tape_done:
-            #     done_logits = self.done(dyn_img_obs); done_dist = self.done.dist[0](done_logits[0])
-            #     loss_done = util.loss_likelihood(done_dist, inputs['dones'])
-            # gradients = tape_done.gradient(loss_done, self.done.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables +
-            # self.done.optimizer['done'].apply_gradients(zip(gradients, self.done.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables +
-            # loss_dones = loss_dones.write(step, loss_done)
+            with tf.GradientTape() as tape_done:
+            # with tape_done:
+                done_logits = self.done(dyn_img_obs); done_dist = self.done.dist[0](done_logits[0])
+                loss_done = util.loss_likelihood(done_dist, inputs['dones'])
+            gradients = tape_done.gradient(loss_done, self.done.trainable_variables) # self.rep.trainable_variables + self.trans.trainable_variables +
+            self.done.optimizer['done'].apply_gradients(zip(gradients, self.done.trainable_variables)) # self.rep.trainable_variables + self.trans.trainable_variables +
+            loss_dones = loss_dones.write(step, loss_done)
 
 
 
@@ -794,6 +803,8 @@ class GeneralAI(tf.keras.Model):
         loss = {}
         loss_act = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_PG = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        loss_act_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        loss_PG_img = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
         episode_len = tf.shape(inputs['dones'])[0]
         for step in tf.range(episode_len):
@@ -809,39 +820,30 @@ class GeneralAI(tf.keras.Model):
 
             inputs_step = {'obs':inputs_rep['obs_rep'][step:step+1][0], 'step_size':[self.step_size_one], 'return_goal':[return_step]}
 
-            # # self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
-            # # self.act.reset_states(use_img=True)
-            # # outputs_img = self.MU4_img(inputs_step, 1)
-            # # with tf.GradientTape() as tape_act:
-            # #     action_logits = self.act(inputs_step, store_memory=False, use_img=True, store_real=True)
-            # #     action_dist = [None]*self.action_spec_len
-            # #     for i in range(self.action_spec_len): action_dist[i] = self.act.dist[i](action_logits[i])
-            # #     loss_action = util.loss_likelihood(action_dist, action)
-            # # gradients = tape_act.gradient(loss_action, self.act.trainable_variables)
-            # # self.act.optimizer['act'].apply_gradients(zip(gradients, self.act.trainable_variables))
-            # # loss_act = loss_act.write(step, loss_action)
+            self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True) # _img
+            self.act.reset_states(use_img=True)
+            outputs_img = self.MU4_img(inputs_step, 1)
+            loss_action = self.train_act(inputs_step, action, return_step, store_memory=False, use_img=True, store_real=True)
+            loss_act_img = loss_act_img.write(step, loss_action)
 
-            # with tf.GradientTape() as tape_act:
-            #     action_logits = self.act(inputs_step)
-            #     action_dist = [None]*self.action_spec_len
-            #     for i in range(self.action_spec_len): action_dist[i] = self.act.dist[i](action_logits[i])
-            #     loss_action = util.loss_likelihood(action_dist, action)
-            #     # loss_action = util.loss_PG(action_dist, action, return_step, returns_target=return_goal) # _lRt
-            #     # loss_action = util.loss_PG(action_dist, action, return_step) # _lR
-            # gradients = tape_act.gradient(loss_action, self.act.trainable_variables)
-            # self.act.optimizer['act'].apply_gradients(zip(gradients, self.act.trainable_variables))
-            # loss_act = loss_act.write(step, loss_action)
-            # # return_goal -= inputs['rewards'][step:step+1]; return_goal.set_shape((1,1))
+            loss_action = self.train_act(inputs_step, action, return_step)
+            loss_act = loss_act.write(step, loss_action)
 
             if gen == 0:
-                self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True)
+                inputs_step_dyn = {'obs':inputs_rep['obs_rep'][step:step+1][0], 'actions':action, 'step_size':[self.step_size_max]}
+                trans_logits = self.trans(inputs_step_dyn, store_memory=False); trans_dist = self.trans.dist(trans_logits)
+                latent_trans = trans_dist.sample()
+                rwd_logits = self.rwd(latent_trans, store_memory=False); rwd_dist = self.rwd.dist[0](rwd_logits[0])
+                loss_value = util.loss_likelihood(rwd_dist, return_step)
+
+                self.trans.reset_states(use_img=True); self.rwd.reset_states(use_img=True); self.done.reset_states(use_img=True) # _img
                 self.action.reset_states(use_img=True)
                 outputs_img = self.MU4_img(inputs_step, 0)
-                loss_action_lik = self.train_PG(inputs_step['obs'], action, return_step, store_memory=False, use_img=True, store_real=True)
-                loss_act = loss_act.write(step, loss_action_lik)
+                loss_action = self.train_PG(inputs_step['obs'], action, return_step, loss_value, store_memory=False, use_img=True, store_real=True)
+                loss_PG_img = loss_PG_img.write(step, loss_action)
 
-                loss_action_lik = self.train_PG(inputs_step['obs'], action, return_step)
-                loss_PG = loss_PG.write(step, loss_action_lik)
+                loss_action = self.train_PG(inputs_step['obs'], action, return_step, loss_value)
+                loss_PG = loss_PG.write(step, loss_action)
 
             if gen == 2:
                 with tf.GradientTape() as tape_PG:
@@ -859,6 +861,7 @@ class GeneralAI(tf.keras.Model):
             rwd_logits = self.rwd(latent_trans); done_logits = self.done(latent_trans)
 
         loss['act'], loss['PG'] = loss_act.concat(), loss_PG.concat()
+        # loss['act_img'], loss['PG_img'] = loss_act_img.concat(), loss_PG_img.concat()
         return loss
 
     # def MU4_act_learner(self, inputs, return_goal, training=True):
@@ -956,6 +959,8 @@ class GeneralAI(tf.keras.Model):
                     # loss_trans_ret = loss_trans_ret.write(step, tf.expand_dims(tf.math.reduce_mean(loss_tran_ret, axis=0), axis=0))
                     # loss_rewards_ret = loss_rewards_ret.write(step, loss_reward_ret)
                     # loss_dones_ret = loss_dones_ret.write(step, loss_done_ret)
+
+            # TODO always train 'step_size':[self.step_size_max] ?
 
             inputs_step_store = {'obs':inputs_rep['obs_rep'][step:step+1][0], 'actions':action, 'step_size':[self.step_size_one]}
             # trans_logits = self.trans(inputs_step_store); trans_dist = self.trans.dist(trans_logits)
@@ -1444,10 +1449,10 @@ class GeneralAI(tf.keras.Model):
 
     def MU4(self):
         print("tracing -> GeneralAI MU4")
-        num_gen = 1
-        ma, snr, std, loss_meta = tf.constant(0,tf.float64), tf.constant(0,tf.float64), tf.constant(0,tf.float64), tf.constant([0],self.compute_dtype)
-        ma_loss, snr_loss, std_loss = tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype)
-        ma_loss_act, snr_loss_act, std_loss_act = tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant(0,self.compute_dtype)
+        num_gen = 2
+        ma, snr, std, loss_meta = tf.constant(0,tf.float64), tf.constant(1,tf.float64), tf.constant(0,tf.float64), tf.constant([0],self.compute_dtype)
+        ma_loss, snr_loss, std_loss = tf.constant(0,self.compute_dtype), tf.constant(1,self.compute_dtype), tf.constant(0,self.compute_dtype)
+        ma_loss_act, snr_loss_act, std_loss_act = tf.constant(0,self.compute_dtype), tf.constant(1,self.compute_dtype), tf.constant(0,self.compute_dtype)
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes*num_gen and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -1457,12 +1462,12 @@ class GeneralAI(tf.keras.Model):
 
             gen, episode_gen = episode%num_gen, episode//num_gen
             log_metrics, train = [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True
-            return_goal = tf.constant([[200.0]], tf.float64)
-            # return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
-            # return_goal_alt = tf.constant([[10.0]], tf.float64)
-            return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
-            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True, 0 # action/PG
-            if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True, 1 # actout/act # TODO if was not relabling, training here would be like epocs
+            # return_goal = tf.constant([[200.0]], tf.float64)
+            return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
+            return_goal_alt = tf.constant([[200.0]], tf.float64)
+            # return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
+            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False]+[True,True,True]+[False,False]+[True,True]+[False,False], True, 0 # action/PG
+            if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True]+[False,False,False]+[True,True]+[False,False]+[True,True], True, 1 # actout/act # TODO if was not relabling, training here would be like epocs
             if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 2 # random, actionL/PGL
             if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 1 # act alt
 
@@ -1499,12 +1504,12 @@ class GeneralAI(tf.keras.Model):
             if gen == 2: util.stats_update(self.actionL.stats['rwd'], rewards_total); ma, _, _, _ = util.stats_get(self.actionL.stats['rwd'])
 
 
-            loss_rep = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
-            loss_act = {'PG':tf.constant([0], self.compute_dtype), 'act':tf.constant([0], self.compute_dtype)}
-            loss_PG = {'PG':tf.constant([0], self.compute_dtype)}
-            loss_dyn = {'trans':tf.constant([0], self.compute_dtype), 'reward':tf.constant([0], self.compute_dtype), 'done':tf.constant([0], self.compute_dtype)}
+            loss_rep = {'act':tf.constant([0],self.compute_dtype), 'act':tf.constant([0],self.compute_dtype)}
+            loss_act = {'act':tf.constant([0],self.compute_dtype), 'PG':tf.constant([0],self.compute_dtype)}
+            loss_PG = {'PG':tf.constant([0],self.compute_dtype)}
+            loss_dyn = {'trans':tf.constant([0],self.compute_dtype), 'reward':tf.constant([0],self.compute_dtype), 'done':tf.constant([0],self.compute_dtype)}
             if train:
-                # self.reset_states(); loss_rep = self.MU4_rep_learner(outputs, gen) # _repL1
+                self.reset_states(); loss_rep = self.MU4_rep_learner(outputs, gen) # _repL1
                 self.reset_states(); outputs_rep = self.MU4_rep_returns(outputs)
                 # self.reset_states(); loss_act = self.MU4_act_learner(outputs, return_goal)
                 # if gen == 0: self.reset_states(); loss_PG = self.MU4_PG_learner(outputs)
@@ -1512,15 +1517,16 @@ class GeneralAI(tf.keras.Model):
                 # self.reset_states(); loss_dyn = self.MU4_dyn_act_learner(outputs, gen) # _dyn5
                 # self.reset_states(); loss_dyn = self.MU4_dyn_learner2(outputs, gen) # _dyn8
                 # self.reset_states(); loss_dyn = self.MU4_dyn_learner3(outputs) # _dyn9
-                # self.reset_states(); loss_dyn = self.MU4_dyn_learner4(outputs, outputs_rep) # _dynA
+                self.reset_states(); loss_dyn = self.MU4_dyn_learner4(outputs, outputs_rep) # _dynA
                 self.reset_states(); loss_act = self.MU4_act_PG_learner(outputs, outputs_rep, gen, return_goal)
 
                 if gen == 0:
                     util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss_act['PG'])); ma_loss, _, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
-                    util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act'])); ma_loss_act, _, snr_loss_act, std_loss_act = util.stats_get(self.act.stats['loss'])
+                    # util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss_act['act'])); ma_loss_act, _, snr_loss_act, std_loss_act = util.stats_get(self.act.stats['loss'])
                     # maL, _, _, _ = util.stats_get(self.actionL.stats['rwd'])
                     # if self.action.stats['loss']['iter'] > 10 and std_loss < 1.0 and tf.math.abs(ma_loss) < 1.0:
-                    if snr_loss < 0.5 and std_loss < 0.1 and tf.math.abs(ma_loss) < 0.1:
+                    # if snr_loss < 0.5 and std_loss < 0.1 and tf.math.abs(ma_loss) < 0.1:
+                    if snr_loss < 0.5 and tf.math.abs(ma_loss) < 0.1:
                         # if ma > maL: util.net_copy(self.action, self.actionL)
                         util.net_reset(self.action) #; util.net_reset(self.rep)
                         # self.action.optimizer['action'].learning_rate = tf.random.uniform((), dtype=tf.float64, maxval=self.learn_rate, minval=self.float64_eps) # _lr-rnd-linear
@@ -1532,12 +1538,12 @@ class GeneralAI(tf.keras.Model):
 
 
             metrics = [log_metrics, episode_gen, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
-                # ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
+                ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 # ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0],
                 # tf.math.reduce_mean(loss_actor['returns_pred']),
+                ma_loss, tf.math.reduce_mean(loss_act['act']),
                 ma_loss, tf.math.reduce_mean(loss_act['PG']),
                 # snr_loss, std_loss,
-                ma_loss_act, tf.math.reduce_mean(loss_act['act']),
                 # tf.math.reduce_mean(loss_rep['trans']),
                 # tf.math.reduce_mean(loss_rep['reward']), tf.math.reduce_mean(loss_rep['done']),
                 # tf.math.reduce_mean(loss_actor['trans']),
@@ -1578,7 +1584,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 # device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_rp200_gen0-pg2e6_img' # _repL1 _gen0123-rnd-pg2e5 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 1, '_dyn27A_rep2e8_gen01-pg2e6-rpP10_img' # _repL1 _gen0123-rnd-pg2e5 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig = False, False, 0.001, 160.0, False
 env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
@@ -1602,9 +1608,9 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024*2, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
+# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-# max_steps = 16 # max replay buffer or train interval or bootstrap
+max_steps = 16 # max replay buffer or train interval or bootstrap
 
 arch = 'MU4' # Dreamer/planner w/imagination+generalization
 
