@@ -479,7 +479,9 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
                 # value_mem = tf.concat([memory[mem_idx:]*self._mem_rel_idx[mem_idx:], value, memory_img[mem_idx_img+batch_size:]*self._img_rel_idx[mem_size-mem_idx_img:]], axis=0) # TODO
             elif use_img:
                 # mem = tf.concat([memory[mem_idx+(mem_size-mem_idx_img):], memory_img[mem_idx_img:]], axis=0) # TODO
-                value_mem = tf.concat([memory[mem_idx+(mem_size-mem_idx_img):], memory_img[mem_idx_img:], value], axis=0)
+                clip = mem_size-mem_idx-mem_idx_img
+                if clip < 0: clip = tf.constant(0)
+                value_mem =  tf.concat([memory[mem_idx+clip:], memory_img[mem_idx_img:], value], axis=0)
             else:
                 value_mem = tf.concat([memory[mem_idx:], value], axis=0)
                 # if mem_idx < mem_size:
