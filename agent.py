@@ -156,7 +156,14 @@ class GeneralAI(tf.keras.Model):
         # util.net_build(self.meta, self.initializer)
 
 
+        self.metrics_spec()
+        # TF bug that wont set graph options with tf.function decorator inside a class
+        self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        self.reset_states()
+        arch_run = getattr(self, arch); arch_run = tf.function(arch_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS); setattr(self, arch, arch_run)
 
+
+    def metrics_spec(self):
         metrics_loss = OrderedDict()
         metrics_loss['1rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
@@ -179,7 +186,7 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1extra3'] = {'learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if trader:
-            metrics_loss['2trader_bal*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
+            metrics_loss['1rewards*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
             metrics_loss['1trader_marg*'] = {'equity':np.float64, 'margin_free':np.float64}
             metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
 
@@ -188,12 +195,6 @@ class GeneralAI(tf.keras.Model):
                 if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
                 else: loss_group[k] = [[] for i in range(max_episodes)]
         self.metrics_loss = metrics_loss
-
-        # TF bug that wont set graph options with tf.function decorator inside a class
-        self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        self.reset_states()
-        arch_run = getattr(self, arch); arch_run = tf.function(arch_run, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS); setattr(self, arch, arch_run)
-
 
     def metrics_update(self, *args):
         args = list(args)
@@ -207,6 +208,7 @@ class GeneralAI(tf.keras.Model):
                     else: loss_group[k][episode] += [args[idx]]
                 idx += 1
         return np.asarray(0, np.int32) # dummy
+
 
     def env_reset(self, dummy):
         obs, reward, done = self.env.reset(), 0.0, False
@@ -1472,15 +1474,15 @@ class GeneralAI(tf.keras.Model):
             inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
 
             gen, episode_gen = episode%num_gen, episode//num_gen
-            log_metrics, train = [True,True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True], True
+            log_metrics, train = [True,True,True]+[True,True,True]+[True,True]+[True,True]+[True,True,True], True
             # return_goal = tf.constant([[200.0]], tf.float64)
             return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
             return_goal_alt = tf.constant([[200.0]], tf.float64)
             # return_goal_alt = tf.random.uniform((1,1), minval=0.0, maxval=200.0, dtype=tf.float64)
-            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False]+[True,True,True]+[False,False]+[True,True]+[False,False], True, 0 # action/PG
-            if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True,True]+[False,False,False]+[True,True]+[False,False]+[True,True], True, 1 # actout/act # TODO if was not relabling, training here would be like epocs
-            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 2 # random, actionL/PGL
-            if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False], True, 1 # act alt
+            if gen == 0: return_goal, log_metrics, train, gen = return_goal, [False,False,False]+[True,True,True]+[False,False]+[True,True]+[False,False,False], True, 0 # action/PG
+            if gen == 1: return_goal, log_metrics, train, gen = return_goal, [True,True,True]+[False,False,False]+[True,True]+[False,False]+[True,True,True], True, 1 # actout/act # TODO if was not relabling, training here would be like epocs
+            if gen == 2: return_goal, log_metrics, train, gen = return_goal, [False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False,False], True, 2 # random, actionL/PGL
+            if gen == 3: return_goal, log_metrics, train, gen = return_goal_alt, [False,False,False]+[False,False,False]+[False,False]+[False,False]+[False,False,False], True, 1 # act alt
 
             self.reset_states(); outputs, inputs, loss_actor = self.MU4_actor(inputs, gen, return_goal, return_goal_alt)
             rewards_total = outputs['returns'][-1][0][0] # tf.math.reduce_mean(outputs['rewards'])
@@ -1568,9 +1570,9 @@ class GeneralAI(tf.keras.Model):
                 # self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
             ]
-            if self.trader: metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0],
-                tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)),
-                inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
+            if self.trader:
+                del metrics[2]; metrics[2], metrics[3] = tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0]
+                metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)), inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
             stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
@@ -1582,25 +1584,25 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 10
-learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
+learn_rate = 2e-5 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 value_cont = True
-latent_size = 128
+latent_size = 32
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
 mixture_multi = 4
 net_attn_io = True
-aio_max_latents = 5
+aio_max_latents = 64
 attn_mem_base = 4 # max_steps must be power of this!
 aug_data_step, aug_data_pos = True, False
 
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 # device_type = 'CPU'
 
-machine, device, extra = 'dev', 1, '_dyn27A_rep2e8_gen01-pg2e6-rpP10_img' # _repL1 _gen0123-rnd-pg2e5 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
+machine, device, extra = 'dev', 2, '_dyn27A_lr2e5_rep2e8_gen01-pg2e5-rpP10_img' # _repL1 _gen0123-rnd-pg2e5 _dyn1279 _rp200-rnd _img _prs2 _wd7 _train _RfB _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig = False, False, 0.001, 160.0, False
-env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
+# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
 # env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    500  475.0
-# env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
+env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0 # ()6 int64    [()2,()2,()5] int64    200  25.0
 # env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0') # (64,64,3) uint8    ()15 int64    1000 None
 # env_name, max_steps, env_render, env = 'ProcgenCaveflyer', 1024, False, gym.make('procgen-caveflyer-v0') # (64,64,3) uint8    ()15 int64    1000 None
@@ -1621,7 +1623,7 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader = 'Trader'+str(tenv), 1024, False, gym.make('Trader-v0', agent_id=device, env=tenv), True
 
-max_steps = 16 # max replay buffer or train interval or bootstrap
+max_steps = 64 # max replay buffer or train interval or bootstrap
 
 arch = 'MU4' # Dreamer/planner w/imagination+generalization
 
@@ -1699,7 +1701,7 @@ if __name__ == '__main__':
         import matplotlib as mpl
         mpl.rcParams['axes.prop_cycle'] = mpl.cycler(color=['blue','lightblue','green','lime','red','lavender','turquoise','cyan','magenta','salmon','yellow','gold','black','brown','purple','pink','orange','teal','coral','darkgreen','tan'])
         plt.figure(num=name, figsize=(34, 18), tight_layout=True)
-        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.01
+        xrng, i, vplts, lim = np.arange(0, max_episodes, 1), 0, 0, 0.03
         for loss_group_name in metrics_loss.keys(): vplts += int(loss_group_name[0])
 
         for loss_group_name, loss_group in metrics_loss.items():

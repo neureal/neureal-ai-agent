@@ -65,7 +65,7 @@ class DataEnv(gym.Env):
         self.state = self.action_zero, self.obs_zero, np.float64(0.0), False, {}
         self.item_accu = []
         self.episode = 0
-        
+
 
     def step(self, action): return self._request(action)
     def reset(self): return self._request(None)[0]
@@ -123,7 +123,10 @@ class DataEnv(gym.Env):
         #             self.pxl_y = 0; self.ds_idx += 1; done = True
 
         if self.ds_idx >= self.ds_max:
-            self.ds_idx = 0
+            # self.ds_idx = 0
+            # self.ds_max += 64 # _data_Nrpt
+            # if self.ds_max > len(self.ds): self.ds_idx, self.ds_max = 0, 64
+            self.ds_idx = np.random.randint(0,len(self.ds)-64); self.ds_max = self.ds_idx + 64 # _data_rnd
 
 
         self.state = (action, obs, reward, done, info)
