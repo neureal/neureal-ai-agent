@@ -32,6 +32,7 @@ class ReconfigWrapperEnv(gym.Env):
                     dtype=env.observation_space.dtype
                 )
                 obs.spaces.append(feat)
+            obs.spaces.append(env.observation_space)
             self.observation_space = obs
 
 
@@ -42,16 +43,18 @@ class ReconfigWrapperEnv(gym.Env):
     def reset(self):
         obs = self.env.reset()
         if self.reconfig:
-            obs_ = [None]*self.num_feat
+            obs_ = [None]*(self.num_feat+1)
             for i in range(self.num_feat): obs_[i] = obs[...,i:i+1]
+            obs_[-1] = obs
             obs = tuple(obs_)
         return obs
 
     def step(self, action):
         obs, reward, done, info = self.env.step(action)
         if self.reconfig:
-            obs_ = [None]*self.num_feat
+            obs_ = [None]*(self.num_feat+1)
             for i in range(self.num_feat): obs_[i] = obs[...,i:i+1]
+            obs_[-1] = obs
             obs = tuple(obs_)
         return obs, reward, done, info
 
