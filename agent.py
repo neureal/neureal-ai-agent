@@ -46,9 +46,10 @@ class GeneralAI(tf.keras.Model):
         self.float_min = tf.constant(compute_dtype.min, compute_dtype)
         self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
-        self.float_eps_max = tf.constant(1.0 / self.float_eps, compute_dtype)
         self.float64_eps = tf.constant(tf.experimental.numpy.finfo(tf.float64).eps, tf.float64)
+        self.float_eps_max = tf.constant(1.0 / self.float_eps, compute_dtype)
         self.float_log_min = tf.constant(tf.math.log(self.float_eps), compute_dtype)
+        self.loss_scale = tf.math.exp(tf.math.log(self.float_eps_max) * (2/3))
         self.compute_zero, self.int32_max, self.int32_maxbit, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(1073741824, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
         self.arch, self.env, self.trader, self.env_render, self.value_cont = arch, env, trader, env_render, value_cont
@@ -297,11 +298,11 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik - returns # _rtnsS
                 # loss_action = loss_action_lik * returns - returns # _rtnsMS
                 # loss_action = self.action.optimizer['action'].get_scaled_loss(loss_action)
-                loss_action = loss_action * tf.constant(1e11,self.compute_dtype)
+                loss_action = loss_action * self.loss_scale
             # if loss_action_lik > self.float_eps:
             gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
             # gradients = self.action.optimizer['action'].get_unscaled_gradients(gradients)
-            for i in range(len(gradients)): gradients[i] = gradients[i] / tf.constant(1e11, self.compute_dtype)
+            for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
             loss_actions_lik = loss_actions_lik.write(step, loss_action_lik)
             loss_actions = loss_actions.write(step, loss_action)
@@ -487,10 +488,10 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik * ((returns_calc / 200.0) - tf.math.exp(-loss_value) + 1.0) / 2.0 # _lEp8
                 # loss_action = loss_action_lik + loss_value - tf.squeeze(values,axis=-1) # _lVA1
                 # loss_action = loss_action_lik + loss_value # _lVA2
-                loss_action = loss_action * tf.constant(1e11,self.compute_dtype)
+                loss_action = loss_action * self.loss_scale
             gradients = tape_action.gradient(loss_action, self.rep.trainable_variables)
             # gradients = tape_action.gradient(loss_action_lik, self.rep.trainable_variables) # _rep-lik
-            for i in range(len(gradients)): gradients[i] = gradients[i] / tf.constant(1e11, self.compute_dtype)
+            for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale
             self.rep.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action_lik)
 
@@ -549,9 +550,9 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik * (tf.math.exp(-loss_value) + 1.0) # _lEp6
                 # loss_action = loss_action_lik * ((returns_calc / 200.0) - tf.math.exp(-loss_value)) # _lEp7
                 # loss_action = loss_action_lik * ((returns_calc / 200.0) - tf.math.exp(-loss_value) + 1.0) / 2.0 # _lEp8
-                loss_action = loss_action * tf.constant(1e11,self.compute_dtype)
+                loss_action = loss_action * self.loss_scale
             gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
-            for i in range(len(gradients)): gradients[i] = gradients[i] / tf.constant(1e11, self.compute_dtype)
+            for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
             loss_actions = loss_actions.write(step, loss_action)
             # metric_advantages = metric_advantages.write(step, (returns - tf.cast(values,tf.float64))[0])
