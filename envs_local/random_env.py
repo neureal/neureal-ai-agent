@@ -85,9 +85,10 @@ class RandomEnv(gym.Env):
         action_space.spaces['byte'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
         action_space.spaces['2Darray'] = gym.spaces.Box(low=0, high=255, shape=(2,3), dtype=np.uint8)
         action_space.spaces['discrete6'] = gym.spaces.Discrete(6)
+        # action_space.spaces['multidiscrete2x6'] = gym.spaces.MultiDiscrete([6,6]) # TODO
         action_space.spaces['float64'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
         action_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=np.bool)
-        
+
 
         return action_space
 
@@ -124,7 +125,7 @@ class RandomEnv(gym.Env):
         # obs_space = gym.spaces.Dict()
         # obs_space.spaces['timestamp'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
         # obs_space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8)
-        
+
         # obs_space_sub = gym.spaces.Tuple([])
         # obs_space_sub.spaces.append(gym.spaces.Discrete(8))
         # obs_space_sub.spaces.append(gym.spaces.Box(low=0, high=255, shape=(3,2), dtype=np.uint8))
@@ -136,6 +137,7 @@ class RandomEnv(gym.Env):
         obs_space.spaces['2Darray'] = gym.spaces.Box(low=0, high=255, shape=(2,3), dtype=np.uint8)
         obs_space.spaces['float32'] = gym.spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
         obs_space.spaces['discrete6'] = gym.spaces.Discrete(6)
+        # obs_space.spaces['multidiscrete2x6'] = gym.spaces.MultiDiscrete([6,6]) # TODO
         obs_space.spaces['float64'] = gym.spaces.Box(low=np.NINF, high=np.inf, shape=(1,), dtype=np.float64)
         obs_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=np.bool)
         obs_space.spaces['image'] = gym.spaces.Box(low=0, high=255, shape=(3,3,3), dtype=np.uint8)
@@ -181,9 +183,9 @@ class RandomEnv(gym.Env):
         reward = np.float64(0.0)
         done = False
         info = {}
-        
+
         # if action is None: print("RandomEnv reset")
-        
+
         if hasattr(self,'np_struc'):
             obs = np.random.randint(32, size=self.obs_dtype.itemsize, dtype=np.uint8)
             obs = np.frombuffer(obs, dtype=self.obs_dtype)
