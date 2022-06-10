@@ -104,7 +104,10 @@ def optimizer(net_name, opt_spec):
     if schedule_type == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
     if schedule_type == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
     if typ == 's': return tf.keras.optimizers.SGD(learning_rate=learn_rate, name='{}/optimizer_{}/SGD'.format(net_name, opt_spec['name']))
-    if typ == 'a': return tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+    if typ == 'a':
+        optimizer = tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
+        # optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, dynamic=False, initial_scale=2**15)
+        return optimizer
     if typ == 'am': return tf.keras.optimizers.Adamax(beta_1=beta_1, beta_2=beta_2, decay=decay, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
     if typ == 'aw': return tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/AdamW'.format(net_name, opt_spec['name']))
     if typ == 'ar': return tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/RectifiedAdam'.format(net_name, opt_spec['name']))
