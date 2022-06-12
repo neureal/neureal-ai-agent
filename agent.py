@@ -147,6 +147,7 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1extras'] = {'returns':np.float64}
             metrics_loss['1extras'] = {'loss_action_returns':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
+            # metrics_loss['1extras2*'] = {'-actlog0':np.float64, '-actlog1':np.float64, '-actlog2':np.float64, '-actlog3':np.float64}
             # # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
             metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
             # metrics_loss['1extras3'] = {'-snr':np.float64}
@@ -281,8 +282,7 @@ class GeneralAI(tf.keras.Model):
         loss = {}
         loss_actions_lik = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_actions = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_actlog0 = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
-        metric_actlog1 = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
+        metric_actlog = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(2,))
 
         inputs_rewards = tf.concat([self.rewards_zero, inputs['rewards']], axis=0)
         inputs_returns = tf.squeeze(tf.cast(inputs['returns'], self.compute_dtype), axis=-1)
@@ -323,11 +323,9 @@ class GeneralAI(tf.keras.Model):
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
             loss_actions_lik = loss_actions_lik.write(step, loss_action_lik)
             loss_actions = loss_actions.write(step, loss_action)
-            metric_actlog0 = metric_actlog0.write(step, action_logits[0][0][0:1])
-            metric_actlog1 = metric_actlog1.write(step, action_logits[0][0][1:2])
+            metric_actlog = metric_actlog.write(step, action_logits[0][0][0:2])
 
-        loss['action_lik'], loss['action'] = loss_actions_lik.concat(), loss_actions.concat()
-        loss['actlog0'], loss['actlog1'] = metric_actlog0.concat(), metric_actlog1.concat()
+        loss['action_lik'], loss['action'], loss['actlog'] = loss_actions_lik.concat(), loss_actions.concat(), metric_actlog.stack()
         return loss
 
     def PG(self):
@@ -390,7 +388,8 @@ class GeneralAI(tf.keras.Model):
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 ma_loss, tf.math.reduce_mean(loss['action_lik']), # tf.math.reduce_mean(outputs['returns']),
                 tf.math.reduce_mean(loss['action']),
-                tf.math.reduce_mean(loss['actlog0']), tf.math.reduce_mean(loss['actlog1']),
+                tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
+                # tf.math.reduce_mean(loss['actlog'][:,2]), tf.math.reduce_mean(loss['actlog'][:,3]),
                 snr_loss, std_loss, # ma, ema, snr, std
                 self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
