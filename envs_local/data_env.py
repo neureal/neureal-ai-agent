@@ -29,6 +29,7 @@ class DataEnv(gym.Env):
             # space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
             space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # combine to latent
+            space.spaces['target'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8) # PG shkspr img tests
             self.observation_space = space
 
             space = gym.spaces.Dict()
@@ -97,6 +98,7 @@ class DataEnv(gym.Env):
         # latent = np.concatenate([self.ds[self.ds_idx]])
         # latent = np.concatenate([self.ds[self.ds_idx],[self.ds_idx]]) # combine to latent
         # obs['data'] = np.asarray(latent, self.observation_space['data'].dtype) # combine to latent
+        obs['target'] = np.asarray(self.ds[self.ds_idx+1], self.observation_space['data'].dtype) # PG shkspr img tests
         if self.data_src == 'shkspr':
             if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]
@@ -123,10 +125,10 @@ class DataEnv(gym.Env):
         #             self.pxl_y = 0; self.ds_idx += 1; done = True
 
         if self.ds_idx >= self.ds_max:
-            # self.ds_idx = 0
-            # self.ds_max += 64 # _data_Nrpt
+            self.ds_idx = 0
+            # self.ds_max += 64 # _data-Nrpt
             # if self.ds_max > len(self.ds): self.ds_idx, self.ds_max = 0, 64
-            self.ds_idx = np.random.randint(0,len(self.ds)-64); self.ds_max = self.ds_idx + 64 # _data_rnd
+            # self.ds_idx = np.random.randint(0,len(self.ds)-64); self.ds_max = self.ds_idx + 64 # _data-rnd
 
 
         self.state = (action, obs, reward, done, info)
