@@ -87,7 +87,7 @@ class DataEnv(gym.Env):
             self.item_accu.append(action)
 
     def _request(self, action):
-        reward, done, info = np.float64(0.0), False, {}
+        reward, done, info = np.float64(-0.015), False, {}
         # obs = self.observation_space.sample()
         # reward = np.float64(np.random.standard_normal())
 
@@ -103,7 +103,9 @@ class DataEnv(gym.Env):
             if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]
                 action = action['data'][0] if isinstance(action['data'], np.ndarray) else action['data']
-                target = obs['data'][0] if isinstance(obs['data'], np.ndarray) else obs['data']
+                # target = obs['data'][0] if isinstance(obs['data'], np.ndarray) else obs['data']
+                obs_prev = np.asarray(self.ds[self.ds_idx-1], self.observation_space['data'].dtype) # _data-same
+                target = obs_prev[0] if isinstance(obs_prev, np.ndarray) else obs_prev # _data-same
                 # if action >= 122: print(action, self.episode)
                 if action == target: reward = np.float64(1.0)
             else: self.episode += 1
@@ -127,7 +129,7 @@ class DataEnv(gym.Env):
         if self.ds_idx >= self.ds_max:
             self.ds_idx = 0
             # self.ds_max += 64 # _data-Nrpt
-            # if self.ds_max > len(self.ds): self.ds_idx, self.ds_max = 0, 64
+            # if self.ds_max > len(self.ds): self.ds_idx, self.ds_max = 0, 64 # _data-Nrpt
             # self.ds_idx = np.random.randint(0,len(self.ds)-64); self.ds_max = self.ds_idx + 64 # _data-rnd
 
 
