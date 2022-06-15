@@ -7,7 +7,7 @@ import model_util as util
 class ArchFull(tf.keras.Model):
     def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, spec_out, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, aug_data_pos=False):
         super(ArchFull, self).__init__(name=name)
-        net_attn_io_out = True
+        net_attn_io_out = False
         self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
         self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
         self.out = Out(latent_spec, spec_out, net_attn_io=net_attn_io_out)
@@ -236,8 +236,9 @@ class Out(tf.keras.layers.Layer):
             params_size[i], self.dist[i] = util.distribution(spec_out[i])
             if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=2, num_latents=1, channels=params_size[i], name='attn_out_{}_{}'.format(space_name, output_name))
             # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=params_size[i], num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=1, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
-            if dist_type == 'mx': self.layer_out_logits[i] = util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{}_{}'.format(space_name, output_name))
-            else: self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
+            if dist_type == 'd': self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
+            # if dist_type == 'd' or dist_type == 'c': self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
+            else: self.layer_out_logits[i] = util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{}_{}'.format(space_name, output_name))
 
             self.logits_step_shape += [tf.TensorShape([1]+[params_size[i]])]
 
