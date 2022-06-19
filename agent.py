@@ -43,8 +43,9 @@ class GeneralAI(tf.keras.Model):
     def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
-        self.float_min = tf.constant(compute_dtype.min, compute_dtype)
-        self.float_maxroot = tf.constant(tf.math.sqrt(compute_dtype.max), compute_dtype)
+        self.float_max = tf.constant(compute_dtype.max, compute_dtype)
+        self.float_maxroot = tf.constant(tf.math.sqrt(self.float_max), compute_dtype)
+        self.float_minroot = tf.constant(1.0 / self.float_maxroot, compute_dtype)
         self.float_eps = tf.constant(tf.experimental.numpy.finfo(compute_dtype).eps, compute_dtype)
         self.float64_eps = tf.constant(tf.experimental.numpy.finfo(tf.float64).eps, tf.float64)
         self.float_eps_max = tf.constant(1.0 / self.float_eps, compute_dtype)
@@ -57,6 +58,7 @@ class GeneralAI(tf.keras.Model):
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
         self.initializer = tf.keras.initializers.GlorotUniform()
+        # self.initializer = tf.keras.initializers.Zeros()
 
         self.obs_spec, self.obs_zero, _ = gym_util.get_spec(env.observation_space, space_name='obs', compute_dtype=self.compute_dtype, net_attn_io=net_attn_io, aio_max_latents=aio_max_latents, mixture_multi=mixture_multi)
         self.action_spec, _, self.action_zero_out = gym_util.get_spec(env.action_space, space_name='actions', compute_dtype=self.compute_dtype, mixture_multi=mixture_multi)
@@ -77,7 +79,7 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 'mx': latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
 
         if aug_data_step: self.obs_spec += [{'space_name':'step', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-        self.obs_spec += [{'space_name':'reward_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
+        # self.obs_spec += [{'space_name':'reward_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         # if arch not in ('TRANS',): self.obs_spec += [{'space_name':'return_goal', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         inputs = {'obs':self.obs_zero, 'step':[self.step_zero], 'reward_prev':[self.rewards_zero], 'return_goal':[self.rewards_zero]}
         # inputs = {'obs':[self.obs_zero[0]], 'step':[self.step_zero], 'reward_prev':[self.rewards_zero], 'return_goal':[self.rewards_zero]} # PG shkspr img tests
@@ -150,10 +152,10 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
             # metrics_loss['1extras2*'] = {'-actlog0':np.float64, '-actlog1':np.float64, '-actlog2':np.float64, '-actlog3':np.float64}
             # # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
-            metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
+            # metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
             # metrics_loss['1extras3'] = {'-snr':np.float64}
             # metrics_loss['1extras4'] = {'-std':np.float64}
-            metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
+            # metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if arch == 'AC':
             metrics_loss['1netsR'] = {'loss_action_rep':np.float64, 'loss_value_rep':np.float64}
@@ -295,6 +297,7 @@ class GeneralAI(tf.keras.Model):
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
             # returns = inputs_returns[step]
+            reward = tf.cast(inputs['rewards'][step],self.compute_dtype)
 
             inputs_step = {'obs':obs, 'step':[tf.reshape(step,(1,1))], 'reward_prev':[inputs_rewards[step:step+1]], 'return_goal':[inputs['returns'][step:step+1]]}
             # inputs_step = {'obs':[obs[0]], 'step':[tf.reshape(step,(1,1))], 'reward_prev':[inputs_rewards[step:step+1]], 'return_goal':[inputs['returns'][step:step+1]]} # PG shkspr img tests
@@ -309,6 +312,7 @@ class GeneralAI(tf.keras.Model):
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
                 # loss_action = util.loss_PG(action_dist, action, returns)
                 loss_action_lik = util.loss_likelihood(action_dist, action)
+                # loss_action_lik = util.loss_likelihood(action_dist, obs); loss_action = loss_action_lik # _loss-direct
                 # loss_action_lik = loss_action_lik - self.float_maxroot # _lSmr # causes NaN/inf
                 # loss_action_lik = loss_action_lik - self.float_eps_max # _lSem
                 loss_action_lik = loss_action_lik - self.loss_scale # _lSls
@@ -316,19 +320,20 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik # _Nrtns
                 # loss_action = loss_action_lik - returns # _rtnsS
                 # loss_action = loss_action_lik * returns - returns # _rtnsMS
-                # loss_action = loss_action_lik * (returns + tf.cast(inputs['rewards'][step],self.compute_dtype)) # _rtnsR
-                # loss_action = loss_action_lik * tf.cast(inputs['rewards'][step],self.compute_dtype) # _loss-rwd
+                # loss_action = loss_action_lik * (returns + reward) # _rtnsR
+                # loss_action = loss_action_lik * reward # _loss-rwd
                 # loss_action = loss_action - action_dist[0].entropy() # _rtnsE
                 # loss_action = self.action.optimizer['action'].get_scaled_loss(loss_action)
                 loss_action = loss_action * self.loss_scale
             # if loss_action_lik > self.float_eps: # _grad-lim-eps
             # if loss_action_lik > tf.constant(1e-2,self.compute_dtype): # _grad-lim-1e2
+            # if reward > tf.constant(0,self.compute_dtype): # _grad-lim-rwd
             gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
             # gradients = self.action.optimizer['action'].get_unscaled_gradients(gradients)
             for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
             loss_actions_lik = loss_actions_lik.write(step, loss_action_lik)
-            loss_actions = loss_actions.write(step, loss_action)
+            loss_actions = loss_actions.write(step, loss_action / self.loss_scale)
             metric_actlog = metric_actlog.write(step, action_logits[0][0][0:2])
 
         loss['action_lik'], loss['action'], loss['actlog'] = loss_actions_lik.concat(), loss_actions.concat(), metric_actlog.stack()
@@ -396,8 +401,8 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
                 # tf.math.reduce_mean(loss['actlog'][:,2]), tf.math.reduce_mean(loss['actlog'][:,3]),
-                snr_loss, std_loss, # ma, ema, snr, std
-                self.action.optimizer['action'].learning_rate,
+                # snr_loss, std_loss, # ma, ema, snr, std
+                # self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
             ]
             if self.trader:
@@ -838,6 +843,7 @@ if __name__ == '__main__':
 
 
         ## run
+        print("RUN {}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S")))
         arch_run = getattr(model, arch)
         t1_start = time.perf_counter_ns()
         arch_run()

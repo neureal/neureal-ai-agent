@@ -29,7 +29,7 @@ class DataEnv(gym.Env):
             # space.spaces['data'] = gym.spaces.Discrete(256) # np.int64
             space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
             # space.spaces['data'] = gym.spaces.Box(low=0, high=255, shape=(2,), dtype=np.uint8) # combine to latent
-            space.spaces['target'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8) # PG shkspr img tests
+            # space.spaces['target'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8) # PG shkspr img tests
             self.observation_space = space
 
             space = gym.spaces.Dict()
@@ -87,7 +87,7 @@ class DataEnv(gym.Env):
             self.item_accu.append(action)
 
     def _request(self, action):
-        reward, done, info = np.float64(-0.015), False, {}
+        reward, done, info = np.float64(0.0), False, {}
         # obs = self.observation_space.sample()
         # reward = np.float64(np.random.standard_normal())
 
@@ -98,7 +98,7 @@ class DataEnv(gym.Env):
         # latent = np.concatenate([self.ds[self.ds_idx]])
         # latent = np.concatenate([self.ds[self.ds_idx],[self.ds_idx]]) # combine to latent
         # obs['data'] = np.asarray(latent, self.observation_space['data'].dtype) # combine to latent
-        obs['target'] = np.asarray(self.ds[self.ds_idx+1], self.observation_space['data'].dtype) # PG shkspr img tests
+        # obs['target'] = np.asarray(self.ds[self.ds_idx+1], self.observation_space['data'].dtype) # PG shkspr img tests
         if self.data_src == 'shkspr':
             if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]
