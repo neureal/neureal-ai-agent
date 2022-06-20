@@ -234,9 +234,10 @@ class Out(tf.keras.layers.Layer):
             space_name, output_name, dist_type, num_components = spec_out[i]['space_name'], spec_out[i]['name'], spec_out[i]['dist_type'], spec_out[i]['num_components']
 
             params_size[i], self.dist[i] = util.distribution(spec_out[i])
-            # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=1, norm=False, residual=False, cross_type=2, num_latents=max_steps, channels=params_size[i], name='attn_out_{}_{}'.format(space_name, output_name))
-            if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=params_size[i], num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=1, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
+            if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=2, num_latents=1, channels=params_size[i], name='attn_out_{}_{}'.format(space_name, output_name))
+            # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=params_size[i], num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=1, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
             if dist_type == 'd': self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
+            # if dist_type == 'd' or dist_type == 'c': self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
             else: self.layer_out_logits[i] = util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{}_{}'.format(space_name, output_name))
 
             self.logits_step_shape += [tf.TensorShape([1]+[params_size[i]])]

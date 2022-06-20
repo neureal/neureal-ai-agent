@@ -264,6 +264,13 @@ def distribution(dist_spec):
     # if dist_type == 'mt': params_size, dist = MixtureMultiNormalTriL.params_size(num_components, event_shape, matrix_size=2), MixtureMultiNormalTriL(num_components, event_shape, matrix_size=2)
     return params_size, dist
 
+class DeterministicSub(tfp.distributions.Deterministic):
+    def _log_prob(self, x):
+        # return tf.constant([-1], dtype=x.dtype)
+        loc = tf.convert_to_tensor(self.loc)
+        loss = tf.math.abs(tf.math.subtract(x, loc))
+        loss = tf.math.negative(tf.math.reduce_sum(loss, axis=tf.range(1, tf.rank(loss))))
+        return loss
 class Deterministic(tfp.layers.DistributionLambda):
     def __init__(self, event_shape=(), **kwargs):
         kwargs.pop('make_distribution_fn', None) # for get_config serializing
@@ -275,7 +282,8 @@ class Deterministic(tfp.layers.DistributionLambda):
         # print("tracing -> Deterministic new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
         params = tf.reshape(params, output_shape)
-        dist = tfp.distributions.Deterministic(loc=params)
+        # dist = tfp.distributions.Deterministic(loc=params)
+        dist = DeterministicSub(loc=params)
         return dist
     @staticmethod
     def params_size(event_shape=(), name=None):
@@ -406,8 +414,8 @@ class MixtureLogistic(tfp.layers.DistributionLambda):
 from tensorflow.python.ops import special_math_ops
 class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
     def __init__(self, latent_size, num_heads=1, memory_size=None, sort_memory=False, norm=False, hidden_size=None, evo=None, residual=True, use_bias=False, cross_type=None, num_latents=None, channels=None, init_zero=None, **kwargs): # cross_type: 1 = input, 2 = output
-        # key_dim = int(channels/num_heads) if cross_type == 2 else int(latent_size/num_heads)
-        key_dim = int(latent_size/num_heads)
+        key_dim = int(channels/num_heads) if cross_type == 2 else int(latent_size/num_heads)
+        # key_dim = int(latent_size/num_heads)
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
         self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = memory_size, sort_memory, norm, residual, cross_type
         self._mem_channels = latent_size if cross_type != 1 else channels
