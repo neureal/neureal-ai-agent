@@ -111,18 +111,19 @@ class GeneralAI(tf.keras.Model):
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
 
+        inputs_cond = {'obs':self.latent_zero, 'actions':self.action_zero_out}
         if arch in ('AC',):
-            opt_spec = [{'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5,tf.float64), 'float_eps':self.float_eps}]
+            opt_spec = [{'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(6e-6,tf.float64), 'float_eps':self.float_eps}]
             if value_cont: value_spec = [{'space_name':'values', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             else: value_spec = [{'space_name':'values', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'dist_type':'d', 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            self.value = nets.ArchGen('VN', self.latent_zero, opt_spec, [], value_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.value(self.latent_zero)
+            # self.value = nets.ArchGen('VN', self.latent_zero, opt_spec, [], value_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.value(self.latent_zero)
+            self.value = nets.ArchFull('VN', inputs_cond, opt_spec, [], self.action_spec, value_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.value(inputs_cond) # _val-cond
             self.value.optimizer_weights = util.optimizer_build(self.value.optimizer['value'], self.value.trainable_variables)
             util.net_build(self.value, self.initializer)
 
         if arch in ('TRANS',):
-            inputs['obs'], inputs['actions'] = self.latent_zero, self.action_zero_out
             # latent_spec_trans = latent_spec.copy(); latent_spec_trans.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
-            self.trans = nets.ArchTrans('TN', inputs, [], [], self.action_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.trans(inputs)
+            self.trans = nets.ArchTrans('TN', inputs_cond, [], [], self.action_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.trans(inputs_cond)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.rep.trainable_variables + self.trans.trainable_variables + self.action.trainable_variables)
             util.net_build(self.trans, self.initializer)
 
@@ -488,8 +489,9 @@ class GeneralAI(tf.keras.Model):
                 rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
                 latent_rep = rep_dist.sample()
 
+            inputs_value = {'obs':latent_rep, 'actions':action}
             with tape_value:
-                value_logits = self.value(latent_rep); value_dist = self.value.dist[0](value_logits[0])
+                value_logits = self.value(inputs_value); value_dist = self.value.dist[0](value_logits[0])
                 values = value_dist.sample()
                 if self.value_cont: loss_value = util.loss_likelihood(value_dist, returns)
                 else: loss_value = util.loss_diff(values, returns)
@@ -540,8 +542,9 @@ class GeneralAI(tf.keras.Model):
             rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
             latent_rep = rep_dist.sample()
 
+            inputs_value = {'obs':latent_rep, 'actions':action}
             with tf.GradientTape() as tape_value:
-                value_logits = self.value(latent_rep); value_dist = self.value.dist[0](value_logits[0])
+                value_logits = self.value(inputs_value); value_dist = self.value.dist[0](value_logits[0])
                 values = value_dist.sample()
                 if self.value_cont: loss_value = util.loss_likelihood(value_dist, returns)
                 else: loss_value = util.loss_diff(values, returns)
@@ -736,7 +739,7 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model = False, False
 max_episodes = 100
-learn_rate = 2e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
+learn_rate = 4e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 value_cont = True
 latent_size = 16
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
