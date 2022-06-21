@@ -153,7 +153,7 @@ class In(tf.keras.layers.Layer):
                 # self.layer_mlp += [util.MLPBlock(hidden_size=latent_spec['mid'], latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
             else: self.layer_attn_in[space_name] += [None]
             self.layer_mlp_in[space_name] += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{}_{}'.format(space_name, input_name))]
-        if net_attn_io and self.num_latents >= aio_max_latents:
+        if net_attn_io and self.num_latents > aio_max_latents:
             self.net_attn_io2, self.num_latents = True, aio_max_latents
             self.layer_attn_io2 = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=self.num_latents, channels=latent_size, name='attn_io2')
             # self.layer_mlp += [util.MLPBlock(hidden_size=latent_spec['mid'], latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
