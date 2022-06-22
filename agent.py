@@ -18,7 +18,7 @@ import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
 import gym, gym_algorithmic, procgen, pybullet_envs
 
-# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.6.0, tensorflow_probability==0.14.0
+# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 import gym_util, model_util as util, model_nets as nets
@@ -79,8 +79,8 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 'mx': latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
 
         if aug_data_step: self.obs_spec += [{'space_name':'step', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-        self.obs_spec += [{'space_name':'reward_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-        self.obs_spec += [{'space_name':'return_goal', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
+        # self.obs_spec += [{'space_name':'reward_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
+        # self.obs_spec += [{'space_name':'return_goal', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         inputs = {'obs':self.obs_zero, 'step':[self.step_zero], 'reward_prev':[self.rewards_zero], 'return_goal':[self.rewards_zero]}
         # inputs = {'obs':[self.obs_zero[0]], 'step':[self.step_zero], 'reward_prev':[self.rewards_zero], 'return_goal':[self.rewards_zero]} # PG shkspr img tests
 
@@ -317,12 +317,12 @@ class GeneralAI(tf.keras.Model):
                 # loss_action_lik = loss_action_lik - self.float_maxroot # _lSmr # causes NaN/inf
                 # loss_action_lik = loss_action_lik - self.float_eps_max # _lSem
                 loss_action_lik = loss_action_lik - self.loss_scale # _lSls
-                # loss_action = loss_action_lik * returns_calc
+                loss_action = loss_action_lik * returns_calc
                 # loss_action = loss_action_lik - returns_calc # _rtnsS
                 # loss_action = loss_action_lik * returns_calc - returns_calc # _rtnsMS
                 # loss_action = loss_action_lik * (returns_calc + reward_calc) # _rtnsR
                 # loss_action = loss_action_lik * reward_calc # _loss-rwd
-                loss_action = loss_action_lik # _loss-udRL
+                # loss_action = loss_action_lik # _loss-udRL
                 # loss_action = loss_action - action_dist[0].entropy() # _rtnsE
                 # loss_action = self.action.optimizer['action'].get_scaled_loss(loss_action)
                 loss_action = loss_action * self.loss_scale
@@ -866,10 +866,10 @@ if __name__ == '__main__':
 
         for loss_group_name, loss_group in metrics_loss.items():
             rows, col, m_min, m_max, combine, yscale = int(loss_group_name[0]), 0, [0]*len(loss_group), [0]*len(loss_group), loss_group_name.endswith('*'), ('log' if loss_group_name[1] == '~' else 'linear')
-            if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows, xlim=(0, max_episodes), yscale=yscale); plt.grid(axis='y',alpha=0.3)
+            if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows, xlim=(0, max_episodes-1), yscale=yscale); plt.grid(axis='y',alpha=0.3)
             for metric_name, metric in loss_group.items():
                 metric = np.asarray(metric, np.float64); m_min[col], m_max[col] = np.nanquantile(metric, chart_lim), np.nanquantile(metric, 1.0-chart_lim)
-                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3)
+                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes-1), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3)
                 # plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 # plt.plot(xrng, bottleneck.move_mean(metric, window=max_episodes//10+2, min_count=1), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 if metric_name.startswith('-'): plt.plot(xrng, metric, alpha=1.0, label=metric_name)
