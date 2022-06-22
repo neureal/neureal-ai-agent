@@ -103,6 +103,7 @@ def optimizer(net_name, opt_spec):
     if schedule_type == 'rtn': learn_rate = schedule_rtn
     if schedule_type == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
     if schedule_type == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
+    if schedule_type == 'ex': learn_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=learn_rate, decay_steps=opt_spec['num_steps'], decay_rate=tf.constant(opt_spec['lr_min']/learn_rate,tf.float64), staircase=False)
     if typ == 's': return tf.keras.optimizers.SGD(learning_rate=learn_rate, name='{}/optimizer_{}/SGD'.format(net_name, opt_spec['name']))
     if typ == 'a':
         optimizer = tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
@@ -115,6 +116,7 @@ def optimizer(net_name, opt_spec):
     if typ == 'co': return tfa.optimizers.COCOB(alpha=100.0, use_locking=True, name='{}/optimizer_{}/COCOB'.format(net_name, opt_spec['name']))
     if typ == 'ws': return tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10, name='{}/optimizer_{}/SWA'.format(net_name, opt_spec['name'])) # has error with floatx=float64
     if typ == 'sw': return tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/SGDW'.format(net_name, opt_spec['name']))
+    # if typ == 'ax': return tf.keras.optimizers.experimental.Adam(beta_1=beta_1, beta_2=beta_2, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/AdamEx'.format(net_name, opt_spec['name']))
 
 def optimizer_build(optimizer, variables):
     optimizer.apply_gradients(zip(variables, variables))
@@ -302,6 +304,8 @@ class Categorical(tfp.layers.DistributionLambda):
     def new(params, params_shape, reinterpreted_batch_ndims, dtype_cat=tf.int32):
         # print("tracing -> Categorical new")
         output_shape = tf.concat([tf.shape(params)[:-1], params_shape], axis=0)
+        # params = tf.clip_by_value(params, -1, 1) # _cat-clip
+        # params = tfp.math.clip_by_value_preserve_gradient(params, -1, 1) # _cat-clip-tfp
         params = tf.reshape(params, output_shape)
         dist = tfp.distributions.Categorical(logits=params, dtype=dtype_cat)
         dist = tfp.distributions.Independent(dist, reinterpreted_batch_ndims=reinterpreted_batch_ndims)
