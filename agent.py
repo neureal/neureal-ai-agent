@@ -79,13 +79,13 @@ class GeneralAI(tf.keras.Model):
         if latent_dist == 'mx': latent_spec.update({'dist_type':'mx', 'num_components':int(latent_size/16), 'event_shape':(latent_size,)}) # continuous
 
         if aug_data_step: self.obs_spec += [{'space_name':'step', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
-        # self.obs_spec += [{'space_name':'reward_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
+        self.obs_spec += [{'space_name':'reward_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         # self.obs_spec += [{'space_name':'return_goal', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'num_latents':1}]
         inputs = {'obs':self.obs_zero, 'step':[self.step_zero], 'reward_prev':[self.rewards_zero], 'return_goal':[self.rewards_zero]}
         # inputs = {'obs':[self.obs_zero[0]], 'step':[self.step_zero], 'reward_prev':[self.rewards_zero], 'return_goal':[self.rewards_zero]} # PG shkspr img tests
 
         if arch in ('PG',):
-            opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}, {'name':'loss', 'b1':0.9, 'b2':0.9, 'dtype':compute_dtype}, {'name':'delta', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
+            opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}, {'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}, {'name':'delta', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
             self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec, self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs)
             # self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec[0:1]+self.obs_spec[2:], self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs) # PG shkspr img tests
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
@@ -157,7 +157,7 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
             # metrics_loss['1extras3'] = {'-snr':np.float64}
             # metrics_loss['1extras4'] = {'-std':np.float64}
-            # metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
+            metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if arch == 'AC':
             metrics_loss['1netsR'] = {'loss_action_lik':np.float64, 'loss_value_rep':np.float64}
@@ -316,7 +316,7 @@ class GeneralAI(tf.keras.Model):
                 # loss_action_lik = util.loss_likelihood(action_dist, obs); loss_action = loss_action_lik # _loss-direct
                 # loss_action_lik = loss_action_lik - self.float_maxroot # _lSmr # causes NaN/inf
                 # loss_action_lik = loss_action_lik - self.float_eps_max # _lSem
-                loss_action_lik = loss_action_lik - self.loss_scale # _lSls
+                # loss_action_lik = loss_action_lik - self.loss_scale # _lSls
                 loss_action = loss_action_lik * returns_calc
                 # loss_action = loss_action_lik - returns_calc # _rtnsS
                 # loss_action = loss_action_lik * returns_calc - returns_calc # _rtnsMS
@@ -325,23 +325,23 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik # _loss-udRL
                 # loss_action = loss_action - action_dist[0].entropy() # _rtnsE
                 # loss_action = self.action.optimizer['action'].get_scaled_loss(loss_action)
-                loss_action = loss_action * self.loss_scale
+                # loss_action = loss_action * self.loss_scale # _loss-scale
             # if loss_action_lik > self.float_eps: # _grad-lim-eps
             # if loss_action_lik > tf.constant(1e-2,self.compute_dtype): # _grad-lim-1e2
             # if reward_calc > tf.constant(0,self.compute_dtype): # _grad-lim-rwd
             gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
             # gradients = self.action.optimizer['action'].get_unscaled_gradients(gradients)
-            for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale
+            # for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale # _loss-scale
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
             loss_actions_lik = loss_actions_lik.write(step, loss_action_lik)
-            loss_actions = loss_actions.write(step, loss_action / self.loss_scale)
+            loss_actions = loss_actions.write(step, loss_action) # / self.loss_scale
             metric_actlog = metric_actlog.write(step, action_logits[0][0][0:2])
 
         loss['action_lik'], loss['action'], loss['actlog'] = loss_actions_lik.concat(), loss_actions.concat(), metric_actlog.stack()
         return loss
 
     def PG(self):
-        print("tracing -> GeneralAI PG")
+        print("tracing -> GeneralAI PG"); tf.print("RUNNING")
         return_goal, ma, ma_loss, snr_loss, std_loss, loss_meta, ma_loss_lowest = tf.constant([[-self.loss_scale.numpy()]], tf.float64), tf.constant(0,tf.float64), self.float_maxroot, tf.constant(1,self.compute_dtype), tf.constant(0,self.compute_dtype), tf.constant([0],self.compute_dtype), self.float_maxroot
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes and not stop:
@@ -353,11 +353,10 @@ class GeneralAI(tf.keras.Model):
             # TODO how unlimited length episodes without sacrificing returns signal?
             self.reset_states(); outputs, inputs = self.PG_actor(inputs, return_goal)
             # util.stats_update(self.action.stats['rwd'], tf.math.reduce_sum(outputs['rewards'])); ma, ema, snr, std = util.stats_get(self.action.stats['rwd'])
-
-            # # meta learn the optimizer learn rate / step size
             rewards_total = outputs['returns'][0][0] # tf.math.reduce_sum(outputs['rewards'])
             util.stats_update(self.action.stats['rwd'], rewards_total); ma, ema, snr, std = util.stats_get(self.action.stats['rwd'])
 
+            # # meta learn the optimizer learn rate / step size
             # _, _, _, std = util.stats_get(self.action.stats['loss'])
             # obs = [self.action.stats['loss']['iter'].value(), tf.cast(ma,self.compute_dtype), std]
             # inputs_meta = {'obs':[tf.expand_dims(tf.stack(obs,0),0)]}
@@ -374,15 +373,10 @@ class GeneralAI(tf.keras.Model):
             # self.action.optimizer['action'].learning_rate = util.discretize(learn_rate, self.meta_spec[0])
             # # self.action.optimizer['action'].learning_rate = tf.squeeze(tf.cast(learn_rate, tf.float64))
 
-            # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss) # _lr-loss
-            # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(std) # _lr-rwd-std
-            # self.action.optimizer['action'].learning_rate = tf.math.exp(episode / self.max_episodes * (-15.0 + 9.7) - 9.7) # _lr-scale
-            # self.action.optimizer['action'].learning_rate = self.learn_rate * snr_loss # _lr-loss-snr-scale
-            # self.action.optimizer['action'].learning_rate = self.learn_rate * snr_loss**3 # _lr-loss-snr-scale6
-            # self.action.optimizer['action'].learning_rate = self.learn_rate * (1.0 - rewards_total / 200.0) + self.float_eps # _lr-rwd-lin-scale
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
             util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss['action_lik'])); ma_loss, ema_loss, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
+
             # if ma_loss < ma_loss_lowest: ma_loss_lowest = ma_loss
             # # if self.action.stats['loss']['iter'] > 10 and std_loss < 1.0 and tf.math.abs(ma_loss) < 1.0:
             # if snr_loss < 0.5 and std_loss < 0.2 and tf.math.abs(ma_loss) < 0.1:
@@ -392,9 +386,15 @@ class GeneralAI(tf.keras.Model):
             #     # self.action.optimizer['action'].learning_rate = tf.math.exp(tf.random.uniform((), dtype=tf.float64, maxval=-7, minval=-16)) # _lr-rnd-exp
             #     tf.print("net_reset (action) at:", episode, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss)
 
+            # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss) # _lr-loss
+            # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(std) # _lr-rwd-std
+            # self.action.optimizer['action'].learning_rate = tf.math.exp(episode / self.max_episodes * (-15.0 + 9.7) - 9.7) # _lr-scale
+            self.action.optimizer['action'].learning_rate = self.learn_rate * snr_loss # **3 # _lr-snr3
+            # self.action.optimizer['action'].learning_rate = self.learn_rate * (1.0 - rewards_total / 200.0) + self.float_eps # _lr-rwd-lin-scale
+
             # return_goal = tf.constant([[200.0]], tf.float64)
             # return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
-            if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)) # _rpB
+            # if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)); tf.print(return_goal) # _rpB
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
@@ -403,7 +403,7 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
                 # tf.math.reduce_mean(loss['actlog'][:,2]), tf.math.reduce_mean(loss['actlog'][:,3]),
                 # snr_loss, std_loss, # ma, ema, snr, std
-                # self.action.optimizer['action'].learning_rate,
+                self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
             ]
             if self.trader:
@@ -587,7 +587,7 @@ class GeneralAI(tf.keras.Model):
         return loss
 
     def AC(self):
-        print("tracing -> GeneralAI AC")
+        print("tracing -> GeneralAI AC"); tf.print("RUNNING")
         return_goal, ma = tf.constant([[-self.loss_scale.numpy()]], tf.float64), tf.constant(0,tf.float64)
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes and not stop:
@@ -711,7 +711,7 @@ class GeneralAI(tf.keras.Model):
         return loss
 
     def TRANS(self):
-        print("tracing -> GeneralAI TRANS")
+        print("tracing -> GeneralAI TRANS"); tf.print("RUNNING")
         episode, stop = tf.constant(0), tf.constant(False)
         while episode < self.max_episodes and not stop:
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
@@ -750,7 +750,7 @@ aug_data_step, aug_data_pos = True, False
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _loss-final-lSls _out-aio2-mlp _data-same-rnd-N1 _mlp-diff _lat128_lay512-256-64 _val2e5_rep2e8_lEp5_rpP10 _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
+machine, device, extra = 'dev', 0, '' # _loss-final_lr-snr-99_rwd-prev _out-aio2-mlp _data-same-rnd-N1 _mlp-diff _lat128_lay512-256-64 _val2e5_rep2e8_lEp5_rpP10 _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig, chart_lim = False, False, 0.001, 160.0, False, 0.003
 env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
