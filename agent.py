@@ -40,7 +40,7 @@ import gym_util, model_util as util, model_nets as nets
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
+    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, net_attn_io_out, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_max = tf.constant(compute_dtype.max, compute_dtype)
@@ -86,8 +86,8 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('PG',):
             opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}, {'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}, {'name':'delta', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
-            self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec, self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs)
-            # self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec[0:1]+self.obs_spec[2:], self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs) # PG shkspr img tests
+            self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec, self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io_out=net_attn_io_out, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs)
+            # self.action = nets.ArchFull('A', inputs, opt_spec, stats_spec, self.obs_spec[0:1]+self.obs_spec[2:], self.action_spec, latent_spec, obs_latent=False, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io_out=net_attn_io_out, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.action(inputs) # PG shkspr img tests
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
             # thresh = [2e-5,2e-3]; thresh_rates = [77,57,44] # 2e-12 107, 2e-10 89, 2e-8 71, 2e-6 53, 2e-5 44, 2e-4 35, 2e-3 26, 2e-2 17 # _lr-loss
@@ -107,7 +107,7 @@ class GeneralAI(tf.keras.Model):
             latent_spec.update({'step_shape':self.latent_zero.shape}); self.latent_spec = latent_spec
 
             opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rate, 'float_eps':self.float_eps}]; stats_spec = [{'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}]
-            self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.action(self.latent_zero)
+            self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io_out=net_attn_io_out, num_heads=4, memory_size=max_steps); outputs = self.action(self.latent_zero)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
 
@@ -116,8 +116,8 @@ class GeneralAI(tf.keras.Model):
             opt_spec = [{'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(6e-6,tf.float64), 'float_eps':self.float_eps}]
             if value_cont: value_spec = [{'space_name':'values', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
             else: value_spec = [{'space_name':'values', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'dist_type':'d', 'num_components':1, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-            # self.value = nets.ArchGen('VN', self.latent_zero, opt_spec, [], value_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps); outputs = self.value(self.latent_zero)
-            self.value = nets.ArchFull('VN', inputs_cond, opt_spec, [], self.action_spec, value_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.value(inputs_cond) # _val-cond
+            # self.value = nets.ArchGen('VN', self.latent_zero, opt_spec, [], value_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io_out=net_attn_io_out, num_heads=4, memory_size=max_steps); outputs = self.value(self.latent_zero)
+            self.value = nets.ArchFull('VN', inputs_cond, opt_spec, [], self.action_spec, value_spec, latent_spec, obs_latent=True, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io_out=net_attn_io_out, num_heads=4, memory_size=max_steps, aug_data_pos=aug_data_pos); outputs = self.value(inputs_cond) # _val-cond
             self.value.optimizer_weights = util.optimizer_build(self.value.optimizer['value'], self.value.trainable_variables)
             util.net_build(self.value, self.initializer)
 
@@ -131,7 +131,7 @@ class GeneralAI(tf.keras.Model):
         # opt_spec = [{'name':'meta', 'type':'a', 'schedule_type':'', 'learn_rate':tf.constant(2e-5, tf.float64), 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
         # inputs_meta = {'obs':[tf.constant([[0,0,0]],compute_dtype)]}; meta_spec_in = [{'space_name':'obs', 'name':'', 'event_shape':(3,), 'event_size':1, 'channels':3, 'num_latents':1}]
         # self.meta_spec = [{'space_name':'meta', 'name':'', 'dtype':tf.float64, 'dtype_out':compute_dtype, 'min':self.float_eps, 'max':self.learn_rate, 'dist_type':'mx', 'num_components':8, 'event_shape':(1,), 'step_shape':tf.TensorShape((1,1))}]
-        # self.meta = nets.ArchFull('M', inputs_meta, opt_spec, stats_spec, meta_spec_in, self.meta_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io); outputs = self.meta(inputs_meta)
+        # self.meta = nets.ArchFull('M', inputs_meta, opt_spec, stats_spec, meta_spec_in, self.meta_spec, latent_spec, net_blocks=2, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, net_attn_io_out=net_attn_io_out); outputs = self.meta(inputs_meta)
         # self.meta.optimizer_weights = util.optimizer_build(self.meta.optimizer['meta'], self.meta.trainable_variables)
         # util.net_build(self.meta, self.initializer)
 
@@ -604,7 +604,7 @@ class GeneralAI(tf.keras.Model):
 
             # return_goal = tf.constant([[200.0]], tf.float64)
             # return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
-            if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)) # _rpB
+            if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)); tf.print(return_goal) # _rpB
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
@@ -742,7 +742,7 @@ value_cont = True
 latent_size = 16
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
 mixture_multi = 4
-net_attn_io = True
+net_attn_io, net_attn_io_out = True, False
 aio_max_latents = 16
 attn_mem_base = 4
 aug_data_step, aug_data_pos = True, False
@@ -802,7 +802,7 @@ if __name__ == '__main__':
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     if env_reconfig: import envs_local.reconfig_wrapper as envrw_; env_name, env = env_name+'-r', envrw_.ReconfigWrapperEnv(env)
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
-        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
+        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, net_attn_io_out, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
         name = "gym-{}-{}".format(arch, env_name)
 
         ## debugging
