@@ -40,7 +40,7 @@ import gym_util, model_util as util, model_nets as nets
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, net_attn_io_out, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
+    def __init__(self, arch, env, trader, env_render, save_model, chkpts, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, net_attn_io_out, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_max = tf.constant(compute_dtype.max, compute_dtype)
@@ -53,8 +53,8 @@ class GeneralAI(tf.keras.Model):
         self.loss_scale = tf.math.exp(tf.math.log(self.float_eps_max) * (1/2))
         self.compute_zero, self.int32_max, self.int32_maxbit, self.int32_zero, self.float64_zero = tf.constant(0, compute_dtype), tf.constant(tf.int32.max, tf.int32), tf.constant(1073741824, tf.int32), tf.constant(0, tf.int32), tf.constant(0, tf.float64)
 
-        self.arch, self.env, self.trader, self.env_render, self.value_cont = arch, env, trader, env_render, value_cont
-        self.max_episodes, self.max_steps, self.learn_rate, self.attn_mem_base = tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(learn_rate, tf.float64), tf.constant(attn_mem_base, tf.int32)
+        self.arch, self.env, self.trader, self.env_render, self.save_model, self.value_cont = arch, env, trader, env_render, save_model, value_cont
+        self.chkpts, self.max_episodes, self.max_steps, self.learn_rate, self.attn_mem_base = tf.constant(chkpts, tf.int32), tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(learn_rate, tf.float64), tf.constant(attn_mem_base, tf.int32)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
         self.initializer = tf.keras.initializers.GlorotUniform()
@@ -136,6 +136,7 @@ class GeneralAI(tf.keras.Model):
         # util.net_build(self.meta, self.initializer)
 
 
+        self.stop = False; self.stop_episode = max_episodes; keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True)
         self.metrics_spec()
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -209,8 +210,21 @@ class GeneralAI(tf.keras.Model):
         return rtn
 
     def check_stop(self, *args):
-        if keyboard.is_pressed('ctrl+alt+k'): return np.asarray(True, bool)
+        # if keyboard.is_pressed('ctrl+alt+k'): return np.asarray(True, bool)
+        if self.stop: self.stop_episode = args[0].item(); return np.asarray(True, bool)
         return np.asarray(False, bool)
+    def on_stop(self):
+        keyboard.unhook_all_hotkeys()
+        print('STOPPING'); self.stop = True
+
+    def checkpoints(self, *args):
+        model_files = ""
+        for net in self.layers:
+            model_file = self.model_files[net.name]
+            net.save_weights(model_file)
+            model_files += ' '+model_file.split('/')[-1]
+        print("SAVED{}".format(model_files))
+        return np.asarray(0, np.int32) # dummy
 
     # TODO use ZMQ for remote messaging, latent pooling
     def transact_latents(self, *args):
@@ -411,7 +425,9 @@ class GeneralAI(tf.keras.Model):
                 metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)), inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            if self.save_model:
+                if episode > tf.constant(0) and episode % self.chkpts == tf.constant(0): tf.numpy_function(self.checkpoints, [tf.constant(0)], [tf.int32])
+            stop = tf.numpy_function(self.check_stop, [episode], tf.bool); stop.set_shape(())
             episode += 1
         # tf.print("ma_loss_lowest", ma_loss_lowest)
 
@@ -618,7 +634,9 @@ class GeneralAI(tf.keras.Model):
                 metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)), inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            if self.save_model:
+                if episode > tf.constant(0) and episode % self.chkpts == tf.constant(0): tf.numpy_function(self.checkpoints, [tf.constant(0)], [tf.int32])
+            stop = tf.numpy_function(self.check_stop, [episode], tf.bool); stop.set_shape(())
             episode += 1
 
 
@@ -728,15 +746,17 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['action'])]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
-            stop = tf.numpy_function(self.check_stop, [tf.constant(0)], tf.bool); stop.set_shape(())
+            if self.save_model:
+                if episode > tf.constant(0) and episode % self.chkpts == tf.constant(0): tf.numpy_function(self.checkpoints, [tf.constant(0)], [tf.int32])
+            stop = tf.numpy_function(self.check_stop, [episode], tf.bool); stop.set_shape(())
             episode += 1
 
 
 
 
 def params(): pass
-load_model, save_model = False, False
-max_episodes = 100
+load_model, save_model, chkpts = False, False, 100
+max_episodes = 1000
 learn_rate = 4e-6 # 5 = testing, 6 = more stable/slower # tf.experimental.numpy.finfo(tf.float64).eps
 value_cont = True
 latent_size = 16
@@ -775,7 +795,7 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# import gym_trader; tenv = 2; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 1024, False, gym.make('Trader-v0', agent_id=device, env=tenv), True, 0.1
+# from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 1024, False, TraderEnv(agent_id=device, env=tenv), True, 0.1
 
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
@@ -783,12 +803,10 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero) # TODO try combining AC actor and critic into one model and adding re-labeling returns as input and return goal
+# arch = 'MU' # Dreamer/planner w/imagination (DeepMind MuZero) # TODO try combining AC actor and critic into one model
 # arch = 'DREAM' # full World Model w/imagination (DeepMind Dreamer)
 
 if __name__ == '__main__':
-    # TODO add keyboard control so can stop
-
     ## manage multiprocessing
     # # setup ctrl,data,param sharing
     # # start agents (real+dreamers)
@@ -802,7 +820,7 @@ if __name__ == '__main__':
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     if env_reconfig: import envs_local.reconfig_wrapper as envrw_; env_name, env = env_name+'-r', envrw_.ReconfigWrapperEnv(env)
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
-        model = GeneralAI(arch, env, trader, env_render, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, net_attn_io_out, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
+        model = GeneralAI(arch, env, trader, env_render, save_model, chkpts, max_episodes, max_steps, learn_rate, value_cont, latent_size, latent_dist, mixture_multi, net_attn_io, net_attn_io_out, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
         name = "gym-{}-{}".format(arch, env_name)
 
         ## debugging
@@ -833,6 +851,7 @@ if __name__ == '__main__':
                 print("LOADED {} weights from {}".format(net.name, model_file)); loaded_model = True
             name_opt = "-O{}{}".format(net.opt_spec['type'], ('' if net.opt_spec['schedule_type']=='' else '-S'+net.opt_spec['schedule_type'])) if hasattr(net, 'opt_spec') else ''
             name_arch += "   {}{}-{}".format(net.arch_desc, name_opt, 'load' if loaded_model else 'new')
+        model.model_files = model_files
 
 
         ## run
@@ -845,14 +864,17 @@ if __name__ == '__main__':
 
 
         ## metrics
+        nans = [np.nan]*(max_episodes-model.stop_episode-1)
         metrics_loss = model.metrics_loss
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
-                for j in range(len(loss_group[k])): loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
+                for j in range(len(loss_group[k])):
+                    if j > model.stop_episode: loss_group[k][j:] = nans; break
+                    else: loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
         name = "{}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
-        total_steps = int(np.sum(metrics_loss['1steps']['steps+']))
+        total_steps = int(np.nansum(metrics_loss['1steps']['steps+']))
         step_time = total_time/total_steps
         title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time)
         title += "     |     lr:{:.0e}    al:{}    am:{}    ms:{}".format(learn_rate, aio_max_latents, attn_mem_base, max_steps)
@@ -884,6 +906,6 @@ if __name__ == '__main__':
         ## save models
         if save_model:
             for net in model.layers:
-                model_file = model_files[net.name]
+                model_file = model.model_files[net.name]
                 net.save_weights(model_file)
                 print("SAVED {} weights to {}".format(net.name, model_file))
