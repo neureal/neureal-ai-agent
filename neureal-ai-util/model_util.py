@@ -17,7 +17,7 @@ def replace_infnan(inputs, replace):
 
 # TODO tf.keras.layers.Discretization ?
 def discretize(inputs, spec):
-    if spec['dtype'] == tf.uint8 or spec['dtype'] == tf.int32 or spec['dtype'] == tf.int64: inputs = tf.math.round(inputs)
+    if spec['dtype'] == tf.uint8 or spec['dtype'] == tf.int32 or spec['dtype'] == tf.int64 or spec['dtype'] == tf.bool: inputs = tf.math.round(inputs)
     inputs = tf.clip_by_value(inputs, spec['min'], spec['max'])
     inputs = tf.cast(inputs, spec['dtype'])
     # inputs = tf.dtypes.saturate_cast(inputs, spec['dtype'])
@@ -168,15 +168,15 @@ def loss_likelihood(dist, targets, probs=False):
         for i in range(len(dist)):
             t = tf.cast(targets[i], dist[i].dtype)
             if probs: loss = loss - tf.math.exp(dist[i].log_prob(t))
-            else: loss = loss - dist[i].log_prob(t)
+            else: loss = loss - tf.reduce_sum(dist[i].log_prob(t))
     else:
         targets = tf.cast(targets, dist.dtype)
         if probs: loss = -tf.math.exp(dist.log_prob(targets))
-        else: loss = -dist.log_prob(targets)
+        else: loss = -tf.reduce_sum(dist.log_prob(targets))
 
     isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(loss), tf.math.is_inf(loss)))
     if isinfnan > 0: tf.print('NaN/Inf likelihood loss:', loss)
-    return loss
+    return tf.reshape(loss,(1,))
 
 def loss_bound(dist, targets):
     loss = -loss_likelihood(dist, targets)

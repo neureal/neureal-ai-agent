@@ -23,7 +23,7 @@ class AsyncWrapperEnv(gym.Env):
         if np_struc: self.np_struc, self.action_dtype, self.obs_dtype = env.np_struc, env.action_dtype, env.obs_dtype
 
         self._env_clock, self._env_speed, self._env_render, self._env_np_struc = env_clock, env_speed, env_render, np_struc
-        reward_done_zero = [np.frombuffer(np.asarray(0, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(False, np.bool), dtype=np.uint8)]
+        reward_done_zero = [np.frombuffer(np.asarray(0, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(False, bool), dtype=np.uint8)]
         self._reward_done_zero = reward_done_zero
 
         self._action_timing, self._obs_timing = False, False
@@ -41,7 +41,7 @@ class AsyncWrapperEnv(gym.Env):
             if np_struc: self.obs_dtype = np.dtype([('timestamp', 'f8'), ('origspace', env.obs_dtype)])
 
         if np_struc:
-            reward_size, done_size = np.dtype(np.float64).itemsize, np.dtype(np.bool).itemsize
+            reward_size, done_size = np.dtype(np.float64).itemsize, np.dtype(bool).itemsize
             self._obs_idx, self._done_idx = -(reward_size + done_size), -done_size
             action_size, obs_size = env.action_dtype.itemsize, self.obs_dtype.itemsize + reward_size + done_size
         else:
@@ -101,7 +101,7 @@ class AsyncWrapperEnv(gym.Env):
                 # print("proc action", action_space)
                 obs, reward, done, _ = self.env.step(action_space)
                 # print("proc step", obs)
-                reward_done = [np.frombuffer(np.asarray(reward, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(done, np.bool), dtype=np.uint8)]
+                reward_done = [np.frombuffer(np.asarray(reward, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(done, bool), dtype=np.uint8)]
                 obs = self._translate_obs(obs, reward_done)
                 with self._obs_shared.get_lock():
                     if not np.array_equal(obs_view, obs): np.copyto(obs_view, obs, casting='no')
@@ -165,7 +165,7 @@ class AsyncWrapperEnv(gym.Env):
             done = obs[self._obs_idxs[-2]:self._obs_idxs[-1]]
             obs = gym_util.bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         reward = np.frombuffer(reward, dtype=np.float64).item()
-        done = np.frombuffer(done, dtype=np.bool).item()
+        done = np.frombuffer(done, dtype=bool).item()
         return obs, reward, done, {}
 
 if __name__ == '__main__':

@@ -131,30 +131,28 @@ class In(tf.keras.layers.Layer):
     def __init__(self, latent_spec, spec_in, obs_latent=False, net_attn_io=False, num_heads=1, aug_data_pos=False):
         super(In, self).__init__(name='inp')
         inp, evo, latent_size, aio_max_latents = latent_spec['inp'], latent_spec['evo'], latent_spec['latent_size'], latent_spec['max_latents']
-        self.obs_latent, self.num_latents, self.net_attn_io2 = obs_latent, 0, False
+        self.latent_size, self.obs_latent, self.net_attn_io, self.num_latents, self.net_attn_io2 = tf.constant(latent_size), obs_latent, net_attn_io, 0, False
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.net_ins = len(spec_in); self.input_names, self.layer_attn_in, self.layer_mlp_in, self.pos_idx_in = OrderedDict(), OrderedDict(), OrderedDict(), OrderedDict()
         for i in range(self.net_ins):
-            space_name, input_name, event_shape, event_size, channels, num_latents = spec_in[i]['space_name'], spec_in[i]['name'], spec_in[i]['event_shape'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['num_latents']; self.num_latents += num_latents
+            space_name, input_name, event_size, channels, step_shape, num_latents = spec_in[i]['space_name'], spec_in[i]['name'], spec_in[i]['event_size'], spec_in[i]['channels'], spec_in[i]['step_shape'], spec_in[i]['num_latents']; self.num_latents += num_latents
             if space_name not in self.input_names: self.input_names[space_name], self.layer_attn_in[space_name], self.layer_mlp_in[space_name], self.pos_idx_in[space_name] = 0, [], [], []
             self.input_names[space_name] += 1
             if aug_data_pos and event_size > 1:
-                    pos_idx = np.indices(event_shape[:-1])
-                    pos_idx = np.moveaxis(pos_idx, 0, -1)
-                    # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
-                    self.pos_idx_in[space_name] += [tf.constant(pos_idx, dtype=self.compute_dtype)]
-                    channels += pos_idx.shape[-1]
+                pos_idx = np.indices(step_shape[1:-1].as_list())
+                pos_idx = np.moveaxis(pos_idx, 0, -1)
+                # pos_idx = pos_idx / (np.max(pos_idx).item() / 2.0) - 1.0
+                self.pos_idx_in[space_name] += [tf.constant(pos_idx, dtype=self.compute_dtype)]
+                channels += pos_idx.shape[-1]
             else: self.pos_idx_in[space_name] += [None]
-            if net_attn_io and event_size > 1:
+            if net_attn_io and event_size > num_latents:
                 self.layer_attn_in[space_name] += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, name='attn_in_{}_{}'.format(space_name, input_name))]
-                # self.layer_mlp += [util.MLPBlock(hidden_size=latent_spec['mid'], latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
             else: self.layer_attn_in[space_name] += [None]
             self.layer_mlp_in[space_name] += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{}_{}'.format(space_name, input_name))]
         if net_attn_io and self.num_latents > aio_max_latents:
             self.net_attn_io2, self.num_latents = True, aio_max_latents
             self.layer_attn_io2 = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=self.num_latents, channels=latent_size, name='attn_io2')
-            # self.layer_mlp += [util.MLPBlock(hidden_size=latent_spec['mid'], latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
         if obs_latent: self.net_ins += 1; self.num_latents += latent_spec['num_latents']
         else: latent_spec.update({'num_latents':self.num_latents})
 
@@ -165,14 +163,14 @@ class In(tf.keras.layers.Layer):
         for input_name in self.input_names.keys():
             for i in range(self.input_names[input_name]):
                 out = tf.cast(inputs[input_name][i], self.compute_dtype)
-                # out = tf.expand_dims(out, axis=-1) # TODO try splitting down to individual scaler level
                 if self.pos_idx_in[input_name][i] is not None:
                     shape = tf.concat([tf.shape(out)[0:1], self.pos_idx_in[input_name][i].shape], axis=0)
                     pos_idx = tf.broadcast_to(self.pos_idx_in[input_name][i], shape)
                     out = tf.concat([out, pos_idx], axis=-1)
-                if self.layer_attn_in[input_name][i] is not None:
+                if self.net_attn_io:
                     out = self.layer_mlp_in[input_name][i](out)
-                    out_accu[out_accu_i] = self.layer_attn_in[input_name][i](out)
+                    if self.layer_attn_in[input_name][i] is not None: out_accu[out_accu_i] = self.layer_attn_in[input_name][i](out)
+                    else: out_accu[out_accu_i] = tf.reshape(out, (-1, self.latent_size))
                 else:
                     out = self.layer_flatten(out)
                     out_accu[out_accu_i] = self.layer_mlp_in[input_name][i](out)
@@ -202,9 +200,8 @@ class Net(tf.keras.layers.Layer):
 
         self.num_latents = latent_spec['num_latents']
         params_size, self.dist = util.distribution(latent_spec)
-        # if net_attn_io: self.layer_attn_out_logits = util.MultiHeadAttention(latent_size=params_size, num_heads=num_heads, norm=True, hidden_size=midp, evo=evo, residual=False, cross_type=1, num_latents=self.num_latents, channels=latent_size, name='attn_out_logits')
         if net_attn_io: self.layer_attn_out_logits = util.MultiHeadAttention(latent_size=params_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=self.num_latents, channels=latent_size, name='attn_out_logits')
-        else: self.layer_dense_out_logits = tf.keras.layers.Dense(self.num_latents*params_size, name='dense_out_logits')
+        else: self.layer_dense_out_logits = tf.keras.layers.Dense(params_size, name='dense_out_logits')
 
         self.arch_lat = "L{}{}x{}".format(latent_spec['dist_type'], self.num_latents, latent_size)
 
@@ -224,22 +221,24 @@ class Net(tf.keras.layers.Layer):
 class Out(tf.keras.layers.Layer):
     def __init__(self, latent_spec, spec_out, net_attn_io=False, num_heads=1):
         super(Out, self).__init__(name='out')
-        outp, evo, latent_size = latent_spec['outp'], latent_spec['evo'], latent_spec['latent_size']
+        outp, evo, latent_size, max_batch_out = latent_spec['outp'], latent_spec['evo'], latent_spec['latent_size'], latent_spec['max_batch_out']
         self.net_attn_io = net_attn_io
 
-        self.net_outs = len(spec_out); params_size, self.dist, self.layer_attn_out, self.layer_out_logits, self.logits_step_shape, self.arch_out = [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, "Ö"
+        self.net_outs = len(spec_out)
+        self.event_size, self.step_shape, params_size, self.dist, self.layer_attn_out, self.layer_out_logits, self.arch_out = [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, [None]*self.net_outs, "Ö"
         for i in range(self.net_outs):
-            space_name, output_name, dist_type, num_components = spec_out[i]['space_name'], spec_out[i]['name'], spec_out[i]['dist_type'], spec_out[i]['num_components']
+            space_name, output_name, dist_type, num_components, event_size, step_shape = spec_out[i]['space_name'], spec_out[i]['name'], spec_out[i]['dist_type'], spec_out[i]['num_components'], spec_out[i]['event_size'], spec_out[i]['step_shape']
 
             params_size[i], self.dist[i] = util.distribution(spec_out[i])
-            if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=2, num_latents=1, channels=params_size[i], name='attn_out_{}_{}'.format(space_name, output_name))
-            # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=params_size[i], num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=1, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
+            # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=2, num_latents=max_batch_out*event_size, channels=params_size[i], name='attn_out_{}_{}'.format(space_name, output_name))
+            # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=2, num_latents=max_batch_out*event_size, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
+            # if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=params_size[i], num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=max_batch_out*event_size, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
+            if net_attn_io: self.layer_attn_out[i] = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=max_batch_out*event_size, channels=latent_size, name='attn_out_{}_{}'.format(space_name, output_name))
             if dist_type == 'd': self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
             # if dist_type == 'd' or dist_type == 'c': self.layer_out_logits[i] = tf.keras.layers.Dense(params_size[i], name='dense_out_logits_{}_{}'.format(space_name, output_name))
             else: self.layer_out_logits[i] = util.MLPBlock(hidden_size=outp, latent_size=params_size[i], evo=evo, residual=False, name='mlp_out_logits_{}_{}'.format(space_name, output_name))
 
-            self.logits_step_shape += [tf.TensorShape([1]+[params_size[i]])]
-
+            self.event_size[i], self.step_shape[i] = tf.constant(event_size), tf.constant(list(step_shape[1:-1])+[latent_size])
             self.arch_out += "{}{}".format(dist_type, num_components)
 
     def call(self, inputs, batch_size=tf.constant(1), training=None):
@@ -247,6 +246,9 @@ class Out(tf.keras.layers.Layer):
         if not self.net_attn_io: out = tf.reshape(out, (batch_size, -1))
         out_logits = [None]*self.net_outs
         for i in range(self.net_outs):
-            out_logits[i] = out if not self.net_attn_io else self.layer_attn_out[i](out, num_latents=batch_size)
-            out_logits[i] = self.layer_out_logits[i](out_logits[i])
+            if self.net_attn_io:
+                out_logits[i] = self.layer_attn_out[i](out, num_latents=batch_size*self.event_size[i])
+                out_logits[i] = tf.reshape(out_logits[i], tf.concat([tf.reshape(batch_size,(1,)), self.step_shape[i]], 0))
+                out_logits[i] = self.layer_out_logits[i](out_logits[i])
+            else: out_logits[i] = self.layer_out_logits[i](out)
         return out_logits

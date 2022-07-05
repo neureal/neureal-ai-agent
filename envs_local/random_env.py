@@ -84,10 +84,11 @@ class RandomEnv(gym.Env):
 
         action_space.spaces['byte'] = gym.spaces.Box(low=0, high=255, shape=(1,), dtype=np.uint8)
         action_space.spaces['2Darray'] = gym.spaces.Box(low=0, high=255, shape=(2,3), dtype=np.uint8)
+        action_space.spaces['3Darray'] = gym.spaces.Box(low=0, high=255, shape=(3,3,3), dtype=np.int32)
         action_space.spaces['discrete6'] = gym.spaces.Discrete(6)
         # action_space.spaces['multidiscrete2x6'] = gym.spaces.MultiDiscrete([6,6]) # TODO
         action_space.spaces['float64'] = gym.spaces.Box(low=0.0, high=np.inf, shape=(1,), dtype=np.float64)
-        action_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=np.bool)
+        action_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=bool)
 
 
         return action_space
@@ -101,9 +102,10 @@ class RandomEnv(gym.Env):
             ('dt_sub', dt_sub),
             ('byte', np.uint8),
             ('2Darray', np.uint8, (2,3)),
+            ('3Darray', np.int32, (3,3,3)),
             ('discrete6', np.int64),
             ('float64', np.float64),
-            ('bools', np.bool, (5,)),
+            ('bools', bool, (5,)),
         ])
         return dtype
 
@@ -139,7 +141,7 @@ class RandomEnv(gym.Env):
         obs_space.spaces['discrete6'] = gym.spaces.Discrete(6)
         # obs_space.spaces['multidiscrete2x6'] = gym.spaces.MultiDiscrete([6,6]) # TODO
         obs_space.spaces['float64'] = gym.spaces.Box(low=np.NINF, high=np.inf, shape=(1,), dtype=np.float64)
-        obs_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=np.bool)
+        obs_space.spaces['bools'] = gym.spaces.Box(low=0, high=1, shape=(5,), dtype=bool)
         obs_space.spaces['image'] = gym.spaces.Box(low=0, high=255, shape=(3,3,3), dtype=np.uint8)
         for i in range(2):
             obs_space.spaces['v'+str(i)] = gym.spaces.Dict()
@@ -159,7 +161,7 @@ class RandomEnv(gym.Env):
             ('float32', np.float32),
             ('discrete6', np.int64),
             ('float64', np.float64, (1,)),
-            ('bools', np.bool, (5,)),
+            ('bools', bool, (5,)),
             ('image', np.uint8, (3,3,3)),
         ]
         dt_sub = np.dtype([
