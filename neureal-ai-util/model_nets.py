@@ -125,6 +125,33 @@ class ArchGen(tf.keras.Model):
             if isinfnan > 0: tf.print(self.name, 'net out:', out)
         return out
 
+class ArchAR(tf.keras.Model):
+    def __init__(self, name, inputs, opt_spec, stats_spec, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None):
+        super(ArchAR, self).__init__(name=name)
+        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
+        self.dist = self.net.dist
+
+        self.optimizer = OrderedDict()
+        for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
+        self.stats = OrderedDict()
+        for spec in stats_spec: self.stats[spec['name']] = {'b1':tf.constant(spec['b1'],spec['dtype']), 'b1_n':tf.constant(1-spec['b1'],spec['dtype']), 'b2':tf.constant(spec['b2'],spec['dtype']), 'b2_n':tf.constant(1-spec['b2'],spec['dtype']), 'dtype':spec['dtype'],
+            'ma':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ma'.format(name,spec['name'])), 'ema':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/ema'.format(name,spec['name'])),
+            'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
+
+        self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
+        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
+        self.arch_desc = "{}[net{}_{}]".format(name, arch_net, self.net.arch_lat)
+
+    def reset_states(self, use_img=False):
+        for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
+        for layer in self.net.layer_lstm: layer.reset_states()
+    def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
+        out = self.net(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
+
+        isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
+        if isinfnan > 0: tf.print(self.name, 'net out:', out)
+        return out
+
 
 
 class In(tf.keras.layers.Layer):
