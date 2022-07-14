@@ -423,7 +423,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
         super(MultiHeadAttention, self).__init__(tf.identity(num_heads), tf.identity(key_dim), use_bias=use_bias, **kwargs)
         self._mem_size, self._sort_memory, self._norm, self._residual, self._cross_type = memory_size, sort_memory, norm, residual, cross_type
         self._mem_channels = latent_size if cross_type != 1 else channels
-        float_eps = tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps
+        float_eps = tf.experimental.numpy.finfo(self.compute_dtype).eps
 
         if norm:
             # self._layer_norm_key = tf.keras.layers.LayerNormalization(epsilon=float_eps, center=True, scale=True, name='norm_key')
@@ -431,37 +431,39 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             self._layer_dense_key_in = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense_key_in')
             self._layer_dense_value_in = tf.keras.layers.Dense(hidden_size, activation=EvoNormS0(evo), use_bias=False, name='dense_value_in')
 
-        # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=tf.keras.backend.floatx()))
+        # query_scale = 1.0 / tf.math.sqrt(tf.cast(self._key_dim, dtype=self.compute_dtype))
         # self._query_scale = tf.identity(query_scale)
 
         if cross_type: # CrossAttention
             if init_zero is None:
-                # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=tf.keras.backend.floatx())
+                # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=self.compute_dtype)
                 # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
                 if cross_type == 1: # input, batch = different latents
-                    init_zero = np.linspace(1.0, -1.0, num_latents, dtype=tf.keras.backend.floatx()) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, num_latents, dtype=self.compute_dtype) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=-1)
                     init_zero = np.repeat(init_zero, latent_size, axis=-1)
                 if cross_type == 2: # output, batch = actual batch
-                    init_zero = np.linspace(1.0, -1.0, channels, dtype=tf.keras.backend.floatx()) # -np.e, np.e
+                    init_zero = np.linspace(1.0, -1.0, channels, dtype=self.compute_dtype) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=0)
                     init_zero = np.repeat(init_zero, num_latents, axis=0)
                 init_zero += float_eps
                 init_zero = np.expand_dims(init_zero, axis=0)
-            init_zero = tf.constant(init_zero, dtype=tf.keras.backend.floatx())
+            init_zero = tf.constant(init_zero, dtype=self.compute_dtype)
             self._init_zero = tf.identity(init_zero)
 
     def build(self, input_shape):
         if self._mem_size is not None:
-            mem_zero = tf.constant(np.full((self._mem_size, input_shape[1], self._mem_channels), 0), tf.keras.backend.floatx())
-            mem_rel_idx = np.linspace(np.full((input_shape[1], self._mem_channels), self._mem_size), np.full((input_shape[1], self._mem_channels), 0), self._mem_size+2,dtype=tf.keras.backend.floatx())[1:-1]
-            img_rel_idx = np.linspace(np.full((input_shape[1], self._mem_channels), 0), np.full((input_shape[1], self._mem_channels), -1), self._mem_size+2,dtype=tf.keras.backend.floatx())[1:-1]
-            mem_rel_idx, img_rel_idx = tf.constant(mem_rel_idx, tf.keras.backend.floatx()), tf.constant(img_rel_idx, tf.keras.backend.floatx())
-            self._mem_zero, self._mem_rel_idx, self._img_rel_idx = tf.identity(mem_zero), tf.identity(mem_rel_idx), tf.identity(img_rel_idx)
+            mem_shape = (self._mem_size, input_shape[-2], input_shape[-1]); mem_zero = tf.constant(np.full(mem_shape, 0), self.compute_dtype)
+            # mem_rel_idx = np.linspace(np.full(mem_shape[1:], self._mem_size), np.full(mem_shape[1:], 0), self._mem_size+2, dtype=self.compute_dtype)[1:-1]
+            # img_rel_idx = np.linspace(np.full(mem_shape[1:], 0), np.full(mem_shape[1:], -1), self._mem_size+2, dtype=self.compute_dtype)[1:-1]
+            mem_rel_idx = np.linspace(np.full((input_shape[-2],1), 1), np.full((input_shape[-2],1), 0), self._mem_size+2, dtype=self.compute_dtype)[1:-1]
+            img_rel_idx = np.linspace(np.full((input_shape[-2],1), 0), np.full((input_shape[-2],1), -1), self._mem_size+2, dtype=self.compute_dtype)[1:-1]
+            mem_rel_idx, value_rel_idx, img_rel_idx = tf.constant(mem_rel_idx, self.compute_dtype), tf.zeros((1,input_shape[-2],1), self.compute_dtype), tf.constant(img_rel_idx, self.compute_dtype)
+            self._mem_zero, self._mem_rel_idx, self._value_rel_idx, self._img_rel_idx = tf.identity(mem_zero), tf.identity(mem_rel_idx), tf.identity(value_rel_idx), tf.identity(img_rel_idx)
             self._mem_idx, self._memory = tf.Variable(self._mem_size, trainable=False, name='mem_idx'), tf.Variable(self._mem_zero, trainable=False, name='memory')
             self._mem_idx_img, self._memory_img = tf.Variable(self._mem_size, trainable=False, name='mem_idx_img'), tf.Variable(self._mem_zero, trainable=False, name='memory_img')
             # if self._sort_memory:
-            #     mem_score_zero = tf.constant(np.full((self._mem_size, input_shape[1]), 0), tf.keras.backend.floatx())
+            #     mem_score_zero = tf.constant(np.full((self._mem_size, input_shape[-2]), 0), self.compute_dtype)
             #     self._mem_score_zero = tf.identity(mem_score_zero)
             #     self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
         if self._cross_type: self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
@@ -490,21 +492,36 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             memory, mem_idx, memory_img, mem_idx_img, mem_size = self._memory, self._mem_idx, self._memory_img, self._mem_idx_img, self._mem_size
             # TODO add mem/img index relative to current location (mem-,img+) # tf.linspace(0.0,1,256)
             if use_img and store_real:
-                value_mem = tf.concat([memory[mem_idx:], value, memory_img[mem_idx_img+batch_size:]], axis=0)
-                # value_mem = tf.concat([memory[mem_idx:]*self._mem_rel_idx[mem_idx:], value, memory_img[mem_idx_img+batch_size:]*self._img_rel_idx[mem_size-mem_idx_img:]], axis=0) # TODO
+                # value_mem = tf.concat([memory[mem_idx:], value, memory_img[mem_idx_img+batch_size:]], axis=0)
+                # value_mem = tf.reshape(value_mem, (1, -1, latent_size))
+
+                # # value_mem = tf.concat([memory[mem_idx:]*self._mem_rel_idx[mem_idx:], value, memory_img[mem_idx_img+batch_size:]*self._img_rel_idx[mem_size-mem_idx_img:]], axis=0) # TODO
+
+                memory_ri = tf.concat([memory[mem_idx:], self._mem_rel_idx[mem_idx:]], axis=-1)
+                value_ri = tf.concat([value, self._value_rel_idx], axis=-1)
+                memory_img_ri = tf.concat([memory_img[mem_idx_img+batch_size:], self._img_rel_idx[batch_size:mem_size-mem_idx_img]], axis=-1)
+                value_mem = tf.concat([memory_ri, value_ri, memory_img_ri], axis=0)
+                value_mem = tf.reshape(value_mem, (1, -1, latent_size+1))
             elif use_img:
                 # mem = tf.concat([memory[mem_idx+(mem_size-mem_idx_img):], memory_img[mem_idx_img:]], axis=0) # TODO
                 clip = mem_size-mem_idx-mem_idx_img
                 if clip < 0: clip = tf.constant(0)
                 value_mem =  tf.concat([memory[mem_idx+clip:], memory_img[mem_idx_img:], value], axis=0)
+                value_mem = tf.reshape(value_mem, (1, -1, latent_size))
             else:
-                value_mem = tf.concat([memory[mem_idx:], value], axis=0)
+                # value_mem = tf.concat([memory[mem_idx:], value], axis=0)
+                # value_mem = tf.reshape(value_mem, (1, -1, latent_size))
+
                 # if mem_idx < mem_size:
                 #     # mem = memory[mem_idx:] * self._mem_rel_idx[mem_idx:] # _mha_relM
                 #     mem = memory[mem_idx:] + self._mem_rel_idx[mem_idx:] # _mha_relP
                 #     value_mem = tf.concat([mem, value], axis=0)
                 # else: value_mem = value
-            value_mem = tf.reshape(value_mem, (1, -1, latent_size))
+
+                memory_ri = tf.concat([memory[mem_idx:], self._mem_rel_idx[mem_idx:]], axis=-1)
+                value_ri = tf.concat([value, self._value_rel_idx], axis=-1)
+                value_mem = tf.concat([memory_ri, value_ri], axis=0)
+                value_mem = tf.reshape(value_mem, (1, -1, latent_size+1))
             # query = tf.reshape(query, (1, -1, latent_size))
         else: value_mem = value
 

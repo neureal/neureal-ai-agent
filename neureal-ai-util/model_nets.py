@@ -8,7 +8,7 @@ class ArchFull(tf.keras.Model):
     def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, spec_out, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io_out=False, num_heads=1, memory_size=None, aug_data_pos=False):
         super(ArchFull, self).__init__(name=name)
         self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
-        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
+        self.net = Net(latent_spec, obs_latent=obs_latent, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
         self.out = Out(latent_spec, spec_out, net_attn_io=net_attn_io_out)
         self.dist = self.out.dist
 
@@ -43,7 +43,7 @@ class ArchTrans(tf.keras.Model):
     def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, aug_data_pos=False):
         super(ArchTrans, self).__init__(name=name)
         self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
-        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
+        self.net = Net(latent_spec, obs_latent=obs_latent, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
         self.dist = self.net.dist
 
         self.optimizer = OrderedDict()
@@ -96,7 +96,12 @@ class ArchRep(tf.keras.Model):
 class ArchGen(tf.keras.Model):
     def __init__(self, name, inputs, opt_spec, stats_spec, spec_out, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io_out=False, num_heads=1, memory_size=None):
         super(ArchGen, self).__init__(name=name)
-        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
+        num_latents, latent_size = latent_spec['num_latents'], latent_spec['latent_size']
+        # self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, memory_size=memory_size, name='attn_in')
+        self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_in')
+        self.layer_mlp_in = util.MLPBlock(hidden_size=256, latent_size=latent_size, evo=None, residual=True, name='mlp_in')
+
+        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=None)
         self.out = Out(latent_spec, spec_out, net_attn_io=net_attn_io_out)
         self.dist = self.out.dist
 
@@ -113,10 +118,16 @@ class ArchGen(tf.keras.Model):
         self.arch_desc = "{}[net{}_out{}_{}]".format(name, arch_net, arch_out, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
+        self.layer_attn_in.reset_states(use_img=use_img)
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.net.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
-        out = self.net(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
+        # out = self.layer_attn_in(inputs, use_img=True, store_real=True)
+        # out = self.layer_attn_in(inputs)
+        out = tf.squeeze(self.layer_attn_in(tf.expand_dims(inputs, axis=0), use_img=True, store_real=True), axis=0)
+        out = self.layer_mlp_in(out)
+
+        out = self.net(out, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
         dist = self.net.dist(out); out = dist.sample()
         out = self.out(out, training=training)
 
@@ -128,6 +139,13 @@ class ArchGen(tf.keras.Model):
 class ArchAR(tf.keras.Model):
     def __init__(self, name, inputs, opt_spec, stats_spec, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None):
         super(ArchAR, self).__init__(name=name)
+        self.max_img = 4 # memory_size
+
+        num_latents, latent_size = latent_spec['num_latents'], latent_spec['latent_size']
+        self.out_shape, self.max_img_idx = (-1, num_latents, latent_size), memory_size - self.max_img
+        self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, memory_size=memory_size, name='attn_in')
+        self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=self.max_img*num_latents, channels=latent_size, name='attn_out')
+
         self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
         self.dist = self.net.dist
 
@@ -143,10 +161,14 @@ class ArchAR(tf.keras.Model):
         self.arch_desc = "{}[net{}_{}]".format(name, arch_net, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
+        # self.layer_attn_in.reset_states(use_img=use_img)
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.net.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
+        # out = self.layer_attn_in(inputs)
         out = self.net(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
+        out = self.layer_attn_out(out)
+        out = tf.reshape(out, self.out_shape)
 
         isinfnan = tf.math.count_nonzero(tf.math.logical_or(tf.math.is_nan(out), tf.math.is_inf(out)))
         if isinfnan > 0: tf.print(self.name, 'net out:', out)
@@ -209,10 +231,10 @@ class In(tf.keras.layers.Layer):
         return out
 
 class Net(tf.keras.layers.Layer):
-    def __init__(self, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None):
+    def __init__(self, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None):
         super(Net, self).__init__(name='net')
         midp, evo, latent_size = latent_spec['midp'], latent_spec['evo'], latent_spec['latent_size']
-        self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = net_blocks, net_attn, net_lstm, net_attn_io
+        self.obs_latent, self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = obs_latent, net_blocks, net_attn, net_lstm, net_attn_io
         self.layer_flatten = tf.keras.layers.Flatten()
 
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
@@ -238,11 +260,12 @@ class Net(tf.keras.layers.Layer):
             if self.net_attn: out = tf.squeeze(self.layer_attn[i](tf.expand_dims(out, axis=0), auto_mask=training, store_memory=store_memory, use_img=use_img, store_real=store_real), axis=0)
             if self.net_lstm: out = tf.squeeze(self.layer_lstm[i](tf.expand_dims(out, axis=0), training=training), axis=0)
             out = self.layer_mlp[i](out)
-        if self.net_attn_io: out = self.layer_attn_out_logits(out) # _net-attnio
-        else:
-            out = self.layer_flatten(tf.expand_dims(out, axis=0))
-            out = self.layer_dense_out_logits(out)
-            out = tf.reshape(out, (self.num_latents, -1))
+        if self.obs_latent:
+            if self.net_attn_io: out = self.layer_attn_out_logits(out) # _net-attnio
+            else:
+                out = self.layer_flatten(tf.expand_dims(out, axis=0))
+                out = self.layer_dense_out_logits(out)
+                out = tf.reshape(out, (self.num_latents, -1))
         return out
 
 class Out(tf.keras.layers.Layer):
