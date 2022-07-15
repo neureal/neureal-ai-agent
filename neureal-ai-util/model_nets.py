@@ -5,11 +5,11 @@ import model_util as util
 
 
 class ArchFull(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, spec_out, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io_out=False, num_heads=1, memory_size=None, aug_data_pos=False):
+    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, spec_out, latent_spec, obs_latent=False, net_blocks=1, net_lstm=False, net_attn=None, num_heads=1, memory_size=None, aug_data_pos=False):
         super(ArchFull, self).__init__(name=name)
-        self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
-        self.net = Net(latent_spec, obs_latent=obs_latent, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
-        self.out = Out(latent_spec, spec_out, net_attn_io=net_attn_io_out)
+        self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn['io'], num_heads=num_heads, aug_data_pos=aug_data_pos)
+        self.net = Net(latent_spec, obs_latent=obs_latent, net_blocks=net_blocks, net_lstm=net_lstm, net_attn=net_attn['net'], net_attn_io=net_attn['io'], net_attn_ar=net_attn['ar'], num_heads=num_heads, memory_size=memory_size)
+        self.out = Out(latent_spec, spec_out, net_attn_io=net_attn['out'])
         self.dist = self.out.dist
 
         self.optimizer = OrderedDict()
@@ -20,9 +20,9 @@ class ArchFull(tf.keras.Model):
             'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
-        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
-        arch_out = "{}D{}-{}".format(('Aio+' if net_attn_io_out else ''), latent_spec['outp'], self.out.arch_out)
+        arch_in = "{}D{}-{}".format(('Aio+' if net_attn['io'] else ''), latent_spec['inp'], self.inp.arch_in)
+        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn['net'] else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
+        arch_out = "{}D{}-{}".format(('Aio+' if net_attn['out'] else ''), latent_spec['outp'], self.out.arch_out)
         self.arch_desc = "{}[in{}_net{}_out{}_{}]".format(name, arch_in, arch_net, arch_out, self.inp.arch_lat)
 
     def reset_states(self, use_img=False):
@@ -40,10 +40,10 @@ class ArchFull(tf.keras.Model):
         return out
 
 class ArchTrans(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None, aug_data_pos=False):
+    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, obs_latent=False, net_blocks=1, net_lstm=False, net_attn=None, num_heads=1, memory_size=None, aug_data_pos=False):
         super(ArchTrans, self).__init__(name=name)
-        self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
-        self.net = Net(latent_spec, obs_latent=obs_latent, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
+        self.inp = In(latent_spec, spec_in, obs_latent=obs_latent, net_attn_io=net_attn['io'], num_heads=num_heads, aug_data_pos=aug_data_pos)
+        self.net = Net(latent_spec, obs_latent=obs_latent, net_blocks=net_blocks, net_lstm=net_lstm, net_attn=net_attn['net'], net_attn_io=net_attn['io'], net_attn_ar=net_attn['ar'], num_heads=num_heads, memory_size=memory_size)
         self.dist = self.net.dist
 
         self.optimizer = OrderedDict()
@@ -54,8 +54,8 @@ class ArchTrans(tf.keras.Model):
             'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
-        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
+        arch_in = "{}D{}-{}".format(('Aio+' if net_attn['io'] else ''), latent_spec['inp'], self.inp.arch_in)
+        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn['net'] else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
         self.arch_desc = "{}[in{}_net{}_{}]".format(name, arch_in, arch_net, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
@@ -70,9 +70,9 @@ class ArchTrans(tf.keras.Model):
         return out
 
 class ArchRep(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, net_attn_io=False, num_heads=1, aug_data_pos=False):
+    def __init__(self, name, inputs, opt_spec, stats_spec, spec_in, latent_spec, net_attn=None, num_heads=1, aug_data_pos=False):
         super(ArchRep, self).__init__(name=name)
-        self.inp = In(latent_spec, spec_in, net_attn_io=net_attn_io, num_heads=num_heads, aug_data_pos=aug_data_pos)
+        self.inp = In(latent_spec, spec_in, net_attn_io=net_attn['io'], num_heads=num_heads, aug_data_pos=aug_data_pos)
 
         self.optimizer = OrderedDict()
         for spec in opt_spec: self.optimizer[spec['name']] = util.optimizer(name, spec)
@@ -82,7 +82,7 @@ class ArchRep(tf.keras.Model):
             'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_in = "{}D{}-{}".format(('Aio+' if net_attn_io else ''), latent_spec['inp'], self.inp.arch_in)
+        arch_in = "{}D{}-{}".format(('Aio+' if net_attn['io'] else ''), latent_spec['inp'], self.inp.arch_in)
         self.arch_desc = "{}[in{}_{}]".format(name, arch_in, self.inp.arch_lat)
 
     def reset_states(self, use_img=False): return
@@ -94,15 +94,15 @@ class ArchRep(tf.keras.Model):
         return out
 
 class ArchGen(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, stats_spec, spec_out, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, net_attn_io_out=False, num_heads=1, memory_size=None):
+    def __init__(self, name, inputs, opt_spec, stats_spec, spec_out, latent_spec, net_blocks=1, net_lstm=False, net_attn=None, num_heads=1, memory_size=None):
         super(ArchGen, self).__init__(name=name)
-        num_latents, latent_size = latent_spec['num_latents'], latent_spec['latent_size']
-        # self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, memory_size=memory_size, name='attn_in')
-        self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_in')
-        self.layer_mlp_in = util.MLPBlock(hidden_size=256, latent_size=latent_size, evo=None, residual=True, name='mlp_in')
+        # num_latents, latent_size = latent_spec['num_latents'], latent_spec['latent_size']
+        # # self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, memory_size=memory_size, name='attn_in')
+        # self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_in')
+        # self.layer_mlp_in = util.MLPBlock(hidden_size=256, latent_size=latent_size, evo=None, residual=True, name='mlp_in')
 
-        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=None)
-        self.out = Out(latent_spec, spec_out, net_attn_io=net_attn_io_out)
+        self.net = Net(latent_spec, obs_latent=False, net_blocks=net_blocks, net_lstm=net_lstm, net_attn=net_attn['net'], net_attn_io=net_attn['io'], net_attn_ar=net_attn['ar'], num_heads=num_heads, memory_size=memory_size)
+        self.out = Out(latent_spec, spec_out, net_attn_io=net_attn['out'])
         self.dist = self.out.dist
 
         self.optimizer = OrderedDict()
@@ -113,21 +113,21 @@ class ArchGen(tf.keras.Model):
             'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
-        arch_out = "{}D{}-{}".format(('Aio+' if net_attn_io_out else ''), latent_spec['outp'], self.out.arch_out)
+        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn['net'] else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
+        arch_out = "{}D{}-{}".format(('Aio+' if net_attn['out'] else ''), latent_spec['outp'], self.out.arch_out)
         self.arch_desc = "{}[net{}_out{}_{}]".format(name, arch_net, arch_out, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
-        self.layer_attn_in.reset_states(use_img=use_img)
+        # self.layer_attn_in.reset_states(use_img=use_img)
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.net.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
-        # out = self.layer_attn_in(inputs, use_img=True, store_real=True)
-        # out = self.layer_attn_in(inputs)
-        out = tf.squeeze(self.layer_attn_in(tf.expand_dims(inputs, axis=0), use_img=True, store_real=True), axis=0)
-        out = self.layer_mlp_in(out)
+        # # out = self.layer_attn_in(inputs, use_img=True, store_real=True)
+        # # out = self.layer_attn_in(inputs)
+        # out = tf.squeeze(self.layer_attn_in(tf.expand_dims(inputs, axis=0), use_img=True, store_real=True), axis=0)
+        # out = self.layer_mlp_in(out)
 
-        out = self.net(out, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
+        out = self.net(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
         dist = self.net.dist(out); out = dist.sample()
         out = self.out(out, training=training)
 
@@ -137,16 +137,13 @@ class ArchGen(tf.keras.Model):
         return out
 
 class ArchAR(tf.keras.Model):
-    def __init__(self, name, inputs, opt_spec, stats_spec, latent_spec, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None):
+    def __init__(self, name, inputs, opt_spec, stats_spec, latent_spec, net_blocks=1, net_lstm=False, net_attn=None, num_heads=1, memory_size=None, mem_img_size=0):
         super(ArchAR, self).__init__(name=name)
-        self.max_img = 4 # memory_size
-
         num_latents, latent_size = latent_spec['num_latents'], latent_spec['latent_size']
-        self.out_shape, self.max_img_idx = (-1, num_latents, latent_size), memory_size - self.max_img
-        self.layer_attn_in = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, memory_size=memory_size, name='attn_in')
-        self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=self.max_img*num_latents, channels=latent_size, name='attn_out')
+        self.out_shape = (-1, num_latents, latent_size)
+        self.layer_attn_out = util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=mem_img_size*num_latents, channels=latent_size, name='attn_out')
 
-        self.net = Net(latent_spec, net_blocks=net_blocks, net_attn=net_attn, net_lstm=net_lstm, net_attn_io=net_attn_io, num_heads=num_heads, memory_size=memory_size)
+        self.net = Net(latent_spec, net_blocks=net_blocks, net_lstm=net_lstm, net_attn=net_attn['net'], net_attn_io=net_attn['io'], net_attn_ar=net_attn['ar'], num_heads=num_heads, memory_size=memory_size)
         self.dist = self.net.dist
 
         self.optimizer = OrderedDict()
@@ -157,15 +154,13 @@ class ArchAR(tf.keras.Model):
             'iter':tf.Variable(0, dtype=spec['dtype'], trainable=False, name='{}/stats_{}/iter'.format(name,spec['name'])),}
 
         self(inputs); self.call = tf.function(self.call, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
-        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
+        arch_net = "{:02d}{}{}D{}".format(net_blocks, ('AT+' if net_attn['net'] else ''), ('LS+' if net_lstm else ''), latent_spec['midp'])
         self.arch_desc = "{}[net{}_{}]".format(name, arch_net, self.net.arch_lat)
 
     def reset_states(self, use_img=False):
-        # self.layer_attn_in.reset_states(use_img=use_img)
         for layer in self.net.layer_attn: layer.reset_states(use_img=use_img)
         for layer in self.net.layer_lstm: layer.reset_states()
     def call(self, inputs, store_memory=True, use_img=False, store_real=False, training=None):
-        # out = self.layer_attn_in(inputs)
         out = self.net(inputs, store_memory=store_memory, use_img=use_img, store_real=store_real, training=training)
         out = self.layer_attn_out(out)
         out = tf.reshape(out, self.out_shape)
@@ -231,7 +226,7 @@ class In(tf.keras.layers.Layer):
         return out
 
 class Net(tf.keras.layers.Layer):
-    def __init__(self, latent_spec, obs_latent=False, net_blocks=1, net_attn=False, net_lstm=False, net_attn_io=False, num_heads=1, memory_size=None):
+    def __init__(self, latent_spec, obs_latent=False, net_blocks=1, net_lstm=False, net_attn=False, net_attn_io=False, net_attn_ar=False, num_heads=1, memory_size=None):
         super(Net, self).__init__(name='net')
         midp, evo, latent_size = latent_spec['midp'], latent_spec['evo'], latent_spec['latent_size']
         self.obs_latent, self.net_blocks, self.net_attn, self.net_lstm, self.net_attn_io = obs_latent, net_blocks, net_attn, net_lstm, net_attn_io
@@ -240,7 +235,8 @@ class Net(tf.keras.layers.Layer):
         self.layer_attn, self.layer_lstm, self.layer_mlp = [], [], []
         for i in range(net_blocks):
             if net_attn:
-                self.layer_attn += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=memory_size, residual=True, name='attn_{:02d}'.format(i))]
+                mem_active = None if net_attn_ar and i > 0 else memory_size
+                self.layer_attn += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, memory_size=mem_active, residual=True, name='attn_{:02d}'.format(i))]
                 self.layer_mlp += [util.MLPBlock(hidden_size=midp, latent_size=latent_size, evo=None, residual=True, name='mlp_{:02d}'.format(i))]
             elif net_lstm:
                 self.layer_lstm += [tf.keras.layers.LSTM(midp, activation=util.EvoNormS0(evo), use_bias=False, return_sequences=True, stateful=True, name='lstm_{:02d}'.format(i))]
