@@ -85,7 +85,7 @@ class GeneralAI(tf.keras.Model):
         if arch in ('MU',):
             self.obs_spec += [{'space_name':'done_prev', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]; inputs['done_prev'] = [self.dones_zero]
             self.obs_spec += self.action_spec; inputs['actions'] = self.action_zero_out
-            opt_spec = [{'name':'rep', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
+            opt_spec = [{'name':'rep', 'type':'a', 'schedule_type':'ex', 'num_steps':10000*max_steps, 'lr_min':tf.constant(3e-16, tf.float64), 'learn_rate':self.learn_rates['rep'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
             self.rep = nets.ArchTrans('RN', inputs, opt_spec, stats_spec, self.obs_spec, latent_spec, obs_latent=False, net_blocks=0, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=None, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
             self.rep.optimizer_weights = util.optimizer_build(self.rep.optimizer['rep'], self.rep.trainable_variables)
             util.net_build(self.rep, self.initializer)
@@ -95,7 +95,7 @@ class GeneralAI(tf.keras.Model):
             self.mem_img_size = 4 # int(max_steps/4)
             opt_spec = [{'name':'trans', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['trans'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
             # latent_spec_trans = latent_spec.copy(); latent_spec_trans.update({'dist_type':'mx', 'num_components':int(latent_size/8), 'event_shape':(latent_size,)}) # continuous
-            self.trans = nets.ArchAR('AR', self.latent_zero, opt_spec, stats_spec, latent_spec, net_blocks=3, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=max_steps, mem_img_size=self.mem_img_size); outputs = self.trans(self.latent_zero)
+            self.trans = nets.ArchAR('AR', self.latent_zero, opt_spec, stats_spec, latent_spec, net_blocks=4, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=max_steps, mem_img_size=self.mem_img_size); outputs = self.trans(self.latent_zero)
             self.trans.optimizer_weights = util.optimizer_build(self.trans.optimizer['trans'], self.trans.trainable_variables)
             util.net_build(self.trans, self.initializer)
 
@@ -929,11 +929,12 @@ class GeneralAI(tf.keras.Model):
 
             self.reset_states(); loss = self.MU_learner_onestep(outputs)
             util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss['action_lik'])); ma_loss, ema_loss, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
-            self.rep.optimizer['rep'].learning_rate = self.learn_rates['rep'] * snr_loss
-            # self.trans.optimizer['trans'].learning_rate = self.learn_rates['trans'] * snr_loss
+            # self.rep.optimizer['rep'].learning_rate = self.learn_rates['rep'] * snr_loss
             self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * snr_loss # **3 # _lr-snr3
+            util.stats_update(self.trans.stats['loss'], tf.math.reduce_mean(loss['trans'])); ma_trans, ema_trans, snr_trans, std_trans = util.stats_get(self.trans.stats['loss'])
+            self.trans.optimizer['trans'].learning_rate = self.learn_rates['trans'] * snr_trans**np.e
 
-            if self.action.stats['loss']['iter'] > 10 and tf.math.abs(ma_loss) < 0.05:
+            if self.action.stats['loss']['iter'] > 16 and tf.math.abs(ma_loss) < 0.01: # self.float_eps 0.01
                 tf.print("net_reset (action) at:", episode, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss)
                 util.net_reset(self.action); self.action.optimizer['action'].learning_rate = self.learn_rates['action']
 
@@ -944,8 +945,11 @@ class GeneralAI(tf.keras.Model):
                 # tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['trans']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
-                snr_loss, std_loss, # ma, ema, snr, std
-                self.action.optimizer['action'].learning_rate,
+                # snr_loss, std_loss, # ma, ema, snr, std
+                # self.action.optimizer['action'].learning_rate,
+                snr_trans, std_trans,
+                self.trans.optimizer['trans'].learning_rate,
+                # self.rep.optimizer['rep'].learning_rate(self.rep.optimizer['rep'].iterations),
             ]
             if self.trader:
                 del metrics[2]; metrics[2], metrics[3] = tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0]
@@ -963,13 +967,13 @@ class GeneralAI(tf.keras.Model):
 def params(): pass
 load_model, save_model, chkpts = False, False, 5000
 max_episodes = 100
-learn_rates = {'action':4e-6, 'value':2e-6, 'rep':2e-6, 'trans':2e-4} # 5 = testing, 6 = more stable/slower
+learn_rates = {'action':4e-6, 'value':2e-6, 'rep':2e-5, 'trans':2e-4} # 5 = testing, 6 = more stable/slower
 value_cont = True
 latent_size = 16
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
 mixture_multi = 4
 net_lstm = False
-net_attn = {'net':True, 'io':True, 'out':True, 'ar':True}
+net_attn = {'net':True, 'io':True, 'out':True, 'ar':False}
 aio_max_latents = 16
 attn_mem_base = 4
 aug_data_step, aug_data_pos = True, True
@@ -980,7 +984,7 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, '' # _loss-final_lr-snr-99_rwd-prev _out-aio2-mlp _data-same-rnd-N1 _mlp-diff _lat128_lay512-256-64 _val2e5_rep2e8_lEp5_rpP10 _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig, chart_lim = False, False, 0.001, 160.0, False, 0.003
-env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
+# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
 # env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    500  475.0
 # env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
 # env_name, max_steps, env_render, env = 'Copy', 256, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0 # ()6 int64    [()2,()2,()5] int64    200  25.0
@@ -989,12 +993,14 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # (210,160,3) uint8    ()18 int64    21600 None
 # env_name, max_steps, env_render, env = 'MontezumaRevenge', 22528, False, gym.make('MontezumaRevengeNoFrameskip-v4') # (210,160,3) uint8    ()18 int64    400000 None
 # env_name, max_steps, env_render, env = 'MsPacman', 22528, False, gym.make('MsPacmanNoFrameskip-v4') # (210,160,3) uint8    ()9 int64    400000 None
+# import pybullet_envs.bullet.racecarGymEnv as env_; env_render = False; env_name, max_steps, env = 'Racecar', 1024, env_.RacecarGymEnv(isDiscrete=True, renders=env_render) # (2) float32    ()9 int64    1000  5.0
 
 # env_name, max_steps, env_render, env_reconfig, env = 'CartPoleCont', 256, False, True, gym.make('CartPoleContinuousBulletEnv-v0'); env.observation_space.dtype = np.dtype('float64') # (4) float32    (1) float32    200  190.0
-# env_name, max_steps, env_render, env_reconfig, env = 'LunarLandCont', 1024, False, True, gym.make('LunarLanderContinuous-v2') # (8) float32    (2) float32    1000  200
+env_name, max_steps, env_render, env_reconfig, env = 'LunarLandCont', 1024, False, True, gym.make('LunarLanderContinuous-v2') # (8) float32    (2) float32    1000  200
 # import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
-# env_name, max_steps, env_render, env = 'Hopper', 1024, False, gym.make('HopperBulletEnv-v0') # (15) float32    (3) float32    1000  2500.0
-# env_name, max_steps, env_render, env = 'RacecarZed', 1024, False, gym.make('RacecarZedBulletEnv-v0') # (10,100,4) uint8    (2) float32    1000  5.0
+# import pybullet_envs.gym_manipulator_envs as env_; env_render = False; env_name, max_steps, env = 'Reacher', 256, env_.ReacherBulletEnv(render=env_render) # (9) float32    (2) float32    150  18.0
+# import pybullet_envs.gym_locomotion_envs as env_; env_render = False; env_name, max_steps, env = 'Hopper', 1024, env_.HopperBulletEnv(render=env_render) # (15) float32    (3) float32    1000  2500.0
+# import pybullet_envs.bullet.racecarZEDGymEnv as env_; env_render = False; env_name, max_steps, env = 'RacecarZed', 1024, env_.RacecarZEDGymEnv(isDiscrete=False, renders=env_render) # (10,100,4) uint8    (2) float32    1000  5.0
 
 # from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
 # import src.envs.envList as env_; env_name, max_steps, env_render, env = 'UR5PlayAbs', 64, False, env_.ExtendedUR5PlayAbsRPY1Obj()
@@ -1007,10 +1013,10 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG' # Policy Gradient agent, PG loss
+arch = 'PG' # Policy Gradient agent, PG loss
 # arch = 'AC' # Actor Critic, PG and advantage loss
 # arch = 'TRANS' # learned Transition dynamics, autoregressive likelihood loss
-arch = 'MU' # TODO try combining AC actor and critic into one model
+# arch = 'MU' # TODO try combining AC actor and critic into one model
 
 if __name__ == '__main__':
     ## manage multiprocessing
