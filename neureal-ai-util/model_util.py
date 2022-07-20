@@ -438,6 +438,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             if init_zero is None:
                 # init_zero = tf.random.normal((1, num_latents, latent_size), mean=0.0, stddev=0.02, dtype=self.compute_dtype)
                 # init_zero = tf.clip_by_value(init_zero, -2.0, 2.0)
+                # init_zero = np.random.uniform(np.asarray(-1.0, dtype=self.compute_dtype), 1.0, num_latents)
                 if cross_type == 1: # input, batch = different latents
                     init_zero = np.linspace(1.0, -1.0, num_latents, dtype=self.compute_dtype) # -np.e, np.e
                     init_zero = np.expand_dims(init_zero, axis=-1)
@@ -466,7 +467,7 @@ class MultiHeadAttention(tf.keras.layers.MultiHeadAttention):
             #     mem_score_zero = tf.constant(np.full((self._mem_size, input_shape[-2]), 0), self.compute_dtype)
             #     self._mem_score_zero = tf.identity(mem_score_zero)
             #     self._mem_score = tf.Variable(self._mem_score_zero, trainable=False, name='mem_score')
-        if self._cross_type: self._init_latent = tf.Variable(self._init_zero, trainable=False, name='init_latent')
+        if self._cross_type: self._init_latent = tf.Variable(self._init_zero, trainable=True, name='init_latent')
         if self._residual: self._residual_amt = tf.Variable(0.0, dtype=self.compute_dtype, trainable=True, name='residual') # ReZero
 
     def _compute_attention(self, query, key, value, attention_mask=None):
