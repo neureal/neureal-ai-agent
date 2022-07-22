@@ -94,29 +94,31 @@ def net_copy(source, dest):
 
 def optimizer(net_name, opt_spec):
     beta_1, beta_2, decay = tf.constant(0.99,tf.float64), tf.constant(0.99,tf.float64), 0 # tf.constant(0.0,tf.float64)
-    typ, schedule_type, learn_rate, float_eps = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps']
-    maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64)
+    typ, schedule_type, learn_rate, float_eps, name = opt_spec['type'], opt_spec['schedule_type'], opt_spec['learn_rate'], opt_spec['float_eps'], '{}/optimizer_{}/'.format(net_name, opt_spec['name'])
+    maxval, minval = tf.constant(learn_rate), tf.cast(float_eps,tf.float64); mean, stddev = tf.constant(maxval/2), tf.constant((maxval-minval)/4)
     def schedule_r(): return tf.random.uniform((), dtype=tf.float64, maxval=maxval, minval=minval)
-    mean, stddev = tf.constant(maxval/2), tf.constant((maxval-minval)/4)
     def schedule_rtn(): return tf.random.truncated_normal((), dtype=tf.float64, mean=mean, stddev=stddev)
+
     if schedule_type == 'r': learn_rate = schedule_r
     if schedule_type == 'rtn': learn_rate = schedule_rtn
     if schedule_type == 'cd': learn_rate = tf.keras.optimizers.schedules.CosineDecayRestarts(initial_learning_rate=learn_rate, first_decay_steps=16, t_mul=1.0, m_mul=1.0, alpha=minval)
     if schedule_type == 'tc': learn_rate = tfa.optimizers.TriangularCyclicalLearningRate(initial_learning_rate=learn_rate, maximal_learning_rate=minval, step_size=16, scale_mode='cycle')
     if schedule_type == 'ex': learn_rate = tf.keras.optimizers.schedules.ExponentialDecay(initial_learning_rate=learn_rate, decay_steps=opt_spec['num_steps'], decay_rate=tf.constant(opt_spec['lr_min']/learn_rate,tf.float64), staircase=False)
-    if typ == 's': return tf.keras.optimizers.SGD(learning_rate=learn_rate, name='{}/optimizer_{}/SGD'.format(net_name, opt_spec['name']))
-    if typ == 'a':
-        optimizer = tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
-        # optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, dynamic=False, initial_scale=2**15)
-        return optimizer
-    if typ == 'am': return tf.keras.optimizers.Adamax(beta_1=beta_1, beta_2=beta_2, decay=decay, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/Adam'.format(net_name, opt_spec['name']))
-    if typ == 'aw': return tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/AdamW'.format(net_name, opt_spec['name']))
-    if typ == 'ar': return tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/RectifiedAdam'.format(net_name, opt_spec['name']))
-    if typ == 'ab': return tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True, name='{}/optimizer_{}/AdaBelief'.format(net_name, opt_spec['name']))
-    if typ == 'co': return tfa.optimizers.COCOB(alpha=100.0, use_locking=True, name='{}/optimizer_{}/COCOB'.format(net_name, opt_spec['name']))
-    if typ == 'ws': return tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10, name='{}/optimizer_{}/SWA'.format(net_name, opt_spec['name'])) # has error with floatx=float64
-    if typ == 'sw': return tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name='{}/optimizer_{}/SGDW'.format(net_name, opt_spec['name']))
-    # if typ == 'ax': return tf.keras.optimizers.experimental.Adam(beta_1=beta_1, beta_2=beta_2, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name='{}/optimizer_{}/AdamEx'.format(net_name, opt_spec['name']))
+
+    if typ == 's': optimizer = tf.keras.optimizers.SGD(learning_rate=learn_rate, name=name+'SGD')
+    if typ == 'a': optimizer = tf.keras.optimizers.Adam(beta_1=beta_1, beta_2=beta_2, decay=decay, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name=name+'Adam')
+    if typ == 'am': optimizer = tf.keras.optimizers.Adamax(beta_1=beta_1, beta_2=beta_2, decay=decay, learning_rate=learn_rate, epsilon=float_eps, name=name+'Adam')
+    if typ == 'aw': optimizer = tfa.optimizers.AdamW(learning_rate=learn_rate, epsilon=float_eps, weight_decay=opt_spec['weight_decay'], name=name+'AdamW')
+    if typ == 'ar': optimizer = tfa.optimizers.RectifiedAdam(learning_rate=learn_rate, epsilon=float_eps, name=name+'RectifiedAdam')
+    if typ == 'ab': optimizer = tfa.optimizers.AdaBelief(learning_rate=learn_rate, epsilon=float_eps, rectify=True, name=name+'AdaBelief')
+    if typ == 'co': optimizer = tfa.optimizers.COCOB(alpha=100.0, use_locking=True, name=name+'COCOB')
+    if typ == 'ws': optimizer = tfa.optimizers.SWA(tf.keras.optimizers.SGD(learning_rate=learn_rate), start_averaging=0, average_period=10, name=name+'SWA') # has error with floatx=float64
+    if typ == 'sw': optimizer = tfa.optimizers.SGDW(learning_rate=learn_rate, weight_decay=opt_spec['weight_decay'], name=name+'SGDW')
+    # if typ == 'ax': optimizer = tf.keras.optimizers.experimental.Adam(beta_1=beta_1, beta_2=beta_2, amsgrad=False, learning_rate=learn_rate, epsilon=float_eps, name=name+'AdamEx')
+
+    # optimizer = tf.keras.mixed_precision.LossScaleOptimizer(optimizer, dynamic=False, initial_scale=2**15)
+    if schedule_type == 'ep': optimizer.episodes = optimizer.add_slot(tf.Variable(0, trainable=False, name=name), 'episodes')
+    return optimizer
 
 def optimizer_build(optimizer, variables):
     optimizer.apply_gradients(zip(variables, variables))
