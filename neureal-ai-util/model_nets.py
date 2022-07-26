@@ -197,6 +197,9 @@ class In(tf.keras.layers.Layer):
             else: self.pos_idx_in[space_name] += [None]
             if net_attn_io and event_size > num_latents:
                 self.layer_attn_in[space_name] += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, name='attn_in_{}_{}'.format(space_name, input_name))]
+            # if event_size > num_latents: # TODO
+            #     if net_attn_io: self.layer_attn_in[space_name] += [util.MultiHeadAttention(latent_size=latent_size, num_heads=num_heads, norm=False, residual=False, cross_type=1, num_latents=num_latents, channels=latent_size, name='attn_in_{}_{}'.format(space_name, input_name))]
+            #     else: self.layer_attn_in[space_name] += [tf.keras.layers.Dense(num_latents*latent_size, name='dense_in_{}_{}'.format(space_name, input_name))]
             else: self.layer_attn_in[space_name] += [None]
             self.layer_mlp_in[space_name] += [util.MLPBlock(hidden_size=inp, latent_size=latent_size, evo=evo, residual=False, name='mlp_in_{}_{}'.format(space_name, input_name))]
         if net_attn_io and self.num_latents > aio_max_latents:
@@ -219,6 +222,9 @@ class In(tf.keras.layers.Layer):
                 out = self.layer_mlp_in[input_name][i](out)
                 if self.layer_attn_in[input_name][i] is not None: out_accu[out_accu_i] = self.layer_attn_in[input_name][i](out)
                 else: out_accu[out_accu_i] = tf.reshape(out, (-1, self.latent_size))
+                # if not self.net_attn_io: out = tf.reshape(out, (1, -1)) # TODO
+                # if self.layer_attn_in[input_name][i] is not None: out = self.layer_attn_in[input_name][i](out)
+                # out_accu[out_accu_i] = tf.reshape(out, (-1, self.latent_size))
                 out_accu_i += 1
         if self.obs_latent: out_accu[-1] = tf.cast(inputs['obs'], self.compute_dtype)
         # out = tf.math.add_n(out_accu) # out = tf.math.accumulate_n(out_accu)
