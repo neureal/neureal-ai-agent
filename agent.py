@@ -65,8 +65,8 @@ class GeneralAI(tf.keras.Model):
         self.action_spec, _, self.action_zero_out = gym_util.get_spec(env.action_space, space_name='actions', compute_dtype=self.compute_dtype, mixture_multi=mixture_multi)
         self.obs_spec_len, self.action_spec_len = len(self.obs_spec), len(self.action_spec)
         self.action_total_size = tf.constant(np.sum([np.prod(feat['step_shape']) for feat in self.action_spec]),compute_dtype)
-        self.gym_step_shapes = [feat['step_shape'] for feat in self.obs_spec] + [tf.TensorShape((1,1)), tf.TensorShape((1,1))]
-        self.gym_step_dtypes = [feat['dtype'] for feat in self.obs_spec] + [tf.float64, tf.bool]
+        self.gym_step_shapes = [feat['step_shape'] for feat in self.obs_spec] + [tf.TensorShape((1,1)), tf.TensorShape((1,1)), tf.TensorShape((1,2)) if trader else tf.TensorShape((1,1))]
+        self.gym_step_dtypes = [feat['dtype'] for feat in self.obs_spec] + [tf.float64, tf.bool, tf.float64]
         self.rewards_zero, self.dones_zero = tf.constant([[0]],tf.float64), tf.constant([[False]],tf.bool)
         self.step_zero, self.step_size_one = tf.constant([[0]]), tf.constant([[1]])
 
@@ -137,8 +137,8 @@ class GeneralAI(tf.keras.Model):
 
         if arch in ('AC',):
             opt_spec = [
-                {'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep'], 'float_eps':self.float_eps},
-                {'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep'], 'float_eps':self.float_eps},
+                {'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['action'], 'float_eps':self.float_eps},
+                {'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['value'], 'float_eps':self.float_eps},
             ]
             self.rep = nets.ArchTrans('RN', inputs, opt_spec, [], self.obs_spec, latent_spec, obs_latent=False, net_blocks=0, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=None, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
             self.rep.optimizer_weights = []
@@ -182,15 +182,15 @@ class GeneralAI(tf.keras.Model):
         metrics_loss['2rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
         if arch == 'PG':
-            metrics_loss['1~nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
+            metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'returns':np.float64}
             metrics_loss['1extras'] = {'loss_action_returns':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
             # metrics_loss['1extras2*'] = {'-actlog0':np.float64, '-actlog1':np.float64, '-actlog2':np.float64, '-actlog3':np.float64}
             # # metrics_loss['1extras1*'] = {'-ma':np.float64, '-ema':np.float64}
             # metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
-            metrics_loss['1extras5'] = {'-snr_rtn':np.float64}
-            metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
+            # metrics_loss['1extras5'] = {'-snr_rtn':np.float64}
+            # metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
         if arch == 'AC':
             metrics_loss['1netsR'] = {'loss_action_lik':np.float64, 'loss_value_rep':np.float64}
@@ -205,14 +205,14 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
             # metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
             # metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
-            metrics_loss['1~extra3'] = {'-lr_rep_action':np.float64}
-            metrics_loss['1~extra4'] = {'-lr_rep_trans':np.float64}
-            metrics_loss['1~extra5'] = {'-lr_action':np.float64}
-            metrics_loss['1~extra6'] = {'-lr_trans':np.float64}
+            # metrics_loss['1~extra3'] = {'-lr_rep_action':np.float64}
+            # metrics_loss['1~extra4'] = {'-lr_rep_trans':np.float64}
+            # metrics_loss['1~extra5'] = {'-lr_action':np.float64}
+            # metrics_loss['1~extra6'] = {'-lr_trans':np.float64}
         if trader:
-            metrics_loss['2rewards*'] = {'balance_avg':np.float64, 'balance_final=':np.float64}
-            metrics_loss['1trader_marg*'] = {'equity_avg':np.float64, 'margin_free_avg':np.float64}
+            metrics_loss['2rewards*'] = {'equity_final=':np.float64, '-draw_total':np.float64}
             metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
+            metrics_loss['1trader_draws'] = {'-drawdown_total':np.float64}
 
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
@@ -235,20 +235,21 @@ class GeneralAI(tf.keras.Model):
 
 
     def env_reset(self, dummy):
-        obs, reward, done = self.env.reset(), 0.0, False
+        obs, reward, done, metrics = self.env.reset(), 0.0, False, [0]
         if self.env_render: self.env.render()
-        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
+        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs[0]); metrics = obs[1]['metrics']
         else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
-        rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool)]
+        rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool), np.asarray([metrics], np.float64)]
         return rtn
     def env_step(self, *args): # args = tuple of ndarrays
         if hasattr(self.env,'np_struc'): action = gym_util.out_to_struc(list(args), self.env.action_dtype)
         else: action = gym_util.out_to_space(args, self.env.action_space, [0])
-        obs, reward, done, _ = self.env.step(action)
+        obs, reward, done, info = self.env.step(action)
         if self.env_render: self.env.render()
         if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
         else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
-        rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool)]
+        metrics = info['metrics'] if 'metrics' in info else [0]
+        rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool), np.asarray([metrics], np.float64)]
         return rtn
 
     def check_stop(self, *args):
@@ -320,7 +321,7 @@ class GeneralAI(tf.keras.Model):
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
             # inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
-            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-3], np_in[-3], np_in[-2]
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             dones = dones.write(step, inputs['dones'][-1])
@@ -408,7 +409,7 @@ class GeneralAI(tf.keras.Model):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            inputs = {'obs':np_in[:-3], 'rewards':np_in[-3], 'dones':np_in[-2]}; env_metrics = np_in[-1][0]
 
             # TODO how unlimited length episodes without sacrificing returns signal?
             self.reset_states(); outputs, inputs = self.PG_actor(inputs, return_goal)
@@ -462,13 +463,13 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
                 # tf.math.reduce_mean(loss['actlog'][:,2]), tf.math.reduce_mean(loss['actlog'][:,3]),
-                snr,
-                self.action.optimizer['action'].learning_rate,
+                # snr,
+                # self.action.optimizer['action'].learning_rate,
                 # loss_meta[0],
             ]
             if self.trader:
-                del metrics[2]; metrics[2], metrics[3] = tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0]
-                metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)), inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
+                del metrics[2]; metrics[2], metrics[3] = inputs['obs'][4][-1][0], env_metrics[0]
+                metrics += [inputs['obs'][0][-1][0] - outputs['obs'][0][0][0], env_metrics[1]]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
             if self.save_model:
@@ -509,7 +510,7 @@ class GeneralAI(tf.keras.Model):
 
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-3], np_in[-3], np_in[-2]
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             dones = dones.write(step, inputs['dones'][-1])
@@ -656,7 +657,7 @@ class GeneralAI(tf.keras.Model):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1) # TODO parallel wont work with single instance env, will this work multiple?
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            inputs = {'obs':np_in[:-3], 'rewards':np_in[-3], 'dones':np_in[-2]}; env_metrics = np_in[-1][0]
 
             self.reset_states(); outputs, inputs = self.AC_actor(inputs, return_goal)
             rewards_total = outputs['returns'][0][0] # tf.math.reduce_sum(outputs['rewards'])
@@ -668,7 +669,7 @@ class GeneralAI(tf.keras.Model):
             # return_goal = tf.reshape((ma + 10.0),(1,1)) # _rpP
             if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)); tf.print(return_goal) # _rpB
 
-            log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True]
+            log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ma, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 tf.math.reduce_mean(loss['action_lik']), tf.math.reduce_mean(loss_rep['value']),
                 tf.math.reduce_mean(loss['action']), tf.math.reduce_mean(loss['value']),
@@ -676,8 +677,8 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
             ]
             if self.trader:
-                del metrics[2]; metrics[2], metrics[3] = tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0]
-                metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)), inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
+                del metrics[2]; metrics[2], metrics[3] = inputs['obs'][4][-1][0], env_metrics[0]
+                metrics += [inputs['obs'][0][-1][0] - outputs['obs'][0][0][0], env_metrics[1]]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
             if self.save_model:
@@ -729,7 +730,7 @@ class GeneralAI(tf.keras.Model):
 
             np_in = tf.numpy_function(self.env_step, action_dis, self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-2], np_in[-2], np_in[-1]
+            inputs['obs'], inputs['rewards'], inputs['dones'] = np_in[:-3], np_in[-3], np_in[-2]
 
             rewards = rewards.write(step, inputs['rewards'][-1])
             dones = dones.write(step, inputs['dones'][-1])
@@ -837,7 +838,7 @@ class GeneralAI(tf.keras.Model):
             tf.autograph.experimental.set_loop_options(parallel_iterations=1)
             np_in = tf.numpy_function(self.env_reset, [tf.constant(0)], self.gym_step_dtypes)
             for i in range(len(np_in)): np_in[i].set_shape(self.gym_step_shapes[i])
-            inputs = {'obs':np_in[:-2], 'rewards':np_in[-2], 'dones':np_in[-1]}
+            inputs = {'obs':np_in[:-3], 'rewards':np_in[-3], 'dones':np_in[-2]}; env_metrics = np_in[-1][0]
 
             self.reset_states(); outputs, inputs = self.MU_actor(inputs, return_goal)
             rewards_total = outputs['returns'][0][0] # tf.math.reduce_sum(outputs['rewards'])
@@ -861,9 +862,9 @@ class GeneralAI(tf.keras.Model):
             # self.act.optimizer['act'].learning_rate = self.learn_rates['act'] * snr_act # **3 # _lr-snr3
 
             # if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)); tf.print(return_goal) # _rpB
-            if self.action.stats['loss']['iter'] > 16 and tf.math.abs(ma_loss) < 0.01: # self.float_eps 0.01
-                tf.print("net_reset (action) at:", episode, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss)
-                util.net_reset(self.action); self.action.optimizer['action'].learning_rate = self.learn_rates['action']
+            # if self.action.stats['loss']['iter'] > 16 and tf.math.abs(ma_loss) < 0.01: # self.float_eps 0.01
+            #     tf.print("net_reset (action) at:", episode, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss)
+            #     util.net_reset(self.action); self.action.optimizer['action'].learning_rate = self.learn_rates['action']
 
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True,True,True]
@@ -874,15 +875,15 @@ class GeneralAI(tf.keras.Model):
                 # tf.math.reduce_mean(loss['act']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
                 # snr_loss, std_loss, # ma, ema, snr, std
-                self.rep.optimizer['action'].learning_rate,
-                self.rep.optimizer['trans'].learning_rate,
-                self.action.optimizer['action'].learning_rate,
-                self.trans.optimizer['trans'].learning_rate,
+                # self.rep.optimizer['action'].learning_rate,
+                # self.rep.optimizer['trans'].learning_rate,
+                # self.action.optimizer['action'].learning_rate,
+                # self.trans.optimizer['trans'].learning_rate,
                 # self.rep.optimizer['rep'].learning_rate(self.rep.optimizer['rep'].iterations),
             ]
             if self.trader:
-                del metrics[2]; metrics[2], metrics[3] = tf.math.reduce_mean(tf.concat([outputs['obs'][3],inputs['obs'][3]],0)), inputs['obs'][3][-1][0]
-                metrics += [tf.math.reduce_mean(tf.concat([outputs['obs'][4],inputs['obs'][4]],0)), tf.math.reduce_mean(tf.concat([outputs['obs'][5],inputs['obs'][5]],0)), inputs['obs'][0][-1][0] - outputs['obs'][0][0][0],]
+                del metrics[2]; metrics[2], metrics[3] = inputs['obs'][4][-1][0], env_metrics[0]
+                metrics += [inputs['obs'][0][-1][0] - outputs['obs'][0][0][0], env_metrics[1]]
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
             if self.save_model:
@@ -936,7 +937,7 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 1024, False, TraderEnv(agent_id=device, env=tenv), True, 0.1
+# from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 256, False, TraderEnv(agent_id=device, env=tenv), True, 0.1
 
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
