@@ -1,0 +1,13 @@
+Box2D==2.3.10
+gym==0.26.1
+gym-algorithmic==0.0.1
+gym_trader @ git+https://github.com/melseifi/gym-trader.git
+keyboard==0.13.5
+#multiprocessing #This is for Python 2.4/2.5, are you sure???
+procgen==0.10.7
+pybullet==3.2.5
+pyglet==1.5.27
+tensorflow-gpu==2.9.1
+tensorflow_addons==0.18.0
+tensorflow_datasets==4.6.0
+tensorflow_probability==0.17.0
