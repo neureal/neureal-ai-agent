@@ -1,5 +1,5 @@
 Box2D==2.3.10
-gym==0.21.0
+gym==0.23.1
 gym-algorithmic==0.0.1
 gym_trader @ git+https://github.com/melseifi/gym-trader.git
 keyboard==0.13.5
