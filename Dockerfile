@@ -43,5 +43,6 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 
 COPY . /app
 WORKDIR /app
+ENV PYTHONPATH="${PYTHONPATH}:/app/neureal-ai-util/"
 
 CMD ["python", "/app/app.py"]
