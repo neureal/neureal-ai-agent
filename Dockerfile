@@ -1,7 +1,7 @@
 # Stage 1: TA-Lib Builder
 FROM ubuntu:20.04 as talib-builder
 RUN apt-get update && \
-  apt-get install --no-install-recommends -y wget build-essential gcc
+  apt-get install --no-install-recommends -y wget build-essential file
 # Instructions from: https://mrjbq7.github.io/ta-lib/install.html
 RUN mkdir /ta-lib
 WORKDIR /ta-lib
