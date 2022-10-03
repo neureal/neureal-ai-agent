@@ -1,33 +1,8 @@
-# Stage 1: Builder/Compiler
-FROM python:3.8-slim-bullseye as builder
-
-ENV DEBIAN_FRONTEND noninteractive
-ENV PATH="${PATH}:/root/.local/bin"
+# Stage 1: TA-Lib Builder
+FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04 as talibbuilder
 RUN apt-get update && \
-  apt-get install --no-install-recommends -y build-essential gcc git \
-  python3-pip python3-matplotlib python3-numba python3-numpy
-COPY requirements.txt /requirements.txt
-
-RUN pip3 install --upgrade pip
-RUN pip3 install --no-cache-dir --user -r /requirements.txt
-
-
-# Stage 2: Runtime
-# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0
-FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
-
-ENV TZ="America/Denver"
-ENV DEBIAN_FRONTEND noninteractive
-ENV PATH="${PATH}:/root/.local/bin"
-RUN apt-get update && \
-  apt-get install --no-install-recommends -y build-essential gcc git wget curl ca-certificates \
-  python3.8 python3-dev python3-pip python3-distutils && \
-  apt-get clean && rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /root/.local/lib/python3.8/site-packages /usr/local/lib/python3.8/dist-packages
-
-# TA-Lib Dependency
-# https://mrjbq7.github.io/ta-lib/install.html
+  apt-get install --no-install-recommends -y wget build-essential gcc
+# Instructions from: https://mrjbq7.github.io/ta-lib/install.html
 RUN mkdir /ta-lib
 WORKDIR /ta-lib
 RUN wget -q http://prdownloads.sourceforge.net/ta-lib/ta-lib-0.4.0-src.tar.gz
@@ -35,14 +10,57 @@ RUN tar -xvzf ta-lib-0.4.0-src.tar.gz
 WORKDIR /ta-lib/ta-lib
 RUN ./configure --prefix=/usr
 RUN make && make install
-# pip TA-Lib
+
+# Stage 2: Python Builder
+FROM python:3.8-slim-bullseye as pythonbuilder
+ENV DEBIAN_FRONTEND noninteractive
+ENV PATH="${PATH}:/root/.local/bin"
+RUN apt-get update && \
+  apt-get install --no-install-recommends -y build-essential gcc git \
+  python3-pip python3-matplotlib python3-numba python3-numpy python3-venv
+COPY requirements.txt /requirements.txt
+
+COPY --from=talibbuilder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
+RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so.0
+RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so
+COPY --from=talibbuilder /usr/lib/libta_lib.la /usr/lib/
+COPY --from=talibbuilder /usr/lib/libta_lib.a /usr/lib/
+COPY --from=talibbuilder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
+COPY --from=talibbuilder /usr/include/ta-lib /usr/include/ta-lib
+RUN ldconfig
+
 RUN pip3 install --upgrade pip
-RUN pip3 --no-cache-dir install TA-Lib==0.4.25
+RUN pip3 install --no-cache-dir --user -r /requirements.txt
+COPY neureal-ai-util /neureal-ai-util
+WORKDIR /neureal-ai-util/
+RUN python -m build --wheel
+RUN pip3 install --no-cache-dir --user ./dist/neureal_ai_util-0.0.1-py3-none-any.whl
+
+# Stage 3: Runtime
+# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0
+FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
+
+ENV TZ="America/Denver"
+ENV DEBIAN_FRONTEND noninteractive
+ENV PATH="${PATH}:/root/.local/bin"
+RUN apt-get update && \
+  apt-get install --no-install-recommends -y build-essential gcc git wget curl ca-certificates vim \
+  python3.8 python3-dev python3-pip python3-distutils python3-venv pylint3 && \
+  apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY --from=talibbuilder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
+RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so.0
+RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so
+COPY --from=talibbuilder /usr/lib/libta_lib.la /usr/lib/
+COPY --from=talibbuilder /usr/lib/libta_lib.a /usr/lib/
+COPY --from=talibbuilder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
+COPY --from=talibbuilder /usr/include/ta-lib /usr/include/ta-lib
+RUN ldconfig
+COPY --from=pythonbuilder /root/.local/lib/python3.8/site-packages /usr/local/lib/python3.8/dist-packages
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
 COPY . /app
 WORKDIR /app
-ENV PYTHONPATH="${PYTHONPATH}:/app/neureal-ai-util/"
 
 CMD ["python", "/app/app.py"]

@@ -1,4 +1,6 @@
 Box2D==2.3.10
+TA-Lib==0.4.25
+build==0.8.0
 gym==0.23.1  # Do not increase past 0.23.1 until this is live: https://github.com/bulletphysics/bullet3/pull/4335
 gym-algorithmic==0.0.1
 gym_trader @ git+https://github.com/melseifi/gym-trader.git
@@ -7,6 +9,7 @@ keyboard==0.13.5
 numba==0.56.2
 procgen==0.10.7
 pybullet==3.2.5
+pygame==2.1.2
 pyglet==1.5.27
 tensorflow-gpu==2.9.1
 tensorflow_addons==0.18.0

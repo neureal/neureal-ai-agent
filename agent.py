@@ -3,7 +3,7 @@ import os
 import multiprocessing as mp
 from collections import OrderedDict
 
-import keyboard # , talib, bottleneck
+#import talib, bottleneck
 import tensorflow as tf
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
@@ -14,8 +14,12 @@ import gym
 
 # Local modules
 import gym_util
-import model_nets as nets
 import model_util as util
+
+gpus = tf.config.list_physical_devices('GPU')
+for gpu in gpus:
+    tf.config.experimental.set_memory_growth(gpu, True)
+import model_nets as nets  #This modifies the GPU state somehow. Can't put this before .set_memory_growth()
 
 curdir = os.path.expanduser("~")
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
@@ -29,9 +33,6 @@ tf.keras.backend.set_floatx('float64')
 # tf.random.set_seed(0) # TODO https://www.tensorflow.org/guide/random_numbers
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 
-physical_devices_gpu = tf.config.list_physical_devices('GPU')
-for i in range(len(physical_devices_gpu)):
-    tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 
 # TODO add Fourier prior like PercieverIO or https://github.com/zongyi-li/fourier_neural_operator
 # TODO add S4 layer https://github.com/HazyResearch/state-spaces
@@ -65,7 +66,7 @@ class GeneralAI(tf.keras.Model):
 
         self.arch, self.env, self.trader, self.env_render, self.save_model, self.value_cont = arch, env, trader, env_render, save_model, value_cont
         self.chkpts, self.max_episodes, self.max_steps, self.attn_mem_base, self.learn_rates = tf.constant(chkpts, tf.int32), tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(attn_mem_base, tf.int32), {}
-        for k,v in learn_rates.items():
+        for k, v in learn_rates.items():
             self.learn_rates[k] = tf.constant(v, tf.float64)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
@@ -207,7 +208,7 @@ class GeneralAI(tf.keras.Model):
 
         self.stop = False
         self.stop_episode = max_episodes
-        keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True)
+        #keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True)
         self.metrics_spec()
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -313,7 +314,7 @@ class GeneralAI(tf.keras.Model):
             return np.asarray(True, bool)
         return np.asarray(False, bool)
     def on_stop(self):
-        keyboard.unhook_all_hotkeys()
+        #keyboard.unhook_all_hotkeys()
         print('STOPPING')
         self.stop = True
 
