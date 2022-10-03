@@ -250,7 +250,7 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1~extra5'] = {'-lr_action':np.float64}
             # metrics_loss['1~extra6'] = {'-lr_trans':np.float64}
         if trader:
-            metrics_loss['2rewards*'] = {'equity_final=':np.float64, '-draw_total':np.float64}
+            metrics_loss['2rewards*'] = {'-equity_final=':np.float64, '-draw_total':np.float64}
             metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
             metrics_loss['1trader_draws'] = {'-drawdown_total':np.float64}
 
@@ -1003,9 +1003,9 @@ class GeneralAI(tf.keras.Model):
             # self.act.optimizer['act'].learning_rate = self.learn_rates['act'] * snr_act # **3 # _lr-snr3
 
             # if outputs['returns'][0:1] > return_goal: return_goal = tf.reshape(outputs['returns'][0:1],(1,1)); tf.print(return_goal) # _rpB
-            # if self.action.stats['loss']['iter'] > 16 and tf.math.abs(ma_loss) < 0.01: # self.float_eps 0.01
-            #     tf.print("net_reset (action) at:", episode, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss)
-            #     util.net_reset(self.action); self.action.optimizer['action'].learning_rate = self.learn_rates['action']
+            if self.action.stats['loss']['iter'] > 16 and tf.math.abs(ma_loss) < self.float_eps: # self.float_eps 0.01
+                tf.print("net_reset (action) at:", episode, " lr:", self.action.optimizer['action'].learning_rate, " ma_loss:", ma_loss, " snr_loss:", snr_loss, " std_loss:", std_loss)
+                util.net_reset(self.action); self.action.optimizer['action'].learning_rate = self.learn_rates['action']
 
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True,True,True]
@@ -1083,15 +1083,14 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
-# from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 256, False, TraderEnv(agent_id=device, env=tenv), True, 0.1
+# from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 256, False, TraderEnv(agent_id=device, env=tenv), True, 0.0; extra += "-rs{}-td{}-s{}-dd{}".format(env.NUM_EPISODES,int(env.TIMEDELTA_RANGE),int(env.MAX_EPISODE_TIME/env.TIMEDELTA_RANGE),int(env.START_TARGET_BAL))
 
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG'; learn_rates = {'action':4e-6} # Policy Gradient agent, PG loss
+arch = 'PG'; learn_rates = {'action':4e-6} # Policy Gradient agent, PG loss
 # arch = 'AC'; learn_rates = {'action':4e-6, 'value':2e-6} # Actor Critic, PG and advantage loss
-arch = 'MU'
-learn_rates = {'action':2e-5, 'rep_action':2e-6, 'trans':2e-4, 'rep_trans':2e-6, 'pool':2e-6} # 'act':2e-6 # Combined PG and world model
+# arch = 'MU'; learn_rates = {'action':2e-5, 'rep_action':2e-6, 'trans':2e-4, 'rep_trans':2e-6, 'pool':2e-6} # 'act':2e-6 # Combined PG and world model
 
 if __name__ == '__main__':
     ## manage multiprocessing
@@ -1112,7 +1111,7 @@ if __name__ == '__main__':
         env_name, env = env_name+'-r', envrw_.ReconfigWrapperEnv(env)
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
         model = GeneralAI(arch, env, trader, env_render, save_model, chkpts, max_episodes, max_steps, learn_rates, value_cont, latent_size, latent_dist, mixture_multi, net_lstm, net_attn, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
-        name = "gym-{}-{}".format(arch, env_name)
+        name = "gym-{}-{}-{}-a{}{}-{}".format(arch, env_name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
 
         ## debugging
         # model.build(()); model.action.summary(); quit(0)
@@ -1148,7 +1147,7 @@ if __name__ == '__main__':
 
 
         ## run
-        print("RUN {}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S")))
+        print("RUN {}".format(name))
         arch_run = getattr(model, arch)
         t1_start = time.perf_counter_ns()
         arch_run()
@@ -1169,7 +1168,6 @@ if __name__ == '__main__':
                         loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
-        name = "{}-{}-a{}{}-{}".format(name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
         total_steps = int(np.nansum(metrics_loss['1steps']['steps+']))
         step_time = total_time/total_steps
         learn_rates_txt, attn_txt = "", ""
