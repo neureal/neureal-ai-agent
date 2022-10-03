@@ -63,4 +63,4 @@ RUN ln -s /usr/bin/python3 /usr/bin/python
 COPY . /app
 WORKDIR /app
 
-CMD ["python", "/app/app.py"]
+CMD ["python", "/app/agent.py"]

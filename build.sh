@@ -24,9 +24,11 @@ dev() {
 
 run() {
     shift
-#    mkdir -p output
-#        -v "$PWD"/output:/home/huggingface/output \
+    mkdir -p output
+    mkdir -p tf-data-models-local
     docker run --rm --gpus=all \
+        -v "$PWD"/output:/app/output \
+        -v "$PWD"/tf-data-models-local:/app/tf-data-models-local \
         "$CWD" "$@"
 }
 

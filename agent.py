@@ -1216,7 +1216,7 @@ if __name__ == '__main__':
         #plt.show()
         out_file = 'output/plot.png'
         plt.savefig(out_file)
-        print('Saved ' + out_file + '. Run python serve.py to access webserver on port 8080.')
+        print('SAVED ' + out_file + '. Run python serve.py to access webserver on port 8080.')
 
 
         ## save models
