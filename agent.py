@@ -1166,7 +1166,7 @@ if __name__ == '__main__':
                         loss_group[k][j:] = nans
                         break
                     else:
-                        loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
+                        loss_group[k][j] = 0 if np.size(loss_group[k][j]) == 0 else np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
         total_steps = int(np.nansum(metrics_loss['1steps']['steps+']))
