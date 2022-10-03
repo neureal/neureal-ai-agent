@@ -1,5 +1,5 @@
 # Stage 1: TA-Lib Builder
-FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04 as talibbuilder
+FROM ubuntu:20.04 as talib-builder
 RUN apt-get update && \
   apt-get install --no-install-recommends -y wget build-essential gcc
 # Instructions from: https://mrjbq7.github.io/ta-lib/install.html
@@ -12,7 +12,7 @@ RUN ./configure --prefix=/usr
 RUN make && make install
 
 # Stage 2: Python Builder
-FROM python:3.8-slim-bullseye as pythonbuilder
+FROM python:3.8-slim-bullseye as python-builder
 ENV DEBIAN_FRONTEND noninteractive
 ENV PATH="${PATH}:/root/.local/bin"
 RUN apt-get update && \
@@ -20,13 +20,13 @@ RUN apt-get update && \
   python3-pip python3-matplotlib python3-numba python3-numpy python3-venv
 COPY requirements.txt /requirements.txt
 
-COPY --from=talibbuilder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
+COPY --from=talib-builder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
 RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so.0
 RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so
-COPY --from=talibbuilder /usr/lib/libta_lib.la /usr/lib/
-COPY --from=talibbuilder /usr/lib/libta_lib.a /usr/lib/
-COPY --from=talibbuilder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
-COPY --from=talibbuilder /usr/include/ta-lib /usr/include/ta-lib
+COPY --from=talib-builder /usr/lib/libta_lib.la /usr/lib/
+COPY --from=talib-builder /usr/lib/libta_lib.a /usr/lib/
+COPY --from=talib-builder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
+COPY --from=talib-builder /usr/include/ta-lib /usr/include/ta-lib
 RUN ldconfig
 
 RUN pip3 install --upgrade pip
@@ -48,15 +48,15 @@ RUN apt-get update && \
   python3.8 python3-dev python3-pip python3-distutils python3-venv pylint3 && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
-COPY --from=talibbuilder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
+COPY --from=talib-builder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
 RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so.0
 RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so
-COPY --from=talibbuilder /usr/lib/libta_lib.la /usr/lib/
-COPY --from=talibbuilder /usr/lib/libta_lib.a /usr/lib/
-COPY --from=talibbuilder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
-COPY --from=talibbuilder /usr/include/ta-lib /usr/include/ta-lib
+COPY --from=talib-builder /usr/lib/libta_lib.la /usr/lib/
+COPY --from=talib-builder /usr/lib/libta_lib.a /usr/lib/
+COPY --from=talib-builder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
+COPY --from=talib-builder /usr/include/ta-lib /usr/include/ta-lib
 RUN ldconfig
-COPY --from=pythonbuilder /root/.local/lib/python3.8/site-packages /usr/local/lib/python3.8/dist-packages
+COPY --from=python-builder /root/.local/lib/python3.8/site-packages /usr/local/lib/python3.8/dist-packages
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
