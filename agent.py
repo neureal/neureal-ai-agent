@@ -169,7 +169,7 @@ class GeneralAI(tf.keras.Model):
         # util.net_build(self.meta, self.initializer)
 
 
-        self.stop = False; self.stop_episode = max_episodes; #keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True)
+        self.stop = False; self.stop_episode = max_episodes; keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True)
         self.metrics_spec()
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -1043,10 +1043,7 @@ if __name__ == '__main__':
             if combine: spg.set_ylim(np.min(m_min), np.max(m_max))
             if i == 0: plt.title(title)
             i+=rows
-        #plt.show()
-        out_file = 'output/plot.png'
-        plt.savefig(out_file)
-        print('SAVED ' + out_file + '. Run python serve.py to access webserver on port 8080.')
+        plt.show()
 
 
         ## save models
