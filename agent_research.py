@@ -900,7 +900,7 @@ max_episodes = 100
 value_cont = True
 latent_size = 16
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
-mixture_multi = 4
+mixture_multi = 4 # mixture distribution size, multiply num components
 net_lstm = False
 net_attn = {'net':True, 'io':True, 'out':True, 'ar':True}
 aio_max_latents = 16
