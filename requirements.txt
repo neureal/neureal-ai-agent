@@ -5,7 +5,6 @@ gym==0.23.1  # Do not increase past 0.23.1 until this is live: https://github.co
 gym-algorithmic==0.0.1
 gym_trader @ git+https://github.com/melseifi/gym-trader.git
 keyboard==0.13.5
-#multiprocessing #This is for Python 2.4/2.5, are you sure???
 numba==0.56.2
 procgen==0.10.7
 pybullet==3.2.5
