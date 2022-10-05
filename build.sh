@@ -3,9 +3,15 @@
 set -eu
 
 CWD=$(basename "$PWD")
+export DEV=1
 
 build() {
     docker build . --tag "$CWD"
+}
+
+buildpriv() {
+    export PRIV=1
+    docker build . --tag "$CWD" --build-arg PRIV
 }
 
 clean() {
@@ -15,25 +21,23 @@ clean() {
 dev() {
     mkdir -p output
     mkdir -p tf-data-models-local
-    docker run --rm --gpus=all --entrypoint=bash \
+    docker run --rm --gpus=all \
+	-e DEV \
         -v "$PWD"/output:/app/output \
         -v "$PWD"/tf-data-models-local:/app/tf-data-models-local \
+	-v "$PWD"/..:/outerdir \
         -p 8080:8080 \
-        -it "$CWD"
+        -it "$CWD" "$@"
 }
 
 run() {
-    shift
-    mkdir -p output
-    mkdir -p tf-data-models-local
-    docker run --rm --gpus=all \
-        -v "$PWD"/output:/app/output \
-        -v "$PWD"/tf-data-models-local:/app/tf-data-models-local \
-        "$CWD" "$@"
+    export DEV=
+    dev "$@"
 }
 
 case ${1:-build} in
     build) build ;;
+    buildpriv) buildpriv ;;
     clean) clean ;;
     dev) dev "$@" ;;
     run) run "$@" ;;

@@ -256,9 +256,16 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, ''
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig, chart_lim = False, False, 0.001, 160.0, False, 0.003
-env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # (4) float32    ()2 int64    200  195.0
-# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # (4) float32    ()2 int64    500  475.0
-# env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
+
+gym_make = 'CartPole-v0'
+if os.environ['PRIV'] == '1':
+    from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 256, False, TraderEnv(agent_id=device, env=tenv), True, 0.0; extra += "-rs{}-td{}-s{}-dd{}".format(env.NUM_EPISODES,int(env.TIMEDELTA_RANGE),int(env.MAX_EPISODE_TIME/env.TIMEDELTA_RANGE),int(env.START_TARGET_BAL))
+elif gym_make == 'CartPole-v0':
+    env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # (4) float32    ()2 int64    200  195.0
+elif gym_make == 'CartPole-v1':
+    env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # (4) float32    ()2 int64    500  475.0
+elif gym_make == 'LunarLander-v2':
+    env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
 
 arch = 'PG'; learn_rates = {'action':4e-6} # Policy Gradient agent, PG loss
 
