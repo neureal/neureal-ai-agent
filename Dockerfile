@@ -31,10 +31,6 @@ RUN ldconfig
 
 RUN pip3 install --upgrade pip
 RUN pip3 install --no-cache-dir --user -r /requirements.txt
-COPY neureal-ai-util /neureal-ai-util
-WORKDIR /neureal-ai-util/
-RUN python -m build --wheel
-RUN pip3 install --no-cache-dir --user ./dist/neureal_ai_util-0.0.1-py3-none-any.whl
 
 # Stage 3: Runtime
 # CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0

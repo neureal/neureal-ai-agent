@@ -3,8 +3,9 @@ TA-Lib==0.4.25
 build==0.8.0
 gym==0.23.1  # Do not increase past 0.23.1 until this is live: https://github.com/bulletphysics/bullet3/pull/4335
 gym-algorithmic==0.0.1
-gym_trader @ git+https://github.com/melseifi/gym-trader.git
 keyboard==0.13.5
+matplotlib==3.6.0
+neureal-ai-util @ git+https://github.com/neureal/neureal-ai-util.git
 numba==0.56.2
 procgen==0.10.7
 pybullet==3.2.5
