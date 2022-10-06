@@ -5,7 +5,7 @@ gym==0.23.1  # Do not increase past 0.23.1 until this is live: https://github.co
 gym-algorithmic==0.0.1
 keyboard==0.13.5
 matplotlib==3.6.0
-mt5linux @ git+https://github.com/james-coder/mt5linux.git
+mt5linux
 neureal-ai-util @ git+https://github.com/neureal/neureal-ai-util.git
 numba==0.56.2
 pandas==1.5.0

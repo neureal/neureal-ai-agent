@@ -24,6 +24,7 @@ dev() {
     mkdir -p tf-data-models
     docker run --rm --gpus=all \
 	-e DEV \
+	-e MT5IP \
         -v "$PWD"/output:/app/output \
         -v "$PWD"/tf-data-models-local:/app/tf-data-models-local \
         -v "$PWD"/tf-data-models:/root/tf-data-models \
