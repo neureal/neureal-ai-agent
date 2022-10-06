@@ -32,7 +32,7 @@ RUN pip3 install --no-cache-dir --user -r /requirements.txt
 
 # Stage 3: Runtime
 # CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0
-FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
+FROM nvidia/cuda:11.2.2-cudnn8-devel-ubuntu20.04
 
 ENV TZ="America/Denver"
 ENV DEBIAN_FRONTEND noninteractive
