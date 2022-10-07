@@ -70,11 +70,15 @@ class GeneralAI(tf.keras.Model):
         metrics_loss = OrderedDict()
         metrics_loss['2rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
-        if arch == 'PG':
+        if self.arch == 'PG':
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             metrics_loss['1extras'] = {'loss_action_returns':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
-
+        if self.trader:
+            metrics_loss['2rewards*'] = {'-equity_final=':np.float64, '-draw_total':np.float64}
+            metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
+            metrics_loss['1trader_draws'] = {'-drawdown_total':np.float64}
+            
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
                 if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
