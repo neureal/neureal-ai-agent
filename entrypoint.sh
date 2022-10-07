@@ -7,4 +7,9 @@
 
 [ $DEV ] && exec bash
 
-/usr/bin/python /app/agent.py
+if [ $PRIV ]
+then
+  /usr/bin/python /app/agent_research.py
+else
+  /usr/bin/python /app/agent.py
+fi
