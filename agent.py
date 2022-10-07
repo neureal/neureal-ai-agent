@@ -230,6 +230,11 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
             ]
+            
+            if self.trader:
+                del metrics[2]; metrics[2], metrics[3] = inputs['obs'][4][-1][0], env_metrics[0]
+                metrics += [inputs['obs'][0][-1][0] - outputs['obs'][0][0][0], env_metrics[1]]
+            
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
             if self.save_model:
