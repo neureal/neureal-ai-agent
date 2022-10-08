@@ -28,7 +28,7 @@ class GeneralAI(tf.keras.Model):
 
         self.arch, self.env, self.trader, self.env_render, self.save_model = arch, env, trader, env_render, save_model
         self.chkpts, self.max_episodes, self.max_steps, self.learn_rates = tf.constant(chkpts, tf.int32), tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), {}
-        for k,v in learn_rates.items(): self.learn_rates[k] = tf.constant(v, tf.float64)
+        for k,v in learn_rates.items(): self.learn_rates[k] = tf.constant(v, compute_dtype)
         self.initializer = tf.keras.initializers.GlorotUniform()
 
         self.obs_spec, self.obs_zero, _ = gym_util.get_spec(env.observation_space, space_name='obs', compute_dtype=self.compute_dtype, net_attn_io=net_attn['io'], aio_max_latents=aio_max_latents, mixture_multi=mixture_multi)
@@ -74,15 +74,11 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             metrics_loss['1extras'] = {'loss_action_returns':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
-        if self.trader:
-            metrics_loss['2rewards*'] = {'-equity_final=':np.float64, '-draw_total':np.float64}
-            metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
-            metrics_loss['1trader_draws'] = {'-drawdown_total':np.float64}
-            
+
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
-                if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
-                else: loss_group[k] = [[] for i in range(max_episodes)]
+                if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(self.max_episodes)]
+                else: loss_group[k] = [[] for i in range(self.max_episodes)]
         self.metrics_loss = metrics_loss
 
     def metrics_update(self, *args):
@@ -234,11 +230,6 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
             ]
-            
-            if self.trader:
-                del metrics[2]; metrics[2], metrics[3] = inputs['obs'][4][-1][0], env_metrics[0]
-                metrics += [inputs['obs'][0][-1][0] - outputs['obs'][0][0][0], env_metrics[1]]
-            
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 
             if self.save_model:
@@ -346,7 +337,7 @@ if __name__ == '__main__':
             i+=rows
         out_file = "output/{}.png".format(name)
         plt.savefig(out_file)
-        print("SAVED {}   (run python serve.py to access webserver on port 8080)".format(out_file))
+        print("SAVED {}   (run \033[94mpython serve.py\033[00m to access webserver on port 8080)".format(out_file))
 
 
         ## save models
