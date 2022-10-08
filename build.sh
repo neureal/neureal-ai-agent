@@ -4,6 +4,7 @@ set -eu
 
 CWD=$(basename "$PWD")
 export DEV=1
+export MT5IP
 
 build() {
     docker build . --tag "$CWD"
@@ -26,7 +27,7 @@ dev() {
 	-e DEV \
 	-e MT5IP \
         -v "$PWD"/output:/app/output \
-        -v "$PWD"/tf-data-models-local:/app/tf-data-models-local \
+        -v "$PWD"/tf-data-models-local:/root/tf-data-models-local \
         -v "$PWD"/tf-data-models:/root/tf-data-models \
 	-v "$PWD"/..:/outerdir \
         -p 8080:8080 \

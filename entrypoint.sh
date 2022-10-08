@@ -7,9 +7,12 @@
 
 [ $DEV ] && exec bash
 
+#TEMPORARY
+pip install mt5linux
+
 if [ $PRIV ]
 then
-  /usr/bin/python /app/agent_research.py
+  /usr/bin/python /outerdir/neureal-ai-agent/agent_research.py
 else
   /usr/bin/python /app/agent.py
 fi
