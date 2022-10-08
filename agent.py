@@ -9,7 +9,7 @@ tf.keras.backend.set_floatx('float64')
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import matplotlib.pyplot as plt
 import gym
-# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
+# CUDA 11.8.0_522.06, CUDNN 8.6.0.163, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 import gym_util, model_util as util, model_nets as nets
@@ -29,7 +29,7 @@ class GeneralAI(tf.keras.Model):
         self.arch, self.env, self.trader, self.env_render, self.save_model = arch, env, trader, env_render, save_model
         self.chkpts, self.max_episodes, self.max_steps, self.learn_rates = tf.constant(chkpts, tf.int32), tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), {}
         for k,v in learn_rates.items(): self.learn_rates[k] = tf.constant(v, compute_dtype)
-        self.initializer = tf.keras.initializers.GlorotUniform()
+        self.initializer = tf.keras.initializers.GlorotUniform(time.time_ns())
 
         self.obs_spec, self.obs_zero, _ = gym_util.get_spec(env.observation_space, space_name='obs', compute_dtype=self.compute_dtype, net_attn_io=net_attn['io'], aio_max_latents=aio_max_latents, mixture_multi=mixture_multi)
         self.action_spec, _, self.action_zero_out = gym_util.get_spec(env.action_space, space_name='actions', compute_dtype=self.compute_dtype, mixture_multi=mixture_multi)
