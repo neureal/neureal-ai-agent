@@ -2,6 +2,7 @@ from collections import OrderedDict
 import time, os, keyboard # , talib, bottleneck
 import multiprocessing as mp
 curdir = os.path.expanduser("~")
+from sys import platform
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
@@ -55,7 +56,7 @@ class GeneralAI(tf.keras.Model):
 
         self.arch, self.env, self.trader, self.env_render, self.save_model, self.value_cont = arch, env, trader, env_render, save_model, value_cont
         self.chkpts, self.max_episodes, self.max_steps, self.attn_mem_base, self.learn_rates = tf.constant(chkpts, tf.int32), tf.constant(max_episodes, tf.int32), tf.constant(max_steps, tf.int32), tf.constant(attn_mem_base, tf.int32), {}
-        for k,v in learn_rates.items(): self.learn_rates[k] = tf.constant(v, tf.float64)
+        for k,v in learn_rates.items(): self.learn_rates[k] = tf.constant(v, compute_dtype)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
         self.initializer = tf.keras.initializers.GlorotUniform()
@@ -169,7 +170,8 @@ class GeneralAI(tf.keras.Model):
         # util.net_build(self.meta, self.initializer)
 
 
-        self.stop = False; self.stop_episode = max_episodes; keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True)
+        self.stop = False; self.stop_episode = max_episodes
+        if platform == "win32": keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True) # TODO figure out linux/Docker version of this that works
         self.metrics_spec()
         # TF bug that wont set graph options with tf.function decorator inside a class
         self.reset_states = tf.function(self.reset_states, experimental_autograph_options=tf.autograph.experimental.Feature.LISTS)
@@ -181,7 +183,7 @@ class GeneralAI(tf.keras.Model):
         metrics_loss = OrderedDict()
         metrics_loss['2rewards*'] = {'-rewards_ma':np.float64, '-rewards_total+':np.float64, 'rewards_final=':np.float64}
         metrics_loss['1steps'] = {'steps+':np.int64}
-        if arch == 'PG':
+        if self.arch == 'PG':
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'returns':np.float64}
             metrics_loss['1extras'] = {'loss_action_returns':np.float64}
@@ -192,12 +194,12 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1extras5'] = {'-snr_rtn':np.float64}
             # metrics_loss['1~extra3'] = {'-learn_rate':np.float64}
             # metrics_loss['1extra4'] = {'loss_meta':np.float64}
-        if arch == 'AC':
+        if self.arch == 'AC':
             metrics_loss['1netsR'] = {'loss_action_lik':np.float64, 'loss_value_rep':np.float64}
             metrics_loss['1nets'] = {'loss_action':np.float64, 'loss_value':np.float64}
             # metrics_loss['1extras*'] = {'returns':np.float64, 'advantages':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
-        if arch == 'MU':
+        if self.arch == 'MU':
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'loss_action_returns':np.float64}
             metrics_loss['1extras'] = {'loss_trans':np.float64}
@@ -209,15 +211,15 @@ class GeneralAI(tf.keras.Model):
             # metrics_loss['1~extra4'] = {'-lr_rep_trans':np.float64}
             # metrics_loss['1~extra5'] = {'-lr_action':np.float64}
             # metrics_loss['1~extra6'] = {'-lr_trans':np.float64}
-        if trader:
+        if self.trader:
             metrics_loss['2rewards*'] = {'-equity_final=':np.float64, '-draw_total':np.float64}
             metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
             metrics_loss['1trader_draws'] = {'-drawdown_total':np.float64}
 
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
-                if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(max_episodes)]
-                else: loss_group[k] = [[] for i in range(max_episodes)]
+                if k.endswith('=') or k.endswith('+'): loss_group[k] = [0 for i in range(self.max_episodes)]
+                else: loss_group[k] = [[] for i in range(self.max_episodes)]
         self.metrics_loss = metrics_loss
 
     def metrics_update(self, *args):
@@ -1043,7 +1045,10 @@ if __name__ == '__main__':
             if combine: spg.set_ylim(np.min(m_min), np.max(m_max))
             if i == 0: plt.title(title)
             i+=rows
-        plt.show()
+        if platform == "win32": plt.show()
+        else:
+            out_file = "output/{}.png".format(name); plt.savefig(out_file)
+            print("SAVED {}   (run \033[94mpython serve.py\033[00m to access webserver on port 8080)".format(out_file))
 
 
         ## save models
