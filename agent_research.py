@@ -19,7 +19,7 @@ import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
 import gym, gym_algorithmic, procgen, pybullet_envs
 
-# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0
+# CUDA 11.8.0_522.06, CUDNN 8.6.0.163, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
 import gym_util, model_util as util, model_nets as nets
@@ -59,7 +59,7 @@ class GeneralAI(tf.keras.Model):
         for k,v in learn_rates.items(): self.learn_rates[k] = tf.constant(v, compute_dtype)
         self.dist_prior = tfp.distributions.Independent(tfp.distributions.Logistic(loc=tf.zeros(latent_size, dtype=self.compute_dtype), scale=10.0), reinterpreted_batch_ndims=1)
         # self.dist_prior = tfp.distributions.Independent(tfp.distributions.Uniform(low=tf.cast(tf.fill(latent_size,-10), dtype=self.compute_dtype), high=10), reinterpreted_batch_ndims=1)
-        self.initializer = tf.keras.initializers.GlorotUniform()
+        self.initializer = tf.keras.initializers.GlorotUniform(time.time_ns())
         # self.initializer = tf.keras.initializers.Zeros()
 
         self.obs_spec, self.obs_zero, _ = gym_util.get_spec(env.observation_space, space_name='obs', compute_dtype=self.compute_dtype, net_attn_io=net_attn['io'], aio_max_latents=aio_max_latents, mixture_multi=mixture_multi)
