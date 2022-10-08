@@ -74,10 +74,6 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             metrics_loss['1extras'] = {'loss_action_returns':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
-        if self.trader:
-            metrics_loss['2rewards*'] = {'-equity_final=':np.float64, '-draw_total':np.float64}
-            metrics_loss['1trader_sim_time'] = {'sim_time_secs':np.float64}
-            metrics_loss['1trader_draws'] = {'-drawdown_total':np.float64}
             
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
@@ -234,10 +230,6 @@ class GeneralAI(tf.keras.Model):
                 tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
             ]
-            
-            if self.trader:
-                del metrics[2]; metrics[2], metrics[3] = inputs['obs'][4][-1][0], env_metrics[0]
-                metrics += [inputs['obs'][0][-1][0] - outputs['obs'][0][0][0], env_metrics[1]]
             
             dummy = tf.numpy_function(self.metrics_update, metrics, [tf.int32])
 

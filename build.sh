@@ -23,12 +23,12 @@ dev() {
     mkdir -p tf-data-models-local
     mkdir -p tf-data-models
     docker run --rm --gpus=all \
-	-e DEV \
-	-e MT5IP \
+	    -e DEV \
+	    -e MT5IP \
         -v "$PWD"/output:/app/output \
         -v "$PWD"/tf-data-models-local:/app/tf-data-models-local \
         -v "$PWD"/tf-data-models:/root/tf-data-models \
-	-v "$PWD"/..:/outerdir \
+	    -v "$PWD"/..:/outerdir \
         -p 8080:8080 \
         -it "$CWD" "$@"
 }
