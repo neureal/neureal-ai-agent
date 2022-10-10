@@ -5,7 +5,7 @@ gym==0.23.1  # Do not increase past 0.23.1 until this is live: https://github.co
 gym-algorithmic==0.0.1
 keyboard==0.13.5
 matplotlib==3.6.0
-#mt5linux   #can't be installed by pip this way, yet. requirements.txt bug in their repo.
+mt5linux @ git+https://github.com/lucas-campagna/mt5linux.git    #can't be installed directly yet. requirements.txt bug in their repo.
 neureal-ai-util @ git+https://github.com/neureal/neureal-ai-util.git
 numba==0.56.2
 pandas==1.5.0
@@ -14,7 +14,7 @@ pybullet==3.2.5
 pygame==2.1.2
 pyglet==1.5.27
 pyzmq==24.0.1
-tensorflow-gpu==2.10.0
-tensorflow_addons==0.18.0
-tensorflow_datasets==4.7.0
-tensorflow_probability==0.18.0
+tensorflow-gpu==2.9.2 # Waiting for https://github.com/tensorflow/tensorflow/pull/56691 to be merged fully (cuBLAS error)
+tensorflow_addons==0.17.0
+tensorflow_datasets==4.6.0
+tensorflow_probability==0.17.0

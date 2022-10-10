@@ -4,8 +4,14 @@
 [ $PRIV ] && pip3 install --user -e /outerdir/neureal-ai-interfaces
 [ $PRIV ] && pip3 install --user -e /outerdir/neureal-ai-util
 
-#TEMPORARY
-pip install mt5linux
+if [ $PRIV ]
+then
+  cd /outerdir/neureal-ai-agent
+  /usr/local/bin/tensorboard --bind_all --port 6006 --logdir /outerdir/neureal-ai-agent/logs serve &
+else
+  cd /app
+  /usr/local/bin/tensorboard --bind_all --port 6006 --logdir /app/logs serve &
+fi
 
 [ $DEV ] && exec bash
 
