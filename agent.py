@@ -9,10 +9,10 @@ tf.keras.backend.set_floatx('float64')
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import matplotlib.pyplot as plt
 import gym
+import gym_util, model_util as util, model_nets as nets
 # CUDA 11.8.0_522.06, CUDNN 8.6.0.163, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
-import gym_util, model_util as util, model_nets as nets
 
 
 class GeneralAI(tf.keras.Model):

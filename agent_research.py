@@ -18,11 +18,11 @@ tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
 import gym, gym_algorithmic, procgen, pybullet_envs
+import gym_util, model_util as util, model_nets as nets
 
 # CUDA 11.8.0_522.06, CUDNN 8.6.0.163, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
 for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_growth(physical_devices_gpu[i], True)
-import gym_util, model_util as util, model_nets as nets
 
 # TODO add Fourier prior like PercieverIO or https://github.com/zongyi-li/fourier_neural_operator
 # TODO add S4 layer https://github.com/HazyResearch/state-spaces
