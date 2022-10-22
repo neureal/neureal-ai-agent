@@ -16,10 +16,9 @@ FROM python:3.8-slim-bullseye as python-builder
 ENV DEBIAN_FRONTEND noninteractive
 ENV PATH="${PATH}:/root/.local/bin"
 RUN apt-get update && \
-  apt-get install --no-install-recommends -y build-essential gcc git \
-  python3-pip python3-matplotlib python3-numba python3-numpy python3-venv
-COPY requirements.txt /requirements.txt
-
+  apt-get install --no-install-recommends -y build-essential gcc git python3-pip && \
+  apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt /
 COPY --from=talib-builder /usr/lib/libta_lib.so.0.0.0 /usr/lib/
 RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so.0
 RUN cd /usr/lib && ln -s libta_lib.so.0.0.0 libta_lib.so
@@ -27,20 +26,21 @@ COPY --from=talib-builder /usr/lib/libta_lib.la /usr/lib/
 COPY --from=talib-builder /usr/lib/libta_lib.a /usr/lib/
 COPY --from=talib-builder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
 COPY --from=talib-builder /usr/include/ta-lib /usr/include/ta-lib
-RUN ldconfig
 
 RUN pip3 install --upgrade pip
 RUN pip3 install --no-cache-dir --user -r /requirements.txt
 
 # Stage 3: Runtime
-# CUDA 11.2.2_461.33, CUDNN 8.1.1.33, tensorflow-gpu==2.9.1, tensorflow_probability==0.17.0
-FROM nvidia/cuda:11.2.2-cudnn8-runtime-ubuntu20.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu20.04
 
 ENV TZ="America/Denver"
 ENV DEBIAN_FRONTEND noninteractive
 ENV PATH="${PATH}:/root/.local/bin"
-RUN apt-get update && \
-  apt-get install --no-install-recommends -y build-essential gcc git wget curl ca-certificates vim \
+ARG PRIV
+ENV PRIV="${PRIV}"
+
+RUN apt-get update -y && \
+  apt-get install --no-install-recommends -y build-essential gcc git wget curl ca-certificates vim openssh-client \
   python3.8 python3-dev python3-pip python3-distutils python3-venv pylint3 && \
   apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -51,12 +51,14 @@ COPY --from=talib-builder /usr/lib/libta_lib.la /usr/lib/
 COPY --from=talib-builder /usr/lib/libta_lib.a /usr/lib/
 COPY --from=talib-builder /usr/bin/ta-lib-config /usr/bin/ta-lib-config
 COPY --from=talib-builder /usr/include/ta-lib /usr/include/ta-lib
-RUN ldconfig
 COPY --from=python-builder /root/.local/lib/python3.8/site-packages /usr/local/lib/python3.8/dist-packages
+COPY --from=python-builder /root/.local/bin /usr/local/bin
 
 RUN ln -s /usr/bin/python3 /usr/bin/python
+RUN ln -s /usr/bin/python3 /usr/local/bin/python
 
 COPY . /app
 WORKDIR /app
 
-CMD ["python", "/app/agent.py"]
+COPY entrypoint.sh /usr/bin/entrypoint
+ENTRYPOINT ["/usr/bin/entrypoint"]
