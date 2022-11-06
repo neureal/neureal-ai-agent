@@ -41,7 +41,7 @@ for i in range(len(physical_devices_gpu)): tf.config.experimental.set_memory_gro
 
 
 class GeneralAI(tf.keras.Model):
-    def __init__(self, arch, env, trader, env_render, save_model, chkpts, max_episodes, max_steps, learn_rates, value_cont, latent_size, latent_dist, mixture_multi, net_lstm, net_attn, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
+    def __init__(self, arch, env, trader, env_render, save_model, chkpts, max_episodes, pause_episodes, max_steps, learn_rates, value_cont, latent_size, latent_dist, mixture_multi, net_lstm, net_attn, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos):
         super(GeneralAI, self).__init__()
         compute_dtype = tf.dtypes.as_dtype(self.compute_dtype)
         self.float_max = tf.constant(compute_dtype.max, compute_dtype)
@@ -170,7 +170,7 @@ class GeneralAI(tf.keras.Model):
         # util.net_build(self.meta, self.initializer)
 
 
-        self.stop = False; self.stop_episode = max_episodes
+        self.stop, self.stopped_episode, self.pause_episodes = False, max_episodes, pause_episodes
         if platform == "win32": keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True) # TODO figure out linux/Docker version of this that works
         self.metrics_spec()
         # TF bug that wont set graph options with tf.function decorator inside a class
@@ -256,7 +256,12 @@ class GeneralAI(tf.keras.Model):
 
     def check_stop(self, *args):
         # if keyboard.is_pressed('ctrl+alt+k'): return np.asarray(True, bool)
-        if self.stop: self.stop_episode = args[0].item(); return np.asarray(True, bool)
+        if self.stop: self.stopped_episode = args[0].item(); return np.asarray(True, bool)
+        if self.pause_episodes:
+            print('PAUSED')
+            while True:
+                if keyboard.is_pressed('ctrl+alt+space'): break
+                time.sleep(0.1)
         return np.asarray(False, bool)
     def on_stop(self):
         keyboard.unhook_all_hotkeys()
@@ -898,7 +903,7 @@ class GeneralAI(tf.keras.Model):
 
 def params(): pass
 load_model, save_model, chkpts = False, False, 5000
-max_episodes = 100
+max_episodes, pause_episodes = 100, False
 value_cont = True
 latent_size = 16
 latent_dist = 'd' # 'd' = deterministic, 'c' = categorical, 'mx' = continuous(mix-log)
@@ -962,7 +967,7 @@ if __name__ == '__main__':
     if env_async: import envs_local.async_wrapper as envaw_; env_name, env = env_name+'-asyn', envaw_.AsyncWrapperEnv(env, env_async_clock, env_async_speed, env_render)
     if env_reconfig: import envs_local.reconfig_wrapper as envrw_; env_name, env = env_name+'-r', envrw_.ReconfigWrapperEnv(env)
     with tf.device("/device:{}:{}".format(device_type,(device if device_type=='GPU' else 0))):
-        model = GeneralAI(arch, env, trader, env_render, save_model, chkpts, max_episodes, max_steps, learn_rates, value_cont, latent_size, latent_dist, mixture_multi, net_lstm, net_attn, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
+        model = GeneralAI(arch, env, trader, env_render, save_model, chkpts, max_episodes, pause_episodes, max_steps, learn_rates, value_cont, latent_size, latent_dist, mixture_multi, net_lstm, net_attn, aio_max_latents, attn_mem_base, aug_data_step, aug_data_pos)
         name = "gym-{}-{}-{}-a{}{}-{}".format(arch, env_name, machine, device, extra, time.strftime("%y-%m-%d-%H-%M-%S"))
 
         ## debugging
@@ -1006,12 +1011,12 @@ if __name__ == '__main__':
 
 
         ## metrics
-        nans = [np.nan]*(max_episodes-model.stop_episode-1)
+        nans = [np.nan]*(max_episodes-model.stopped_episode-1)
         metrics_loss = model.metrics_loss
         for loss_group in metrics_loss.values():
             for k in loss_group.keys():
                 for j in range(len(loss_group[k])):
-                    if j > model.stop_episode: loss_group[k][j:] = nans; break
+                    if j > model.stopped_episode: loss_group[k][j:] = nans; break
                     else: loss_group[k][j] = 0 if loss_group[k][j] == [] else np.mean(loss_group[k][j])
         # TODO np.mean, reduce size if above 200,000 episodes
 
