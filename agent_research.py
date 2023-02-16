@@ -172,7 +172,7 @@ class GeneralAI(tf.keras.Model):
         # util.net_build(self.meta, self.initializer)
 
 
-        self.stop, self.stopped_episode, self.pause_episodes = False, max_episodes, pause_episodes
+        self.stop, self.stopped_episode, self.pause_episodes = False, max_episodes-1, pause_episodes
         if platform == "win32": keyboard.add_hotkey('ctrl+alt+k', self.on_stop, suppress=True) # TODO figure out linux/Docker version of this that works
         self.metrics_spec()
         # TF bug that wont set graph options with tf.function decorator inside a class
@@ -1070,6 +1070,12 @@ if __name__ == '__main__':
             out_file = "output/{}.png".format(name); plt.savefig(out_file)
             print("SAVED {}   (run \033[94mpython serve.py\033[00m to access webserver on port 8080)".format(out_file))
 
+        for net in model.layers:
+            if hasattr(net,'inp') and net.inp.net_attn_io2:
+                attn_scores = net.inp.layer_attn_io2._mem_score / metrics_loss['1steps']['steps+'][model.stopped_episode]
+                names = [spec['space_name']+'_'+spec['name'] for spec in net.inp.spec_in]
+                p = '\n'.join("{:.9f}    {}".format(float(attn_scores[i]),names[i]) for i in range(len(names)))
+                print(p, file=open("output/attn_scores {}_{}.txt".format(name,net.name),'w'))
 
         ## save models
         if save_model:
