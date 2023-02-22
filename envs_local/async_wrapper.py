@@ -4,7 +4,7 @@ import multiprocessing as mp
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
-import gym
+import gymnasium as gym
 import gym_util
 
 
@@ -85,7 +85,7 @@ class AsyncWrapperEnv(gym.Env):
         while self._proc_ctrl.value != 1:
 
             if self._proc_ctrl.value == 0:
-                obs = self.env.reset()
+                obs, info = self.env.reset()
                 # print("proc reset", obs)
                 obs = self._translate_obs(obs, self._reward_done_zero)
                 with self._obs_shared.get_lock():
@@ -99,7 +99,7 @@ class AsyncWrapperEnv(gym.Env):
                 else: action_space = gym_util.bytes_to_space(action, self.env.action_space, self._action_idxs, [0])
 
                 # print("proc action", action_space)
-                obs, reward, done, _ = self.env.step(action_space)
+                obs, reward, terminated, truncated, _ = self.env.step(action_space); done = (terminated or truncated)
                 # print("proc step", obs)
                 reward_done = [np.frombuffer(np.asarray(reward, np.float64), dtype=np.uint8), np.frombuffer(np.asarray(done, bool), dtype=np.uint8)]
                 obs = self._translate_obs(obs, reward_done)
@@ -134,7 +134,7 @@ class AsyncWrapperEnv(gym.Env):
         with self._obs_shared.get_lock(): np.copyto(obs, obs_view, casting='no')
         if self._env_np_struc: obs = np.frombuffer(obs[:self._obs_idx], dtype=self.obs_dtype)
         else: obs = gym_util.bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
-        return obs
+        return obs, {}
 
     def step(self, action):
         action_view = np.asarray(self._action_shared.get_obj())
@@ -166,14 +166,14 @@ class AsyncWrapperEnv(gym.Env):
             obs = gym_util.bytes_to_space(obs, self.observation_space, self._obs_idxs, [0])
         reward = np.frombuffer(reward, dtype=np.float64).item()
         done = np.frombuffer(done, dtype=bool).item()
-        return obs, reward, done, {}
+        return obs, reward, done, False, {}
 
 if __name__ == '__main__':
     ## test
     # env = gym.make('CartPole-v0'); env.observation_space.dtype = np.dtype('float64')
     import random_env as env_; env = env_.RandomEnv(True)
     env = AsyncWrapperEnv(env, 0, 1.0, False)
-    obs = env.reset()
+    obs, info = env.reset()
     # print("main reset", obs)
     if hasattr(env,'np_struc'):
         action = np.random.randint(32, size=env.action_dtype.itemsize, dtype=np.uint8)
@@ -181,7 +181,7 @@ if __name__ == '__main__':
     else:
         action = env.action_space.sample()
     # print("main action", action)
-    obs, reward, done, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
     # print("main step ", obs)
     env.close()
     print("done")

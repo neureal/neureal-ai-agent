@@ -1,7 +1,7 @@
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
-import gym
+import gymnasium as gym
 import gym_util
 
 # TODO auto make the dtype struc from space for numpy dtype compatability with gym, need to include space it has more info like low,high
@@ -39,7 +39,7 @@ class RandomEnv(gym.Env):
     def step(self, action):
         return self._request(action)
     def reset(self):
-        return self._request(None)[0]
+        return self._request(None)[0], {}
     def render(self, mode='human', close=False):
         action, obs, reward, done, info = self.state
         if action is None: print("{}\n".format(obs))
@@ -207,7 +207,7 @@ class RandomEnv(gym.Env):
         if np.random.randint(10) >= 9: done = True
 
         self.state = (action, obs, reward, done, info)
-        return obs, reward, done, info
+        return obs, reward, done, False, info
 
 
 
@@ -215,7 +215,7 @@ if __name__ == '__main__':
     ## test
     env_np_struc = True
     env = RandomEnv(env_np_struc)
-    obs = env.reset()
+    obs, info = env.reset()
     # env.render()
     if hasattr(env,'np_struc'):
         # test_spec, test_obs_zero, test_obs_zero_out = gym_util.get_spec(env.observation_space, compute_dtype='float32')
@@ -238,5 +238,5 @@ if __name__ == '__main__':
         test_out = gym_util.space_to_feat(action, env.action_space)
         test_action = gym_util.out_to_space(test_out, env.action_space, [0])
 
-    obs, reward, done, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
     # env.render()

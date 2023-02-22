@@ -17,7 +17,8 @@ tf.keras.backend.set_floatx('float64')
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import tensorflow_probability as tfp
 import matplotlib.pyplot as plt
-import gym, gym_algorithmic, procgen, pybullet_envs
+import gymnasium as gym #, gym_algorithmic, procgen, pybullet_envs
+# gym.logger.set_level(gym.logger.DISABLED)
 import gym_util, model_util as util, model_nets as nets
 
 # CUDA 11.8.0_522.06, CUDNN 8.6.0.163, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
@@ -239,16 +240,17 @@ class GeneralAI(tf.keras.Model):
 
 
     def env_reset(self, dummy):
-        obs, reward, done, metrics = self.env.reset(), 0.0, False, [0]
+        obs, info = self.env.reset(); reward, done = 0.0, False
         if self.env_render: self.env.render()
-        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs[0]); metrics = obs[1]['metrics']
+        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
         else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
+        metrics = info['metrics'] if 'metrics' in info else [0]
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool), np.asarray([metrics], np.float64)]
         return rtn
     def env_step(self, *args): # args = tuple of ndarrays
         if hasattr(self.env,'np_struc'): action = gym_util.out_to_struc(list(args), self.env.action_dtype)
         else: action = gym_util.out_to_space(args, self.env.action_space, [0])
-        obs, reward, done, info = self.env.step(action)
+        obs, reward, terminated, truncated, info = self.env.step(action); done = (terminated or truncated)
         if self.env_render: self.env.render()
         if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
         else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
@@ -402,8 +404,8 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik * (returns_calc + reward_calc) # _rtnsR
                 # loss_action = loss_action_lik * reward_calc # _loss-rwd
                 # loss_action = loss_action_lik # _loss-udRL
-                loss_action = loss_action - ema_rtns # _rtnsEM
-                loss_action = loss_action + util.loss_entropy(action_dist, 1e-3) # , 1e-3 # _rtnsE
+                loss_action = loss_action - ema_rtns # _rtnsEM _loss-rtnsS
+                # loss_action = loss_action + util.loss_entropy(action_dist, 1e-0) # , 1e-3 # _rtnsE _loss-ent
                 # loss_action = self.action.optimizer['action'].get_scaled_loss(loss_action)
                 # loss_action = loss_action * self.loss_scale # _loss-scale
             if loss_action_lik > self.float_eps: # _grad-lim-eps
@@ -459,7 +461,7 @@ class GeneralAI(tf.keras.Model):
             # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(ma_loss) # _lr-loss
             # self.action.optimizer['action'].learning_rate = self.action_get_learn_rate(std) # _lr-rwd-std
             # self.action.optimizer['action'].learning_rate = tf.math.exp(episode / self.max_episodes * (-15.0 + 9.7) - 9.7) # _lr-scale
-            self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * snr_loss**3 # **3 # _lr-snr3
+            self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * snr_loss**16 # **3 # _lr-snr3
             # self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * (1.0 - rewards_total / 200.0) + self.float_eps # _lr-rwd-lin-scale
 
             # return_goal = tf.constant([[200.0]], tf.float64)
@@ -819,7 +821,7 @@ class GeneralAI(tf.keras.Model):
                 loss_action_lik = util.loss_likelihood(action_dist, action)
                 loss_action = loss_action_lik * returns_calc
                 loss_action = loss_action - ema_rtns # _rtnsEM
-                loss_action = loss_action + util.loss_entropy(action_dist, 1e-3) # , 1e-3 # _rtnsE
+                # loss_action = loss_action + util.loss_entropy(action_dist, 1e-3) # , 1e-3 # _rtnsE
 
                 # # inputs_act = {'obs':latent_rep, 'return_goal':[returns]}
                 # act_logits = self.act(latent_rep, use_img=True, store_real=True)
@@ -870,7 +872,7 @@ class GeneralAI(tf.keras.Model):
             self.reset_states(); loss = self.MU_learner_onestep(outputs, training=train)
 
             util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss['action_lik'])); ma_loss, ema_loss, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
-            self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * snr_loss**3 # **3 # _lr-snr3
+            self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * snr_loss**16 # **3 # _lr-snr3
 
             util.stats_update(self.trans.stats['loss'], tf.math.reduce_mean(loss['trans'])); ma_trans, ema_trans, snr_trans, std_trans = util.stats_get(self.trans.stats['loss'])
             self.trans.optimizer['trans'].learning_rate = self.learn_rates['trans'] * snr_trans**16
@@ -935,30 +937,19 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, '' # _rtns-ema_rtnsEM_rtnsE1e3_lr2e5-snr3_rst1e1 _loss-final_lr-snr-99_rwd-prev _out-aio2-mlp _data-same-rnd-N1 _mlp-diff _lat128_lay512-256-64 _val2e5_rep2e8_lEp5_rpP10 _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig, chart_lim = False, False, 0.001, 160.0, False, 0.003
-env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
-# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    500  475.0
-# env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
-# env_name, max_steps, env_render, env = 'Copy', 32, False, gym.make('Copy-v0') # DuplicatedInput-v0 RepeatCopy-v0 Reverse-v0 ReversedAddition-v0 ReversedAddition3-v0 # ()6 int64    [()2,()2,()5] int64    200  25.0
-# env_name, max_steps, env_render, env = 'ProcgenChaser', 1024, False, gym.make('procgen-chaser-v0') # (64,64,3) uint8    ()15 int64    1000 None
-# env_name, max_steps, env_render, env = 'ProcgenCaveflyer', 1024, False, gym.make('procgen-caveflyer-v0') # (64,64,3) uint8    ()15 int64    1000 None
+# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
+# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1', max_episode_steps=500) # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    500  475.0
+# env_name, max_steps, env_render, env_reconfig, env = 'Acrobot', 512, False, True, gym.make('Acrobot-v1', max_episode_steps=500) # ; env.observation_space.dtype = np.dtype('float64') # (6) float32    ()3 int64    500  -100.0
+env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200.0
+# env_name, max_steps, env_render, env_reconfig, env = 'BipedalWalker', 1024, False, True, gym.make('BipedalWalker-v3', render_mode=None, hardcore=False) # (24) float32    (4) float32    1600  300.0
+# env_name, max_steps, env_render, env_reconfig, env = 'CarRacing', 1024, False, False, gym.make('CarRacing-v2', render_mode=None, domain_randomize=True, continuous=False) # (96,96,3) uint8    ()5 int64 / (3) float32    1000  900.0
+
 # env_name, max_steps, env_render, env = 'Tetris', 22528, False, gym.make('ALE/Tetris-v5') # (210,160,3) uint8    ()18 int64    21600 None
 # env_name, max_steps, env_render, env = 'MontezumaRevenge', 22528, False, gym.make('MontezumaRevengeNoFrameskip-v4') # (210,160,3) uint8    ()18 int64    400000 None
 # env_name, max_steps, env_render, env = 'MsPacman', 22528, False, gym.make('MsPacmanNoFrameskip-v4') # (210,160,3) uint8    ()9 int64    400000 None
-# import pybullet_envs.bullet.racecarGymEnv as env_; env_render = False; env_name, max_steps, env = 'Racecar', 1024, env_.RacecarGymEnv(isDiscrete=True, renders=env_render) # (2) float32    ()9 int64    1000  5.0
-
-# env_name, max_steps, env_render, env_reconfig, env = 'CartPoleCont', 256, False, True, gym.make('CartPoleContinuousBulletEnv-v0'); env.observation_space.dtype = np.dtype('float64') # (4) float32    (1) float32    200  190.0
-# env_name, max_steps, env_render, env_reconfig, env = 'LunarLandCont', 1024, False, True, gym.make('LunarLanderContinuous-v2') # (8) float32    (2) float32    1000  200
-# import envs_local.bipedal_walker as env_; env_name, max_steps, env_render, env = 'BipedalWalker', 2048, False, env_.BipedalWalker()
-# import pybullet_envs.gym_manipulator_envs as env_; env_render = False; env_name, max_steps, env = 'Reacher', 256, env_.ReacherBulletEnv(render=env_render) # (9) float32    (2) float32    150  18.0
-# import pybullet_envs.gym_locomotion_envs as env_; env_render = False; env_name, max_steps, env = 'Hopper', 1024, env_.HopperBulletEnv(render=env_render) # (15) float32    (3) float32    1000  2500.0
-# import pybullet_envs.bullet.racecarZEDGymEnv as env_; env_render = False; env_name, max_steps, env = 'RacecarZed', 1024, env_.RacecarZEDGymEnv(isDiscrete=False, renders=env_render) # (10,100,4) uint8    (2) float32    1000  5.0
-
-# from pettingzoo.butterfly import pistonball_v4; env_name, max_steps, env_render, env = 'PistonBall', 1, False, pistonball_v4.env()
-# import src.envs.envList as env_; env_name, max_steps, env_render, env = 'UR5PlayAbs', 64, False, env_.ExtendedUR5PlayAbsRPY1Obj()
 
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
-# # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataMnist', 64, False, env_.DataEnv('mnist')
 # from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 256, False, TraderEnv(agent_id=device, env=tenv), True, 0.0; extra += "_rs{}-td{}-s{}-dd{:.0e}".format(env.NUM_EPISODES,int(env.TIMEDELTA_RANGE),int(env.MAX_EPISODE_TIME/env.TIMEDELTA_RANGE),int(env.START_TARGET_BAL))
 
 # max_steps = 32 # max replay buffer or train interval or bootstrap
@@ -966,7 +957,7 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # arch = 'TEST' # testing architechures
 arch = 'PG'; learn_rates = {'action':4e-6} # Policy Gradient agent, PG loss
 # arch = 'AC'; learn_rates = {'action':4e-6, 'value':2e-6} # Actor Critic, PG and advantage loss
-# arch = 'MU'; learn_rates = {'action':2e-5, 'rep_action':2e-6, 'trans':2e-4, 'rep_trans':2e-6, 'pool':2e-6} # 'act':2e-6 # Combined PG and world model
+# arch = 'MU'; learn_rates = {'action':4e-5, 'rep_action':4e-6, 'trans':2e-4, 'rep_trans':4e-6, 'pool':2e-6} # 'act':2e-6 # Combined PG and world model
 
 if __name__ == '__main__':
     ## manage multiprocessing
@@ -996,7 +987,7 @@ if __name__ == '__main__':
         # # print(tf.autograph.to_code(model.AC_actor.python_function, experimental_optional_features=tf.autograph.experimental.Feature.LISTS)); quit(0)
         # print(model.AC_actor.get_concrete_function(inputs)); quit(0)
         # print(model.AC_actor.get_concrete_function(inputs).graph.as_graph_def()); quit(0)
-        # obs, reward, done = env.reset(), 0.0, False
+        # obs, info = env.reset()
         # # test = model.AC_actor.python_function(inputs)
         # test = model.AC_actor(inputs)
         # print(test); quit(0)

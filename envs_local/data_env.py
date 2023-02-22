@@ -3,7 +3,7 @@ import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
 import tensorflow_datasets as tfds
-import gym
+import gymnasium as gym
 import gym_util
 
 
@@ -69,7 +69,7 @@ class DataEnv(gym.Env):
 
 
     def step(self, action): return self._request(action)
-    def reset(self): return self._request(None)[0]
+    def reset(self): return self._request(None)[0], {}
     def render(self, mode='human', close=False):
         action, obs, reward, done, info = self.state
         # if action is None: print("{}\n".format(obs))
@@ -134,13 +134,13 @@ class DataEnv(gym.Env):
 
 
         self.state = (action, obs, reward, done, info)
-        return obs, reward, done, info
+        return obs, reward, done, False, info
 
 if __name__ == '__main__':
     ## test
     env = DataEnv('shkspr')
-    obs = env.reset()
+    obs, info = env.reset()
     env.render()
     action = env.action_space.sample()
-    obs, reward, done, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
     env.render()

@@ -3,8 +3,7 @@
 import numpy as np
 np.set_printoptions(precision=8, suppress=True, linewidth=400, threshold=100)
 # np.random.seed(0)
-import gym, gym_algorithmic, procgen, pybullet_envs
-# import gym_util
+import gymnasium as gym
 
 
 class ReconfigWrapperEnv(gym.Env):
@@ -59,24 +58,24 @@ class ReconfigWrapperEnv(gym.Env):
     def close(self): return self.env.close()
 
     def reset(self):
-        obs = self.env.reset()
+        obs, info = self.env.reset()
         if self.reconfig_obs:
             obs_ = [None]*(self.num_feat_obs+1)
             for i in range(self.num_feat_obs): obs_[i] = obs[...,i:i+1]
             obs_[-1] = obs
             obs = tuple(obs_)
-        return obs
+        return obs, info
 
     def step(self, action):
         if self.reconfig_act: action_ = np.concatenate(action, axis=-1)
         else: action_ = action
-        obs, reward, done, info = self.env.step(action_)
+        obs, reward, terminated, truncated, info = self.env.step(action_)
         if self.reconfig_obs:
             obs_ = [None]*(self.num_feat_obs+1)
             for i in range(self.num_feat_obs): obs_[i] = obs[...,i:i+1]
             obs_[-1] = obs
             obs = tuple(obs_)
-        return obs, reward, done, info
+        return obs, reward, terminated, truncated, info
 
 if __name__ == '__main__':
     ## test
@@ -84,11 +83,11 @@ if __name__ == '__main__':
     env = gym.make('LunarLanderContinuous-v2')
     # env = gym.make('procgen-chaser-v0')
     env = ReconfigWrapperEnv(env)
-    obs = env.reset()
+    obs, info = env.reset()
     # print("main reset", obs)
     action = env.action_space.sample()
     # print("main action", action)
-    obs, reward, done, info = env.step(action)
+    obs, reward, terminated, truncated, info = env.step(action)
     # print("main step ", obs)
     env.close()
     print("done")

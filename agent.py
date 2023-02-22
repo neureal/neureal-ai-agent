@@ -8,7 +8,7 @@ tf.keras.backend.set_floatx('float64')
 # tf.config.run_functions_eagerly(True)
 tf.keras.backend.set_epsilon(tf.experimental.numpy.finfo(tf.keras.backend.floatx()).eps) # 1e-7 default
 import matplotlib.pyplot as plt
-import gym
+import gymnasium as gym
 import gym_util, model_util as util, model_nets as nets
 # CUDA 11.8.0_522.06, CUDNN 8.6.0.163, tensorflow-gpu==2.10.0, tensorflow_probability==0.18.0
 physical_devices_gpu = tf.config.list_physical_devices('GPU')
@@ -95,16 +95,17 @@ class GeneralAI(tf.keras.Model):
 
 
     def env_reset(self, dummy):
-        obs, reward, done, metrics = self.env.reset(), 0.0, False, [0]
+        obs, info = self.env.reset(); reward, done = 0.0, False
         if self.env_render: self.env.render()
-        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs[0]); metrics = obs[1]['metrics']
+        if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
         else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
+        metrics = info['metrics'] if 'metrics' in info else [0]
         rtn += [np.asarray([[reward]], np.float64), np.asarray([[done]], bool), np.asarray([metrics], np.float64)]
         return rtn
     def env_step(self, *args): # args = tuple of ndarrays
         if hasattr(self.env,'np_struc'): action = gym_util.out_to_struc(list(args), self.env.action_dtype)
         else: action = gym_util.out_to_space(args, self.env.action_space, [0])
-        obs, reward, done, info = self.env.step(action)
+        obs, reward, terminated, truncated, info = self.env.step(action); done = (terminated or truncated)
         if self.env_render: self.env.render()
         if hasattr(self.env,'np_struc'): rtn = gym_util.struc_to_feat(obs)
         else: rtn = gym_util.space_to_feat(obs, self.env.observation_space)
@@ -256,9 +257,8 @@ device_type = 'CPU'
 machine, device, extra = 'dev', 0, ''
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig, chart_lim = False, False, 0.001, 160.0, False, 0.003
-env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # (4) float32    ()2 int64    200  195.0
-# env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1') # (4) float32    ()2 int64    500  475.0
-# env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200
+env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 512, False, True, gym.make('CartPole-v1', max_episode_steps=500) # (4) float32    ()2 int64    500  475.0
+# env_name, max_steps, env_render, env_reconfig, env = 'LunarLand', 1024, False, True, gym.make('LunarLander-v2') # (8) float32    ()4 int64    1000  200.0
 
 arch = 'PG'; learn_rates = {'action':4e-6} # Policy Gradient agent, PG loss
 
