@@ -219,10 +219,10 @@ class GeneralAI(tf.keras.Model):
 
             self.reset_states(); outputs, inputs = self.PG_actor(inputs, return_goal)
             rewards_total = outputs['returns'][0][0]
-            util.stats_update(self.action.stats['rwd'], rewards_total); ma, ema, snr, std = util.stats_get(self.action.stats['rwd'])
+            util.stats_update(self.action.stats['rwd'], rewards_total); avg, ma, ema, snr, std = util.stats_get(self.action.stats['rwd'])
 
             self.reset_states(); loss = self.PG_learner_onestep(outputs)
-            util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss['action_lik'])); ma_loss, ema_loss, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
+            util.stats_update(self.action.stats['loss'], tf.math.reduce_mean(loss['action_lik'])); avg_loss, ma_loss, ema_loss, snr_loss, std_loss = util.stats_get(self.action.stats['loss'])
             self.action.optimizer['action'].learning_rate = self.learn_rates['action'] * snr_loss
 
             log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True,True,True]
