@@ -362,6 +362,8 @@ class GeneralAI(tf.keras.Model):
         returns = inputs['returns'][0:1]; returns_calc = tf.squeeze(tf.cast(returns,self.compute_dtype)) # _loss-final
         util.stats_update(self.action.stats['returns'], returns_calc); avg_rtns, ma_rtns, ema_rtns, snr_rtns, std_rtns = util.stats_get(self.action.stats['returns'])
         returns_calc = returns_calc - ema_rtns # _rtns-ema
+        # if returns_calc < 0.0: returns_calc = tf.constant(0,self.compute_dtype) # _rtns-emaC (needs _rtns-ema)
+        # returns_calc = tf.math.abs(returns_calc - ema_rtns) # _rtns-emaA
         # returns_calc = returns_calc if returns_calc > self.float_eps else self.float_eps # _rtns-emaP
         # returns_calc = tf.constant(1,self.compute_dtype) if returns_calc > 0 else tf.constant(-1,self.compute_dtype) # _rtns-emaB
 
@@ -404,12 +406,22 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik * (returns_calc + reward_calc) # _rtnsR
                 # loss_action = loss_action_lik * reward_calc # _loss-rwd
                 # loss_action = loss_action_lik # _loss-udRL
-                loss_action = loss_action - ema_rtns # _rtnsEM _loss-rtnsS
+                # loss_action = loss_action_lik * (returns_calc + 1) # _rtnsP1
+                # loss_action = loss_action * reward_calc # _loss-rwdO
+                # loss_action = loss_action - returns_calc # _loss-rtns # no gradients
+                # loss_action = loss_action - reward_calc # _loss-rwdS # no gradients
+                # loss_action = loss_action - ema_rtns # _rtnsEM _loss-rtnsS # no gradients
                 # loss_action = loss_action + util.loss_entropy(action_dist, 1e-0) # , 1e-3 # _rtnsE _loss-ent
+                for i in range(self.action_spec_len):
+                    if self.action_spec[i]['dist_type'] == 'c': # _loss-logits
+                        logit_scale = tf.reduce_mean(tf.math.abs(action_logits[i]))
+                        if logit_scale < 15.0: logit_scale = tf.constant(0,self.compute_dtype)
+                        loss_action = loss_action + logit_scale
                 # loss_action = self.action.optimizer['action'].get_scaled_loss(loss_action)
                 # loss_action = loss_action * self.loss_scale # _loss-scale
             if loss_action_lik > self.float_eps: # _grad-lim-eps
             # if reward_calc > tf.constant(0,self.compute_dtype): # _grad-lim-rwd
+            # if tf.math.abs(reward_calc) > self.float_eps and loss_action_lik > self.float_eps:
                 gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
                 # gradients = self.action.optimizer['action'].get_unscaled_gradients(gradients)
                 # for i in range(len(gradients)): gradients[i] = gradients[i] / self.loss_scale # _loss-scale
@@ -955,9 +967,9 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-arch = 'PG'; learn_rates = {'action':4e-6} # Policy Gradient agent, PG loss
+arch = 'PG'; learn_rates = {'action':4e-6} #, 'act':4e-6 # Policy Gradient agent, PG loss
 # arch = 'AC'; learn_rates = {'action':4e-6, 'value':2e-6} # Actor Critic, PG and advantage loss
-# arch = 'MU'; learn_rates = {'action':4e-5, 'rep_action':4e-6, 'trans':2e-4, 'rep_trans':4e-6} #, 'act':2e-6, 'pool':2e-6 # Combined PG and world model
+# arch = 'MU'; learn_rates = {'action':4e-5, 'rep_action':4e-6, 'trans':2e-4, 'rep_trans':4e-6} #, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
 
 if __name__ == '__main__':
     ## manage multiprocessing
