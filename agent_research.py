@@ -407,7 +407,7 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik * reward_calc # _loss-rwd
                 # loss_action = loss_action_lik # _loss-udRL
                 # loss_action = loss_action_lik * (returns_calc + 1) # _rtnsP1
-                # loss_action = loss_action * reward_calc # _loss-rwdO
+                loss_action = loss_action * reward_calc # _loss-rwdO
                 # loss_action = loss_action - returns_calc # _loss-rtns # no gradients
                 # loss_action = loss_action - reward_calc # _loss-rwdS # no gradients
                 # loss_action = loss_action - ema_rtns # _rtnsEM _loss-rtnsS # no gradients
@@ -795,8 +795,7 @@ class GeneralAI(tf.keras.Model):
         loss_transs = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
         loss_acts = tf.TensorArray(self.compute_dtype, size=1, dynamic_size=True, infer_shape=False, element_shape=(1,))
 
-        inputs_rewards, inputs_dones = tf.concat([self.rewards_zero, inputs['rewards']], axis=0), tf.concat([self.dones_zero, inputs['dones']], axis=0)
-        action_prev = self.action_zero_out
+        inputs_rewards, inputs_dones, action_prev = tf.concat([self.rewards_zero, inputs['rewards']], axis=0), tf.concat([self.dones_zero, inputs['dones']], axis=0), self.action_zero_out
         returns = inputs['returns'][0:1]; returns_calc = tf.squeeze(tf.cast(returns,self.compute_dtype)) # _loss-final
         util.stats_update(self.action.stats['returns'], returns_calc); avg_rtns, ma_rtns, ema_rtns, snr_rtns, std_rtns = util.stats_get(self.action.stats['returns'])
         returns_calc = returns_calc - ema_rtns # _rtns-ema
@@ -807,6 +806,7 @@ class GeneralAI(tf.keras.Model):
             for i in range(self.obs_spec_len): obs[i] = inputs['obs'][i][step:step+1]; obs[i].set_shape(self.obs_spec[i]['step_shape'])
             action = [None]*self.action_spec_len
             for i in range(self.action_spec_len): action[i] = inputs['actions'][i][step:step+1]; action[i].set_shape(self.action_spec[i]['step_shape'])
+            reward_calc = tf.squeeze(tf.cast(inputs['rewards'][step],self.compute_dtype))
             num_trans = tf.minimum(self.mem_img_size, num_reps-step)
             latents_target = inputs['latents_rep'][step:step+num_trans]
 
@@ -832,8 +832,12 @@ class GeneralAI(tf.keras.Model):
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
                 loss_action_lik = util.loss_likelihood(action_dist, action)
                 loss_action = loss_action_lik * returns_calc
-                loss_action = loss_action - ema_rtns # _rtnsEM
-                # loss_action = loss_action + util.loss_entropy(action_dist, 1e-3) # , 1e-3 # _rtnsE
+                loss_action = loss_action * reward_calc # _loss-rwdO
+                for i in range(self.action_spec_len):
+                    if self.action_spec[i]['dist_type'] == 'c': # _loss-logits
+                        logit_scale = tf.reduce_mean(tf.math.abs(action_logits[i]))
+                        if logit_scale < 15.0: logit_scale = tf.constant(0,self.compute_dtype)
+                        loss_action = loss_action + logit_scale
 
                 # # inputs_act = {'obs':latent_rep, 'return_goal':[returns]}
                 # act_logits = self.act(latent_rep, use_img=True, store_real=True)
@@ -851,7 +855,7 @@ class GeneralAI(tf.keras.Model):
             self.trans.optimizer['trans'].apply_gradients(zip(gradients, self.trans.trainable_variables))
             loss_transs = loss_transs.write(step, loss_trans / tf.cast(tf.math.reduce_prod(tf.shape(latents_target)),self.compute_dtype))
 
-            # if training:
+            # if loss_action_lik > self.float_eps: # _grad-lim-eps
             gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
             self.action.optimizer['action'].apply_gradients(zip(gradients, self.action.trainable_variables))
             loss_actions_lik = loss_actions_lik.write(step, loss_action_lik / self.action_total_size)
@@ -946,7 +950,7 @@ aug_data_step, aug_data_pos = True, True
 device_type = 'GPU' # use GPU for large networks (over 8 total net blocks?) or output data (512 bytes?)
 device_type = 'CPU'
 
-machine, device, extra = 'dev', 0, '' # _rtns-ema_rtnsEM_rtnsE1e3_lr2e5-snr3_rst1e1 _loss-final_lr-snr-99_rwd-prev _out-aio2-mlp _data-same-rnd-N1 _mlp-diff _lat128_lay512-256-64 _val2e5_rep2e8_lEp5_rpP10 _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
+machine, device, extra = 'dev', 0, '' # _loss-rwdO-rwdS0-rtnsS0-ent0-logits15 _rtns-ema_rtnsEM_rtnsE1e3_lr2e5-snr3_rst1e1 _loss-final_lr-snr-99_rwd-prev _out-aio2-mlp _data-same-rnd-N1 _mlp-diff _lat128_lay512-256-64 _val2e5_rep2e8_lEp5_rpP10 _VOar-7 _optR _rtnO _prs2 _Oab _lPGv _RfB _train _entropy3 _mae _perO-NR-NT-G-Nrez _rez-rezoR-rezoT-rezoG _mixlog-abs-log1p-Nreparam _obs-tsBoxF-dataBoxI_round _Nexp-Ne9-Nefmp36-Nefmer154-Nefme308-emr-Ndiv _MUimg-entropy-values-policy-Netoe _AC-Nonestep-aing _mem-sort _stepE _cncat
 
 trader, env_async, env_async_clock, env_async_speed, env_reconfig, chart_lim = False, False, 0.001, 160.0, False, 0.003
 env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, True, gym.make('CartPole-v0') # ; env.observation_space.dtype = np.dtype('float64') # (4) float32    ()2 int64    200  195.0
