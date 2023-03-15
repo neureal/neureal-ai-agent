@@ -320,9 +320,10 @@ class GeneralAI(tf.keras.Model):
             # action_logits = self.action(inputs_img, use_img=True)
             # action_logits = self.action(inputs_step, use_img=True, store_real=True)
             action_logits = self.action(inputs_step)
+            action_dist = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
-                action_dist = self.action.dist[i](action_logits[i])
-                action[i] = action_dist.sample()
+                action_dist[i] = self.action.dist[i](action_logits[i])
+                action[i] = action_dist[i].sample()
 
             action_dis = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
@@ -835,10 +836,11 @@ class GeneralAI(tf.keras.Model):
                 for i in range(self.action_spec_len): action_dist[i] = self.action.dist[i](action_logits[i])
                 loss_action_lik = util.loss_likelihood(action_dist, action)
                 loss_action = loss_action_lik * returns_calc
-                loss_action = loss_action * reward_calc # _loss-rwdO
-                # loss_action = loss_action + loss_action_lik * reward_calc # _loss-rwdG
-                # loss_trans_avg = loss_trans / tf.cast(tf.math.reduce_prod(tf.shape(latents_target)),self.compute_dtype)
-                # loss_action = loss_action + loss_action_lik * loss_trans_avg # _loss-supr
+                # loss_action = loss_action * reward_calc # _loss-rwdO
+                loss_action = loss_action + loss_action_lik * reward_calc # _loss-rwdG
+                loss_trans_avg = loss_trans / tf.cast(tf.math.reduce_prod(tf.shape(latents_target)),self.compute_dtype)
+                loss_action = loss_action + loss_action_lik * loss_trans_avg # _loss-supr
+                # loss_action = loss_action * tf.stop_gradient(loss_trans_avg) # _loss-suprO
                 for i in range(self.action_spec_len):
                     if self.action_spec[i]['dist_type'] == 'c': # _loss-logits
                         logit_scale = tf.reduce_mean(tf.math.abs(action_logits[i]))
@@ -982,7 +984,7 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # arch = 'TEST' # testing architechures
 arch = 'PG'; learn_rates = {'action':4e-6} #, 'act':4e-6 # Policy Gradient agent, PG loss
 # arch = 'AC'; learn_rates = {'action':4e-6, 'value':2e-6} # Actor Critic, PG and advantage loss
-# arch = 'MU'; learn_rates = {'action':4e-5, 'rep_action':4e-6, 'trans':2e-4, 'rep_trans':4e-6} #, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
+# arch = 'MU'; learn_rates = {'action':1e-5, 'rep_action':6e-7, 'trans':2e-4, 'rep_trans':6e-7} #, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
 
 if __name__ == '__main__':
     ## manage multiprocessing
