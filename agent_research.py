@@ -204,7 +204,7 @@ class GeneralAI(tf.keras.Model):
         if self.arch == 'MU':
             metrics_loss['1~nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
             # metrics_loss['1extras'] = {'loss_action_returns':np.float64}
-            metrics_loss['1extras'] = {'loss_trans':np.float64}
+            metrics_loss['1~extras'] = {'loss_trans':np.float64}
             # metrics_loss['1extras3'] = {'loss_act':np.float64}
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
             # metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
@@ -361,7 +361,12 @@ class GeneralAI(tf.keras.Model):
         inputs_rewards = tf.concat([self.rewards_zero, inputs['rewards']], axis=0)
         returns = inputs['returns'][0:1]; returns_calc = tf.squeeze(tf.cast(returns,self.compute_dtype)); returns_calc_orig = returns_calc # _loss-final
         avg_rtns, ma_rtns, ema_rtns, snr_rtns, std_rtns = util.stats_get(self.action.stats['rwd']); ema_rtns = tf.cast(ema_rtns,self.compute_dtype)
-        returns_calc = returns_calc - ema_rtns # _rtns-ema
+        returns_calc = returns_calc - ema_rtns # _rtns-ema # ma_rtns, avg_rtns
+        returns_calc = util.symlog(returns_calc) # _rtns-sym
+        # returns_calc = returns_calc - util.symlog(ema_rtns) # _rtns-emaSL
+        # returns_calc = snr_rtns # _rtns-snrO
+        # returns_calc = returns_calc - (ema_rtns / (std_rtns+self.float_eps)) # _rtns-emaS
+        # returns_calc = returns_calc * snr_rtns**3 # _rtns-snr3 # std_rtns
         # if returns_calc < 0.0: returns_calc = tf.constant(0,self.compute_dtype) # _rtns-emaC (needs _rtns-ema)
         # returns_calc = tf.math.abs(returns_calc - ema_rtns) # _rtns-emaA
         # returns_calc = returns_calc if returns_calc > self.float_eps else self.float_eps # _rtns-emaP
@@ -409,8 +414,8 @@ class GeneralAI(tf.keras.Model):
                 # loss_action = loss_action_lik # _loss-udRL
                 # loss_action = loss_action_lik * (returns_calc + 1) # _rtnsP1
                 # loss_action = loss_action * returns_step_calc # _loss-rtnsI
-                loss_action = loss_action * reward_calc # _loss-rwdO
-                # loss_action = loss_action + loss_action_lik * reward_calc # _loss-rwdG
+                # loss_action = loss_action * reward_calc # _loss-rwdO
+                loss_action = loss_action + loss_action_lik * reward_calc # _loss-rwdG
                 # loss_action = loss_action - returns_calc # _loss-rtns # no gradients
                 # loss_action = loss_action - reward_calc # _loss-rwdS # no gradients
                 # loss_action = loss_action - ema_rtns # _rtnsEM _loss-rtnsS # no gradients
@@ -802,6 +807,7 @@ class GeneralAI(tf.keras.Model):
         returns = inputs['returns'][0:1]; returns_calc = tf.squeeze(tf.cast(returns,self.compute_dtype)); returns_calc_orig = returns_calc # _loss-final
         avg_rtns, ma_rtns, ema_rtns, snr_rtns, std_rtns = util.stats_get(self.action.stats['rwd']); ema_rtns = tf.cast(ema_rtns,self.compute_dtype)
         returns_calc = returns_calc - ema_rtns # _rtns-ema
+        returns_calc = util.symlog(returns_calc) # _rtns-sym
 
         num_reps = tf.shape(inputs['latents_rep'])[0]
         for step in tf.range(tf.shape(inputs['dones'])[0]):
@@ -971,6 +977,10 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # env = gym.wrappers.AtariPreprocessing(env, noop_max=5, frame_skip=1, screen_size=84, grayscale_obs=False, grayscale_newaxis=True)
 # env = gym.wrappers.ResizeObservation(env, (84,84)); env = gym.wrappers.GrayScaleObservation(env, keep_dim=True) # env.metadata['render_fps'] = 30 # 'rgb_array'; env = gym.wrappers.HumanRendering(env)
 
+# import crafter as env_; env_name, max_steps, env_render, env = 'Crafter', 64, False, env_.Env(); env = gym.wrappers.EnvCompatibility(env) # (64,64,3) uint8    ()17 int64
+# env.action_space, env.observation_space = gym.spaces.Discrete(17), gym.spaces.Box(low=0, high=255, shape=(64,64,3), dtype=np.uint8)
+# # env = env_.Recorder(env, 'test', save_stats=True, save_video=False, save_episode=False)
+
 # import envs_local.random_env as env_; env_name, max_steps, env_render, env = 'TestRnd', 64, False, env_.RandomEnv(True)
 # import envs_local.data_env as env_; env_name, max_steps, env_render, env = 'DataShkspr', 64, False, env_.DataEnv('shkspr')
 # from gym_trader.envs import TraderEnv; tenv = 4; env_name, max_steps, env_render, env, trader, chart_lim = 'Trader'+str(tenv), 256, False, TraderEnv(agent_id=device, env=tenv), True, 0.0; extra += "_rs{}-td{}-s{}-dd{:.0e}".format(env.NUM_EPISODES,int(env.TIMEDELTA_RANGE),int(env.MAX_EPISODE_TIME/env.TIMEDELTA_RANGE),int(env.START_TARGET_BAL))
@@ -978,9 +988,9 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # max_steps = 32 # max replay buffer or train interval or bootstrap
 
 # arch = 'TEST' # testing architechures
-# arch = 'PG'; learn_rates = {'action':4e-6} #, 'act':4e-6 # Policy Gradient agent, PG loss
+arch = 'PG'; learn_rates = {'action':4e-6} #, 'act':4e-6 # Policy Gradient agent, PG loss
 # arch = 'AC'; learn_rates = {'action':4e-6, 'value':2e-6} # Actor Critic, PG and advantage loss
-arch = 'MU'; learn_rates = {'action':1e-5, 'trans':2e-4, 'rep_action':6e-7, 'rep_trans':6e-7} #, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
+# arch = 'MU'; learn_rates = {'action':4e-6, 'trans':2e-4, 'rep_action':6e-7, 'rep_trans':6e-7} #, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
 
 if __name__ == '__main__':
     ## manage multiprocessing
