@@ -191,6 +191,8 @@ class RandomEnv(gym.Env):
         if hasattr(self,'np_struc'):
             obs = np.random.randint(32, size=self.obs_dtype.itemsize, dtype=np.uint8)
             obs = np.frombuffer(obs, dtype=self.obs_dtype)
+            obs[0][3] = np.random.randint(6)
+            obs[0][5] = obs[0][5].astype(np.int32).astype(np.bool)
             # obs = np.zeros((1,), self.obs_dtype)
             # # obs = np.where(np.isnan(obs), 0, obs)
         else:

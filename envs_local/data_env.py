@@ -103,7 +103,7 @@ class DataEnv(gym.Env):
             if action is not None: # predict next byte
                 # obs_prev = self.ds[self.ds_idx-1]
                 action = action['data'][0] if isinstance(action['data'], np.ndarray) else action['data']
-                # target = obs['data'][0] if isinstance(obs['data'], np.ndarray) else obs['data']
+                # target = obs['data'][0] if isinstance(obs['data'], np.ndarray) else obs['data'] # _data-pred
                 obs_prev = np.asarray(self.ds[self.ds_idx-1], self.observation_space['data'].dtype) # _data-same
                 target = obs_prev[0] if isinstance(obs_prev, np.ndarray) else obs_prev # _data-same
                 # if action >= 122: print(action, self.episode)
