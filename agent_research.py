@@ -94,9 +94,9 @@ class GeneralAI(tf.keras.Model):
                 {'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep_action'], 'float_eps':self.float_eps},
                 {'name':'trans', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep_trans'], 'float_eps':self.float_eps},
                 {'name':'value', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep_value'], 'float_eps':self.float_eps},
-                {'name':'gen', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep_gen'], 'float_eps':self.float_eps},
+                # {'name':'gen', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['rep_gen'], 'float_eps':self.float_eps},
             ]
-            self.rep = nets.ArchTrans('RN', inputs, opt_spec, [], self.obs_spec, latent_spec, obs_latent=False, net_blocks=2, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=None, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
+            self.rep = nets.ArchTrans('RN', inputs, opt_spec, [], self.obs_spec, latent_spec, obs_latent=False, net_blocks=0, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=None, aug_data_pos=aug_data_pos); outputs = self.rep(inputs)
             # self.rep.optimizer_weights = util.optimizer_build(self.rep.optimizer['rep'], self.rep.trainable_variables)
             self.rep.optimizer_weights = []
             for spec in opt_spec: self.rep.optimizer_weights += util.optimizer_build(self.rep.optimizer[spec['name']], self.rep.trainable_variables)
@@ -105,7 +105,7 @@ class GeneralAI(tf.keras.Model):
             latent_spec.update({'step_shape':self.latent_zero.shape}); self.latent_spec = latent_spec
 
             opt_spec = [{'name':'action', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['action'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}, {'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}]
-            self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=2, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=max_steps, latent_multi=1); outputs = self.action(self.latent_zero)
+            self.action = nets.ArchGen('AN', self.latent_zero, opt_spec, stats_spec, self.action_spec, latent_spec, net_blocks=3, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=max_steps, latent_multi=2); outputs = self.action(self.latent_zero)
             self.action.optimizer_weights = util.optimizer_build(self.action.optimizer['action'], self.action.trainable_variables)
             util.net_build(self.action, self.initializer)
 
@@ -127,13 +127,13 @@ class GeneralAI(tf.keras.Model):
             self.value.optimizer_weights = util.optimizer_build(self.value.optimizer['value'], self.value.trainable_variables)
             util.net_build(self.value, self.initializer)
 
-            opt_spec = [{'name':'gen', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['gen'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
-            # gen_spec = self.obs_spec
-            gen_spec = [{'space_name':'gen', 'name':'', 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'dist_type':'d', 'num_components':1, 'event_shape':(1,), 'event_size':1, 'step_shape':tf.TensorShape((1,1))}]
-            self.gen_spec_len = len(gen_spec)
-            self.gen = nets.ArchGen('GN', self.latent_zero, opt_spec, stats_spec, gen_spec, latent_spec, net_blocks=2, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=None, latent_multi=1); outputs = self.gen(self.latent_zero)
-            self.gen.optimizer_weights = util.optimizer_build(self.gen.optimizer['gen'], self.gen.trainable_variables)
-            util.net_build(self.gen, self.initializer)
+            # opt_spec = [{'name':'gen', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['gen'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}]
+            # # gen_spec = self.obs_spec
+            # gen_spec = [{'space_name':'gen', 'name':'', 'dtype':compute_dtype, 'dtype_out':compute_dtype, 'dist_type':'d', 'num_components':1, 'event_shape':(1,), 'event_size':1, 'step_shape':tf.TensorShape((1,1))}]
+            # self.gen_spec_len = len(gen_spec)
+            # self.gen = nets.ArchGen('GN', self.latent_zero, opt_spec, stats_spec, gen_spec, latent_spec, net_blocks=2, net_lstm=net_lstm, net_attn=net_attn, num_heads=4, memory_size=None, latent_multi=1); outputs = self.gen(self.latent_zero)
+            # self.gen.optimizer_weights = util.optimizer_build(self.gen.optimizer['gen'], self.gen.trainable_variables)
+            # util.net_build(self.gen, self.initializer)
 
             # opt_spec = [{'name':'act', 'type':'a', 'schedule_type':'', 'learn_rate':self.learn_rates['act'], 'float_eps':self.float_eps}]; stats_spec = [{'name':'loss', 'b1':0.99, 'b2':0.99, 'dtype':compute_dtype}, {'name':'rwd', 'b1':0.99, 'b2':0.99, 'dtype':tf.float64}]
             # # act_spec = [{'space_name':'return_goal', 'name':'', 'event_shape':(1,), 'event_size':1, 'channels':1, 'step_shape':tf.TensorShape((1,1)), 'num_latents':1}]; inputs_cond = {'obs':self.latent_zero, 'return_goal':[self.rewards_zero]}
@@ -223,10 +223,10 @@ class GeneralAI(tf.keras.Model):
             metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
         if self.arch == 'MU':
             metrics_loss['1~nets*'] = {'-loss_ma':np.float64, '-loss_action':np.float64}
-            metrics_loss['1extrasAR'] = {'loss_action_returns':np.float64}
+            # metrics_loss['1extrasAR'] = {'loss_action_returns':np.float64}
             metrics_loss['1~extras'] = {'loss_trans':np.float64}
             metrics_loss['1~extras1'] = {'loss_value':np.float64}
-            metrics_loss['1~extras3'] = {'loss_gen':np.float64}
+            # metrics_loss['1~extras3'] = {'loss_gen':np.float64}
             # metrics_loss['1extras4'] = {'loss_act':np.float64}
             # metrics_loss['1extras2*'] = {'actlog0':np.float64, 'actlog1':np.float64}
             # metrics_loss['1extras1*'] = {'-snr_loss':np.float64, '-std_loss':np.float64}
@@ -343,6 +343,7 @@ class GeneralAI(tf.keras.Model):
             action_logits = self.action(inputs_step)
             action_dist = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
+                # action_logits[i] = tf.constant(np.zeros(action_logits[i].shape),self.compute_dtype) # random actions for categorical
                 action_dist[i] = self.action.dist[i](action_logits[i])
                 action[i] = action_dist[i].sample()
 
@@ -772,11 +773,11 @@ class GeneralAI(tf.keras.Model):
             latent_trans = trans_dist.sample()
             # latents_trans = latents_trans.write(step, latent_trans[0])
 
-            action = [None]*self.action_spec_len
             self.action.net.layer_attn[0]._memory_img[-self.mem_img_size:].assign(latent_trans)
             self.action.net.layer_attn[0]._mem_idx_img.assign(self.max_steps - self.mem_img_size)
             action_logits = self.action(latent_rep, store_memory=False, use_img=True, store_real=True) # _act-hist
             # action_logits = self.action(latent_trans)
+            action = [None]*self.action_spec_len
             for i in range(self.action_spec_len):
                 # action_logits[i] = tf.constant(np.zeros(action_logits[i].shape),self.compute_dtype) # random actions for categorical
                 action_dist = self.action.dist[i](action_logits[i])
@@ -844,7 +845,7 @@ class GeneralAI(tf.keras.Model):
 
             inputs_step = {'obs':obs, 'step':[tf.reshape(step,(1,1))], 'reward_prev':[inputs_rewards[step:step+1]], 'done_prev':[inputs_dones[step:step+1]], 'actions':action_prev, 'return_goal':[returns]}
             # obs_step = inputs_step['obs'] + inputs_step['step'] + inputs_step['reward_prev'] + inputs_step['done_prev'] + inputs_step['actions'] # + inputs_step['return_goal']
-            obs_step = inputs['obs'][0][step:step+num_trans]; obs_step = [tf.pad(obs_step, [[0,self.mem_img_size-num_trans],[0,0]], constant_values=0)]
+            # obs_step = inputs['obs'][0][step:step+num_trans]; obs_step = [tf.pad(obs_step, [[0,self.mem_img_size-num_trans],[0,0]], constant_values=0)]
             action_prev = action
             with tf.GradientTape() as tape_rep_trans, tf.GradientTape() as tape_rep_value, tf.GradientTape() as tape_rep_gen, tf.GradientTape() as tape_rep_action, tf.GradientTape() as tape_trans, tf.GradientTape() as tape_value, tf.GradientTape() as tape_gen, tf.GradientTape() as tape_action, tf.GradientTape() as tape_act:
                 rep_logits = self.rep(inputs_step); rep_dist = self.rep.dist(rep_logits)
@@ -868,12 +869,12 @@ class GeneralAI(tf.keras.Model):
                 done_dist = self.value.dist[2](value_logits[2])
                 loss_value = loss_value + util.loss_likelihood(done_dist, inputs['dones'][step:step+1])
 
-                # gen_logits = self.gen(latent_rep)
-                # gen_logits = self.gen(latent_trans[0:1])
-                gen_logits = self.gen(latent_trans, batch_size=self.mem_img_size)
-                gen_dist = [None]*self.gen_spec_len
-                for i in range(self.gen_spec_len): gen_dist[i] = self.gen.dist[i](gen_logits[i])
-                loss_gen = util.loss_likelihood(gen_dist, obs_step)
+                # # gen_logits = self.gen(latent_rep)
+                # # gen_logits = self.gen(latent_trans[0:1])
+                # gen_logits = self.gen(latent_trans, batch_size=self.mem_img_size)
+                # gen_dist = [None]*self.gen_spec_len
+                # for i in range(self.gen_spec_len): gen_dist[i] = self.gen.dist[i](gen_logits[i])
+                # loss_gen = util.loss_likelihood(gen_dist, obs_step)
 
                 self.action.net.layer_attn[0]._memory_img[-self.mem_img_size:].assign(latent_trans)
                 self.action.net.layer_attn[0]._mem_idx_img.assign(self.max_steps - self.mem_img_size)
@@ -904,8 +905,8 @@ class GeneralAI(tf.keras.Model):
 
             gradients = tape_rep_action.gradient(loss_action, self.rep.trainable_variables)
             self.rep.optimizer['action'].apply_gradients(zip(gradients, self.rep.trainable_variables))
-            gradients = tape_rep_gen.gradient(loss_gen, self.rep.trainable_variables)
-            self.rep.optimizer['gen'].apply_gradients(zip(gradients, self.rep.trainable_variables))
+            # gradients = tape_rep_gen.gradient(loss_gen, self.rep.trainable_variables)
+            # self.rep.optimizer['gen'].apply_gradients(zip(gradients, self.rep.trainable_variables))
             gradients = tape_rep_value.gradient(loss_value, self.rep.trainable_variables)
             self.rep.optimizer['value'].apply_gradients(zip(gradients, self.rep.trainable_variables))
             # gradients = tape_rep_trans.gradient(loss_trans, self.rep.trainable_variables)
@@ -919,9 +920,9 @@ class GeneralAI(tf.keras.Model):
             self.value.optimizer['value'].apply_gradients(zip(gradients, self.value.trainable_variables))
             loss_values = loss_values.write(step, loss_value)
 
-            gradients = tape_gen.gradient(loss_gen, self.gen.trainable_variables)
-            self.gen.optimizer['gen'].apply_gradients(zip(gradients, self.gen.trainable_variables))
-            loss_gens = loss_gens.write(step, loss_gen / (self.gen_spec_len * self.mem_img_size)) # * self.mem_img_size
+            # gradients = tape_gen.gradient(loss_gen, self.gen.trainable_variables)
+            # self.gen.optimizer['gen'].apply_gradients(zip(gradients, self.gen.trainable_variables))
+            # loss_gens = loss_gens.write(step, loss_gen / (self.gen_spec_len * self.mem_img_size)) # * self.mem_img_size
 
             if loss_action_lik > self.float_eps: # _grad-lim-eps
                 gradients = tape_action.gradient(loss_action, self.action.trainable_variables)
@@ -962,15 +963,15 @@ class GeneralAI(tf.keras.Model):
             self.trans.optimizer['trans'].learning_rate = self.learn_rates['trans'] * snr_trans**np.e
             util.stats_update(self.value.stats['loss'], tf.math.reduce_mean(loss['value'])); avg_value, ma_value, ema_value, snr_value, std_value = util.stats_get(self.value.stats['loss'])
             self.value.optimizer['value'].learning_rate = self.learn_rates['value'] * snr_value**np.e # **3 # _lr-snr3
-            util.stats_update(self.gen.stats['loss'], tf.math.reduce_mean(loss['gen'])); avg_gen, ma_gen, ema_gen, snr_gen, std_gen = util.stats_get(self.gen.stats['loss'])
-            self.gen.optimizer['gen'].learning_rate = self.learn_rates['gen'] * snr_gen**np.e # **3 # _lr-snr3
+            # util.stats_update(self.gen.stats['loss'], tf.math.reduce_mean(loss['gen'])); avg_gen, ma_gen, ema_gen, snr_gen, std_gen = util.stats_get(self.gen.stats['loss'])
+            # self.gen.optimizer['gen'].learning_rate = self.learn_rates['gen'] * snr_gen**np.e # **3 # _lr-snr3
 
             self.rep.optimizer['action'].learning_rate = self.learn_rates['rep_action'] * snr_loss**np.e
-            self.rep.optimizer['trans'].learning_rate = self.learn_rates['rep_trans'] * snr_trans**np.e
+            # self.rep.optimizer['trans'].learning_rate = self.learn_rates['rep_trans'] * snr_trans**np.e
             self.rep.optimizer['value'].learning_rate = self.learn_rates['rep_value'] * snr_value**np.e
-            self.rep.optimizer['gen'].learning_rate = self.learn_rates['rep_gen'] * snr_gen**np.e
-            # self.rep.optimizer['rep'].learning_rate = self.learn_rates['rep'] * tf.math.exp(self.rep.optimizer['rep'].episodes / 30000 * np.log(self.float_eps)) # _rep-30k
-            # self.rep.optimizer['rep'].episodes.assign_add(1) # _rep-30k
+            # self.rep.optimizer['gen'].learning_rate = self.learn_rates['rep_gen'] * snr_gen**np.e
+            # # self.rep.optimizer['rep'].learning_rate = self.learn_rates['rep'] * tf.math.exp(self.rep.optimizer['rep'].episodes / 30000 * np.log(self.float_eps)) # _rep-30k
+            # # self.rep.optimizer['rep'].episodes.assign_add(1) # _rep-30k
 
             # util.stats_update(self.act.stats['loss'], tf.math.reduce_mean(loss['act'])); avg_act, ma_act, ema_act, snr_act, std_act = util.stats_get(self.act.stats['loss'])
             # self.act.optimizer['act'].learning_rate = self.learn_rates['act'] * snr_act # **3 # _lr-snr3
@@ -984,10 +985,10 @@ class GeneralAI(tf.keras.Model):
             log_metrics = [True,True,True,True,True,True,True,True,True,True,True,True,True,True]
             metrics = [log_metrics, episode, ema, tf.math.reduce_sum(outputs['rewards']), outputs['rewards'][-1][0], tf.shape(outputs['rewards'])[0],
                 ma_loss, tf.math.reduce_mean(loss['action_lik']), # tf.math.reduce_mean(outputs['returns']),
-                tf.math.reduce_mean(loss['action']),
+                # tf.math.reduce_mean(loss['action']),
                 tf.math.reduce_mean(loss['trans']),
                 tf.math.reduce_mean(loss['value']),
-                tf.math.reduce_mean(loss['gen']),
+                # tf.math.reduce_mean(loss['gen']),
                 # tf.math.reduce_mean(loss['act']),
                 # tf.math.reduce_mean(loss['actlog'][:,0]), tf.math.reduce_mean(loss['actlog'][:,1]),
                 # snr_loss, std_loss, # ma, ema, snr, std
@@ -1055,7 +1056,7 @@ env_name, max_steps, env_render, env_reconfig, env = 'CartPole', 256, False, Tru
 # arch = 'TEST' # testing architechures
 # arch = 'PG'; learn_rates = {'action':4e-6} #, 'act':4e-6 # Policy Gradient agent, PG loss
 # arch = 'AC'; learn_rates = {'action':4e-6, 'value':2e-6} # Actor Critic, PG and advantage loss
-arch = 'MU'; learn_rates = {'action':4e-6, 'trans':2e-4, 'value':2e-4, 'gen':2e-4, 'rep_action':2e-6, 'rep_trans':2e-6, 'rep_value':2e-6, 'rep_gen':2e-6} #, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
+arch = 'MU'; learn_rates = {'action':4e-6, 'trans':2e-4, 'value':2e-4, 'rep_action':6e-7, 'rep_trans':6e-7, 'rep_value':6e-7} #, 'gen':2e-4, 'rep_gen':2e-6, 'act':4e-5, 'pool':2e-6 # Combined PG and world model
 
 if __name__ == '__main__':
     ## manage multiprocessing
@@ -1106,7 +1107,7 @@ if __name__ == '__main__':
 
 
         ## run
-        print("RUN {}".format(name))
+        print("RUN {}\n{}".format(name, name_arch))
         arch_run = getattr(model, arch)
         t1_start = time.perf_counter_ns()
         arch_run()
@@ -1129,7 +1130,7 @@ if __name__ == '__main__':
         learn_rates_txt, attn_txt = "", ""
         for k,v in learn_rates.items(): learn_rates_txt += "  {}:{:.0e}".format(k,v)
         for k,v in net_attn.items(): attn_txt += " {}".format(k) if v else ''
-        title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}    ms:{}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time, max_steps)
+        title = "{}    [{}-{}]\n{}\ntime:{}    steps:{}    t/s:{:.8f}    ms:{}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time, max_steps)
         title += "     |     attn:{}    al:{}    am:{}".format(attn_txt, aio_max_latents, attn_mem_base)
         title += "     |     a-clk:{}    a-spd:{}    aug:{}{}".format(env_async_clock, env_async_speed, ('S' if aug_data_step else ''), ('P' if aug_data_pos else ''))
         title += "     |   {}".format(learn_rates_txt); print(title)
@@ -1145,7 +1146,7 @@ if __name__ == '__main__':
             if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows, xlim=(0, max_episodes), yscale=yscale); plt.grid(axis='y',alpha=0.3)
             for metric_name, metric in loss_group.items():
                 metric = np.asarray(metric, np.float64); m_min[col], m_max[col] = np.nanquantile(metric, chart_lim), np.nanquantile(metric, 1.0-chart_lim)
-                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3)
+                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3,which='both')
                 # plt.plot(xrng, talib.EMA(metric, timeperiod=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 # plt.plot(xrng, bottleneck.move_mean(metric, window=max_episodes//10+2, min_count=1), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 if metric_name.startswith('-'): plt.plot(xrng, metric, alpha=1.0, label=metric_name)

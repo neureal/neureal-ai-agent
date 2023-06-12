@@ -285,7 +285,7 @@ if __name__ == '__main__':
 
 
         ## run
-        print("RUN {}".format(name))
+        print("RUN {}\n{}".format(name, name_arch))
         arch_run = getattr(model, arch)
         t1_start = time.perf_counter_ns()
         arch_run()
@@ -305,7 +305,7 @@ if __name__ == '__main__':
         learn_rates_txt, attn_txt = "", ""
         for k,v in learn_rates.items(): learn_rates_txt += "  {}:{:.0e}".format(k,v)
         for k,v in net_attn.items(): attn_txt += " {}".format(k) if v else ''
-        title = "{}    [{}-{}] {}\ntime:{}    steps:{}    t/s:{:.8f}    ms:{}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time, max_steps)
+        title = "{}    [{}-{}]\n{}\ntime:{}    steps:{}    t/s:{:.8f}    ms:{}".format(name, device_type, tf.keras.backend.floatx(), name_arch, util.print_time(total_time), total_steps, step_time, max_steps)
         title += "     |     attn:{}    al:{}".format(attn_txt, aio_max_latents)
         title += "     |     a-clk:{}    a-spd:{}    aug:{}{}".format(env_async_clock, env_async_speed, ('S' if aug_data_step else ''), ('P' if aug_data_pos else ''))
         title += "     |   {}".format(learn_rates_txt); print(title)
@@ -321,7 +321,7 @@ if __name__ == '__main__':
             if combine: spg = plt.subplot2grid((vplts, 1), (i, 0), rowspan=rows, xlim=(0, max_episodes), yscale=yscale); plt.grid(axis='y',alpha=0.3)
             for metric_name, metric in loss_group.items():
                 metric = np.asarray(metric, np.float64); m_min[col], m_max[col] = np.nanquantile(metric, chart_lim), np.nanquantile(metric, 1.0-chart_lim)
-                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3)
+                if not combine: spg = plt.subplot2grid((vplts, len(loss_group)), (i, col), rowspan=rows, xlim=(0, max_episodes), ylim=(m_min[col], m_max[col]), yscale=yscale); plt.grid(axis='y',alpha=0.3,which='both')
                 if metric_name.startswith('-'): plt.plot(xrng, metric, alpha=1.0, label=metric_name)
                 else: plt.plot(xrng, util.ewma(metric, window=max_episodes//10+2), alpha=1.0, label=metric_name); plt.plot(xrng, metric, alpha=0.3)
                 plt.ylabel('value'); plt.legend(loc='upper left'); col+=1
